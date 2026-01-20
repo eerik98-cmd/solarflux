@@ -8,7 +8,6 @@ import { InventoryItem, View, Quote, Client, User, DocTemplate } from '@/types';
 import { MOCK_USERS } from '@/constants';
 import { Loader2, CloudOff } from 'lucide-react';
 import { StorageService } from '@/services/storageService';
-import { saveItemAction, deleteItemAction, initializeDataAction } from '@/app/actions/database';
 
 // Lazy load components
 const Dashboard = React.lazy(() => import('@/components/Dashboard').then(module => ({ default: module.Dashboard })));
@@ -64,7 +63,7 @@ export function AppProviders() {
 
     const initDB = async () => {
       try {
-        await initializeDataAction('users', MOCK_USERS);
+        await StorageService.initializeDataIfEmpty('users', MOCK_USERS);
       } catch (err) {
         console.error("Failed to connect to Firebase:", err);
         setDbConnectionError(true);
@@ -89,7 +88,7 @@ export function AppProviders() {
       id: Date.now().toString(), 
     };
     setIsFormOpen(false);
-    await saveItemAction('inventory', newItem);
+    await StorageService.saveItem('inventory', newItem);
   };
 
   const handleUpdateItem = async (updatedItemData: Omit<InventoryItem, 'id'>) => {
@@ -97,7 +96,7 @@ export function AppProviders() {
     const updatedItem = { ...updatedItemData, id: editingItem.id };
     setIsFormOpen(false);
     setEditingItem(null);
-    await saveItemAction('inventory', updatedItem);
+    await StorageService.saveItem('inventory', updatedItem);
   };
 
   const handleDeleteItem = async (id: string) => {
@@ -107,14 +106,14 @@ export function AppProviders() {
       message: 'Are you sure you want to delete this item? This action cannot be undone.',
       variant: 'danger',
       onConfirm: async () => {
-        await deleteItemAction('inventory', id);
+        await StorageService.deleteItem('inventory', id);
         setConfirmDialog({ ...confirmDialog, isOpen: false });
       }
     });
   };
 
   const handleSaveQuote = async (quote: Quote) => {
-    await saveItemAction('quotes', quote);
+    await StorageService.saveItem('quotes', quote);
   };
 
   const handleDeleteQuote = async (id: string) => {
@@ -124,18 +123,18 @@ export function AppProviders() {
       message: 'Are you sure you want to delete this quote? This action cannot be undone.',
       variant: 'danger',
       onConfirm: async () => {
-        await deleteItemAction('quotes', id);
+        await StorageService.deleteItem('quotes', id);
         setConfirmDialog({ ...confirmDialog, isOpen: false });
       }
     });
   };
 
   const handleAddClient = async (newClient: Client) => {
-    await saveItemAction('clients', newClient);
+    await StorageService.saveItem('clients', newClient);
   };
 
   const handleUpdateClient = async (updatedClient: Client) => {
-    await saveItemAction('clients', updatedClient);
+    await StorageService.saveItem('clients', updatedClient);
   };
 
   const handleDeleteClient = async (id: string) => {
@@ -145,14 +144,14 @@ export function AppProviders() {
       message: 'Are you sure you want to delete this client? This will remove all associated data and cannot be undone.',
       variant: 'danger',
       onConfirm: async () => {
-        await deleteItemAction('clients', id);
+        await StorageService.deleteItem('clients', id);
         setConfirmDialog({ ...confirmDialog, isOpen: false });
       }
     });
   };
 
   const handleAddUser = async (user: User) => {
-    await saveItemAction('users', user);
+    await StorageService.saveItem('users', user);
   };
 
   const handleDeleteUser = async (id: string) => {
@@ -162,14 +161,14 @@ export function AppProviders() {
       message: 'Are you sure you want to remove this user? They will lose access to the system.',
       variant: 'danger',
       onConfirm: async () => {
-        await deleteItemAction('users', id);
+        await StorageService.deleteItem('users', id);
         setConfirmDialog({ ...confirmDialog, isOpen: false });
       }
     });
   };
 
   const handleAddTemplate = async (template: DocTemplate) => {
-    await saveItemAction('templates', template);
+    await StorageService.saveItem('templates', template);
   };
 
   const handleDeleteTemplate = async (id: string) => {
@@ -179,18 +178,18 @@ export function AppProviders() {
       message: 'Are you sure you want to remove this template? This action cannot be undone.',
       variant: 'danger',
       onConfirm: async () => {
-        await deleteItemAction('templates', id);
+        await StorageService.deleteItem('templates', id);
         setConfirmDialog({ ...confirmDialog, isOpen: false });
       }
     });
   };
 
   const handleAddCompanyDocument = async (doc: any) => {
-    await saveItemAction('companyDocuments', doc);
+    await StorageService.saveItem('companyDocuments', doc);
   };
 
   const handleDeleteCompanyDocument = async (id: string) => {
-    await deleteItemAction('companyDocuments', id);
+    await StorageService.deleteItem('companyDocuments', id);
   };
 
   const handleLogin = (u: string, p: string) => {
