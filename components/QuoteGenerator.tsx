@@ -1,3 +1,4 @@
+'use client';
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { InventoryItem, Quote, QuoteLineItem, Client } from '../types';

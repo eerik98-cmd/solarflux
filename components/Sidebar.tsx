@@ -1,4 +1,4 @@
-
+'use client';
 
 import React from 'react';
 import { LayoutDashboard, Box, Bot, Sun, Battery, Settings, FileText, Users, Wrench, FolderOpen } from 'lucide-react';

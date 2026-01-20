@@ -1,3 +1,5 @@
+'use client';
+
 import React, { useEffect, useRef, useState } from 'react';
 import { FolderOpen, Upload, Trash2, File, X, ExternalLink, Printer, Eye } from 'lucide-react';
 import * as pdfjsLib from 'pdfjs-dist';

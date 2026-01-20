@@ -1,3 +1,5 @@
+'use client';
+
 import React, { useState } from 'react';
 import { Installer } from '../types';
 import { Wrench, Phone, Circle, Search, Plus, Trash2, X, Save } from 'lucide-react';

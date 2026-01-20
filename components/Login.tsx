@@ -1,3 +1,5 @@
+'use client';
+
 import React, { useState } from 'react';
 import { Sun, Lock, User, ArrowRight } from 'lucide-react';
 
