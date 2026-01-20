@@ -1,0 +1,7 @@
+{
+  "name": "SolarFlux Stock Manager",
+  "description": "A comprehensive inventory management system for solar energy companies, featuring AI-driven stock analysis and forecasting.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
