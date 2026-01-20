@@ -71,7 +71,7 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
     setItems([...items, newItem]);
   };
 
-  const handleUpdateItem = (id: string, field: keyof QuoteLineItem, value: any) => {
+  const handleUpdateItem = (id: string, field: keyof QuoteLineItem, value: string | number | string[]) => {
     setItems(items.map(item => 
       item.id === id ? { ...item, [field]: value } : item
     ));
@@ -412,7 +412,7 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
                         {items.length === 0 ? (
                           <tr>
                             <td colSpan={7} className="p-12 text-center text-slate-500 italic">
-                              No items. Click "Add Line" to start.
+                              No items. Click &quot;Add Line&quot; to start.
                             </td>
                           </tr>
                         ) : (

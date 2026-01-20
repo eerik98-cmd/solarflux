@@ -13,7 +13,7 @@ interface InventoryListProps {
 }
 
 export const InventoryList: React.FC<InventoryListProps> = ({ 
-  inventory, currentUser, onAddItem, onEditItem, onDeleteItem 
+  inventory, onAddItem, onEditItem, onDeleteItem 
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterCategory, setFilterCategory] = useState<Category | 'All'>('All');

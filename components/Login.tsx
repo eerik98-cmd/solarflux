@@ -22,8 +22,8 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
     setTimeout(() => {
       try {
         onLogin(username, password);
-      } catch (err: any) {
-        setError(err.message || 'Authentication failed');
+      } catch (err) {
+        setError((err as Error).message || 'Authentication failed');
         setLoading(false);
       }
     }, 800);

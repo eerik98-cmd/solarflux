@@ -6,6 +6,7 @@
 
 require('dotenv').config();
 const express = require('express');
+const next = require('next');
 const fs = require('fs');
 const axios = require('axios');
 const https = require('https');
@@ -14,6 +15,10 @@ const WebSocket = require('ws');
 const { URLSearchParams, URL } = require('url');
 const rateLimit = require('express-rate-limit');
 
+const dev = process.env.NODE_ENV !== 'production';
+const nextApp = next({ dev, dir: path.join(__dirname, '..') });
+const handle = nextApp.getRequestHandler();
+
 const app = express();
 const port = process.env.PORT || 3000;
 const externalApiBaseUrl = 'https://generativelanguage.googleapis.com';
@@ -21,7 +26,6 @@ const externalWsBaseUrl = 'wss://generativelanguage.googleapis.com';
 // Support either API key env-var variant
 const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
 
-const staticPath = path.join(__dirname,'dist');
 const publicPath = path.join(__dirname,'public');
 
 
@@ -195,156 +199,122 @@ if ('serviceWorker' in navigator) {
 </script>
 `;
 
-// Serve index.html or placeholder based on API key and file availability
-app.get('/', (req, res) => {
-    const placeholderPath = path.join(publicPath, 'placeholder.html');
-
-    // Try to serve index.html
-    console.log("LOG: Route '/' accessed. Attempting to serve index.html.");
-    const indexPath = path.join(staticPath, 'index.html');
-
-    fs.readFile(indexPath, 'utf8', (err, indexHtmlData) => {
-        if (err) {
-            // index.html not found or unreadable, serve the original placeholder
-            console.log('LOG: index.html not found or unreadable. Falling back to original placeholder.');
-            return res.sendFile(placeholderPath);
-        }
-
-        // If API key is not set, serve original HTML without injection
-        if (!apiKey) {
-          console.log("LOG: API key not set. Serving original index.html without script injections.");
-          return res.sendFile(indexPath);
-        }
-
-        // index.html found and apiKey set, inject scripts
-        console.log("LOG: index.html read successfully. Injecting scripts.");
-        let injectedHtml = indexHtmlData;
-
-
-        if (injectedHtml.includes('<head>')) {
-            // Inject WebSocket interceptor first, then service worker script
-            injectedHtml = injectedHtml.replace(
-                '<head>',
-                `<head>${webSocketInterceptorScriptTag}${serviceWorkerRegistrationScript}`
-            );
-            console.log("LOG: Scripts injected into <head>.");
-        } else {
-            console.warn("WARNING: <head> tag not found in index.html. Prepending scripts to the beginning of the file as a fallback.");
-            injectedHtml = `${webSocketInterceptorScriptTag}${serviceWorkerRegistrationScript}${indexHtmlData}`;
-        }
-        res.send(injectedHtml);
-    });
-});
-
 app.get('/service-worker.js', (req, res) => {
    return res.sendFile(path.join(publicPath, 'service-worker.js'));
 });
 
 app.use('/public', express.static(publicPath));
-app.use(express.static(staticPath));
 
-// Start the HTTP server
-const server = app.listen(port, () => {
-    console.log(`Server listening on port ${port}`);
-    console.log(`HTTP proxy active on /api-proxy/**`);
-    console.log(`WebSocket proxy active on /api-proxy/**`);
-});
+// Prepare Next.js and start server
+nextApp.prepare().then(() => {
+  // Let Next.js handle all other routes
+  app.all('*', (req, res) => {
+    return handle(req, res);
+  });
 
-// Create WebSocket server and attach it to the HTTP server
-const wss = new WebSocket.Server({ noServer: true });
+  // Start the HTTP server
+  const server = app.listen(port, () => {
+      console.log(`> Ready on http://localhost:${port}`);
+      console.log(`HTTP proxy active on /api-proxy/**`);
+      console.log(`WebSocket proxy active on /api-proxy/**`);
+  });
 
-server.on('upgrade', (request, socket, head) => {
-    const requestUrl = new URL(request.url, `http://${request.headers.host}`);
-    const pathname = requestUrl.pathname;
+  // Create WebSocket server and attach it to the HTTP server
+  const wss = new WebSocket.Server({ noServer: true });
 
-    if (pathname.startsWith('/api-proxy/')) {
-        if (!apiKey) {
-            console.error("WebSocket proxy: API key not configured. Closing connection.");
-            socket.destroy();
-            return;
-        }
+  server.on('upgrade', (request, socket, head) => {
+      const requestUrl = new URL(request.url, `http://${request.headers.host}`);
+      const pathname = requestUrl.pathname;
 
-        wss.handleUpgrade(request, socket, head, (clientWs) => {
-            console.log('Client WebSocket connected to proxy for path:', pathname);
+      if (pathname.startsWith('/api-proxy/')) {
+          if (!apiKey) {
+              console.error("WebSocket proxy: API key not configured. Closing connection.");
+              socket.destroy();
+              return;
+          }
 
-            const targetPathSegment = pathname.substring('/api-proxy'.length);
-            const clientQuery = new URLSearchParams(requestUrl.search);
-            clientQuery.set('key', apiKey);
-            const targetGeminiWsUrl = `${externalWsBaseUrl}${targetPathSegment}?${clientQuery.toString()}`;
-            console.log(`Attempting to connect to target WebSocket: ${targetGeminiWsUrl}`);
+          wss.handleUpgrade(request, socket, head, (clientWs) => {
+              console.log('Client WebSocket connected to proxy for path:', pathname);
 
-            const geminiWs = new WebSocket(targetGeminiWsUrl, {
-                protocol: request.headers['sec-websocket-protocol'],
-            });
+              const targetPathSegment = pathname.substring('/api-proxy'.length);
+              const clientQuery = new URLSearchParams(requestUrl.search);
+              clientQuery.set('key', apiKey);
+              const targetGeminiWsUrl = `${externalWsBaseUrl}${targetPathSegment}?${clientQuery.toString()}`;
+              console.log(`Attempting to connect to target WebSocket: ${targetGeminiWsUrl}`);
 
-            const messageQueue = [];
+              const geminiWs = new WebSocket(targetGeminiWsUrl, {
+                  protocol: request.headers['sec-websocket-protocol'],
+              });
 
-            geminiWs.on('open', () => {
-                console.log('Proxy connected to Gemini WebSocket');
-                // Send any queued messages
-                while (messageQueue.length > 0) {
-                    const message = messageQueue.shift();
-                    if (geminiWs.readyState === WebSocket.OPEN) {
-                        // console.log('Sending queued message from client -> Gemini');
-                        geminiWs.send(message);
-                    } else {
-                        // Should not happen if we are in 'open' event, but good for safety
-                        console.warn('Gemini WebSocket not open when trying to send queued message. Re-queuing.');
-                        messageQueue.unshift(message); // Add it back to the front
-                        break; // Stop processing queue for now
-                    }
-                }
-            });
+              const messageQueue = [];
 
-            geminiWs.on('message', (message) => {
-                // console.log('Message from Gemini -> client');
-                if (clientWs.readyState === WebSocket.OPEN) {
-                    clientWs.send(message);
-                }
-            });
+              geminiWs.on('open', () => {
+                  console.log('Proxy connected to Gemini WebSocket');
+                  // Send any queued messages
+                  while (messageQueue.length > 0) {
+                      const message = messageQueue.shift();
+                      if (geminiWs.readyState === WebSocket.OPEN) {
+                          // console.log('Sending queued message from client -> Gemini');
+                          geminiWs.send(message);
+                      } else {
+                          // Should not happen if we are in 'open' event, but good for safety
+                          console.warn('Gemini WebSocket not open when trying to send queued message. Re-queuing.');
+                          messageQueue.unshift(message); // Add it back to the front
+                          break; // Stop processing queue for now
+                      }
+                  }
+              });
 
-            geminiWs.on('close', (code, reason) => {
-                console.log(`Gemini WebSocket closed: ${code} ${reason.toString()}`);
-                if (clientWs.readyState === WebSocket.OPEN || clientWs.readyState === WebSocket.CONNECTING) {
-                    clientWs.close(code, reason.toString());
-                }
-            });
+              geminiWs.on('message', (message) => {
+                  // console.log('Message from Gemini -> client');
+                  if (clientWs.readyState === WebSocket.OPEN) {
+                      clientWs.send(message);
+                  }
+              });
 
-            geminiWs.on('error', (error) => {
-                console.error('Error on Gemini WebSocket connection:', error);
-                if (clientWs.readyState === WebSocket.OPEN || clientWs.readyState === WebSocket.CONNECTING) {
-                    clientWs.close(1011, 'Upstream WebSocket error');
-                }
-            });
+              geminiWs.on('close', (code, reason) => {
+                  console.log(`Gemini WebSocket closed: ${code} ${reason.toString()}`);
+                  if (clientWs.readyState === WebSocket.OPEN || clientWs.readyState === WebSocket.CONNECTING) {
+                      clientWs.close(code, reason.toString());
+                  }
+              });
 
-            clientWs.on('message', (message) => {
-                if (geminiWs.readyState === WebSocket.OPEN) {
-                    // console.log('Message from client -> Gemini');
-                    geminiWs.send(message);
-                } else if (geminiWs.readyState === WebSocket.CONNECTING) {
-                    // console.log('Queueing message from client -> Gemini (Gemini still connecting)');
-                    messageQueue.push(message);
-                } else {
-                    console.warn('Client sent message but Gemini WebSocket is not open or connecting. Message dropped.');
-                }
-            });
+              geminiWs.on('error', (error) => {
+                  console.error('Error on Gemini WebSocket connection:', error);
+                  if (clientWs.readyState === WebSocket.OPEN || clientWs.readyState === WebSocket.CONNECTING) {
+                      clientWs.close(1011, 'Upstream WebSocket error');
+                  }
+              });
 
-            clientWs.on('close', (code, reason) => {
-                console.log(`Client WebSocket closed: ${code} ${reason.toString()}`);
-                if (geminiWs.readyState === WebSocket.OPEN || geminiWs.readyState === WebSocket.CONNECTING) {
-                    geminiWs.close(code, reason.toString());
-                }
-            });
+              clientWs.on('message', (message) => {
+                  if (geminiWs.readyState === WebSocket.OPEN) {
+                      // console.log('Message from client -> Gemini');
+                      geminiWs.send(message);
+                  } else if (geminiWs.readyState === WebSocket.CONNECTING) {
+                      // console.log('Queueing message from client -> Gemini (Gemini still connecting)');
+                      messageQueue.push(message);
+                  } else {
+                      console.warn('Client sent message but Gemini WebSocket is not open or connecting. Message dropped.');
+                  }
+              });
 
-            clientWs.on('error', (error) => {
-                console.error('Error on client WebSocket connection:', error);
-                if (geminiWs.readyState === WebSocket.OPEN || geminiWs.readyState === WebSocket.CONNECTING) {
-                    geminiWs.close(1011, 'Client WebSocket error');
-                }
-            });
-        });
-    } else {
-        console.log(`WebSocket upgrade request for non-proxy path: ${pathname}. Closing connection.`);
-        socket.destroy();
-    }
+              clientWs.on('close', (code, reason) => {
+                  console.log(`Client WebSocket closed: ${code} ${reason.toString()}`);
+                  if (geminiWs.readyState === WebSocket.OPEN || geminiWs.readyState === WebSocket.CONNECTING) {
+                      geminiWs.close(code, reason.toString());
+                  }
+              });
+
+              clientWs.on('error', (error) => {
+                  console.error('Error on client WebSocket connection:', error);
+                  if (geminiWs.readyState === WebSocket.OPEN || geminiWs.readyState === WebSocket.CONNECTING) {
+                      geminiWs.close(1011, 'Client WebSocket error');
+                  }
+              });
+          });
+      } else {
+          console.log(`WebSocket upgrade request for non-proxy path: ${pathname}. Closing connection.`);
+          socket.destroy();
+      }
+  });
 });

@@ -3,7 +3,7 @@
 import { StorageService } from '@/services/storageService';
 import { revalidatePath } from 'next/cache';
 
-export async function saveItemAction(collection: string, item: any) {
+export async function saveItemAction(collection: string, item: Record<string, unknown>) {
   'use server';
   try {
     await StorageService.saveItem(collection, item);
@@ -27,7 +27,7 @@ export async function deleteItemAction(collection: string, id: string) {
   }
 }
 
-export async function initializeDataAction(collection: string, data: any[]) {
+export async function initializeDataAction(collection: string, data: Record<string, unknown>[]) {
   'use server';
   try {
     await StorageService.initializeDataIfEmpty(collection, data);

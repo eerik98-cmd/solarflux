@@ -10,10 +10,10 @@ import { Loader2, CloudOff } from 'lucide-react';
 import { StorageService } from '@/services/storageService';
 
 // Lazy load components
-const Dashboard = React.lazy(() => import('@/components/Dashboard').then(module => ({ default: module.Dashboard })));
+// const Dashboard = React.lazy(() => import('@/components/Dashboard').then(module => ({ default: module.Dashboard })));
 const InventoryList = React.lazy(() => import('@/components/InventoryList').then(module => ({ default: module.InventoryList })));
 const InventoryForm = React.lazy(() => import('@/components/InventoryForm'));
-const AIAssistant = React.lazy(() => import('@/components/AIAssistant').then(module => ({ default: module.AIAssistant })));
+// const AIAssistant = React.lazy(() => import('@/components/AIAssistant').then(module => ({ default: module.AIAssistant })));
 const QuoteGenerator = React.lazy(() => import('@/components/QuoteGenerator').then(module => ({ default: module.QuoteGenerator })));
 const ClientRegistry = React.lazy(() => import('@/components/ClientRegistry').then(module => ({ default: module.ClientRegistry })));
 const Settings = React.lazy(() => import('@/components/Settings').then(module => ({ default: module.Settings })));
@@ -33,7 +33,7 @@ export function AppProviders() {
   const [clients, setClients] = useState<Client[]>([]);
   const [savedQuotes, setSavedQuotes] = useState<Quote[]>([]);
   const [docTemplates, setDocTemplates] = useState<DocTemplate[]>([]);
-  const [companyDocuments, setCompanyDocuments] = useState<any[]>([]);
+  const [companyDocuments, setCompanyDocuments] = useState<Record<string, unknown>[]>([]);
   
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);

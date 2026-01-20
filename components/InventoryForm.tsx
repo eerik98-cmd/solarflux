@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { InventoryItem, Category } from '../types';
-import { X, Save, Barcode, Camera, Upload, Loader2, CheckCircle, ListPlus, Trash2, Zap } from 'lucide-react';
+import { X, Save, Barcode, Camera, Upload, Loader2, CheckCircle, ListPlus, Zap } from 'lucide-react';
 import { extractBarcodeFromImage } from '../services/geminiService';
 
 interface InventoryFormProps {
@@ -241,7 +241,7 @@ const InventoryForm: React.FC<InventoryFormProps> = ({ initialData, onSubmit, on
           }
         }
         stopCamera();
-      } catch (error) {
+      } catch {
         alert("Could not detect a code. Please try again with better lighting and focus.");
       } finally {
         setIsScanning(false);
@@ -439,7 +439,7 @@ const InventoryForm: React.FC<InventoryFormProps> = ({ initialData, onSubmit, on
                       type="number"
                       min="0"
                       step="0.1"
-                      value={(formData as any).batteryPowerKwh || ''}
+                      value={formData.batteryPowerKwh || ''}
                       onChange={(e) => setFormData(prev => ({ ...prev, batteryPowerKwh: Number(e.target.value) }))}
                       className="w-full bg-slate-900 border border-amber-500/50 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none"
                       placeholder="e.g. 5"
@@ -449,8 +449,8 @@ const InventoryForm: React.FC<InventoryFormProps> = ({ initialData, onSubmit, on
                     <label className="text-sm font-medium text-amber-500">Type</label>
                     <select
                       name="batteryType"
-                      value={(formData as any).batteryType || ''}
-                      onChange={(e) => setFormData(prev => ({ ...prev, batteryType: e.target.value as any }))}
+                      value={formData.batteryType || ''}
+                      onChange={(e) => setFormData(prev => ({ ...prev, batteryType: e.target.value as 'High Voltage' | 'Low Voltage' }))}
                       className="w-full bg-slate-900 border border-amber-500/50 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none appearance-none"
                     >
                       <option value="">-- Select --</option>
@@ -473,7 +473,7 @@ const InventoryForm: React.FC<InventoryFormProps> = ({ initialData, onSubmit, on
                       type="number"
                       min="0"
                       step="0.1"
-                      value={(formData as any).inverterPowerKw || ''}
+                      value={formData.inverterPowerKw || ''}
                       onChange={(e) => setFormData(prev => ({ ...prev, inverterPowerKw: Number(e.target.value) }))}
                       className="w-full bg-slate-900 border border-amber-500/50 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none"
                       placeholder="e.g. 5"
@@ -483,8 +483,8 @@ const InventoryForm: React.FC<InventoryFormProps> = ({ initialData, onSubmit, on
                     <label className="text-sm font-medium text-amber-500">Tip Bransament</label>
                     <select
                       name="inverterConnectionType"
-                      value={(formData as any).inverterConnectionType || ''}
-                      onChange={(e) => setFormData(prev => ({ ...prev, inverterConnectionType: e.target.value as any }))}
+                      value={formData.inverterConnectionType || ''}
+                      onChange={(e) => setFormData(prev => ({ ...prev, inverterConnectionType: e.target.value as 'Monofazat' | 'Trifazat' }))}
                       className="w-full bg-slate-900 border border-amber-500/50 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none appearance-none"
                     >
                       <option value="">-- Select --</option>
@@ -496,8 +496,8 @@ const InventoryForm: React.FC<InventoryFormProps> = ({ initialData, onSubmit, on
                     <label className="text-sm font-medium text-amber-500">Tip Stocare</label>
                     <select
                       name="inverterStorageType"
-                      value={(formData as any).inverterStorageType || ''}
-                      onChange={(e) => setFormData(prev => ({ ...prev, inverterStorageType: e.target.value as any }))}
+                      value={formData.inverterStorageType || ''}
+                      onChange={(e) => setFormData(prev => ({ ...prev, inverterStorageType: e.target.value as 'High Voltage' | 'Low Voltage' }))}
                       className="w-full bg-slate-900 border border-amber-500/50 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none appearance-none"
                     >
                       <option value="">-- Select --</option>

@@ -1,18 +1,18 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Client, ClientType, ClientNote, ClientDocument, ClientSiteImage, InventoryItem, Quote, QuoteLineItem, DocTemplate, UserRole, Category } from '../types';
+import { Client, ClientType, ClientNote, ClientSiteImage, InventoryItem, Quote, QuoteLineItem, DocTemplate, Category, ArchivedProject } from '../types';
 // Added Loader2 to the lucide-react imports
-import { Search, Building2, User, Phone, Mail, MapPin, Plus, ArrowLeft, X, CheckCircle, FileText, Zap, FolderOpen, Upload, Trash2, ExternalLink, Printer, Share2, Download, Save, ClipboardList, Camera, Image as ImageIcon, History, RefreshCcw, Eye, Edit3, ChevronDown, CheckSquare, Square, Package, FileCog, FileOutput, Home, DollarSign, Scale, Wrench, Folder, ArrowUp, Hash, CreditCard, Briefcase, Calculator, Info, Code, Loader2, AlertCircle } from 'lucide-react';
+import { Search, Building2, User, Phone, Mail, MapPin, Plus, ArrowLeft, X, CheckCircle, FileText, Zap, FolderOpen, Upload, Trash2, ExternalLink, Printer, Save, ClipboardList, Camera, Image as ImageIcon, History, RefreshCcw, ChevronDown, Package, FileCog, FileOutput, Hash, Briefcase, Info, Code, Loader2, AlertCircle } from 'lucide-react';
 import { FileSystem, getFolderForDocType } from '../services/fileSystemService';
 import { ConfirmDialog } from './ConfirmDialog';
 
 interface ClientRegistryProps {
   clients: Client[];
   currentUser: any;
-  onAddClient: (client: Client) => void;
-  onUpdateClient: (client: Client) => void;
-  onDeleteClient: (id: string) => void;
+  onAddClient: (client: Client) => void | Promise<void>;
+  onUpdateClient: (client: Client) => void | Promise<void>;
+  onDeleteClient: (id: string) => void | Promise<void>;
   inventory: InventoryItem[];
   savedQuotes: Quote[];
   onSaveQuote: (quote: Quote) => void;
@@ -30,7 +30,7 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
   const [activeTab, setActiveTab] = useState<DetailTab>('DATA');
   
   // List State
-  const [filterType, setFilterType] = useState<'ALL' | ClientType>('ALL');
+  const [filterType] = useState<'ALL' | ClientType>('ALL');
   const [searchTerm, setSearchTerm] = useState('');
 
   // Modal State
@@ -43,7 +43,6 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
 
   // Editing State (For existing client)
   const [editingClient, setEditingClient] = useState<Client | null>(null);
-  const [hasChanges, setHasChanges] = useState(false);
 
   // Notes State
   const [newNote, setNewNote] = useState('');
@@ -54,7 +53,6 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
   const [docInput, setDocInput] = useState(''); 
 
   // Camera State for Needs Tab
-  const [isCameraOpen, setIsCameraOpen] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -62,10 +60,8 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
   // Quote Tab State
   const [quoteProjectName, setQuoteProjectName] = useState('');
   const [quoteItems, setQuoteItems] = useState<QuoteLineItem[]>([]);
-  const [focusedRowId, setFocusedRowId] = useState<string | null>(null);
   const [editingQuoteId, setEditingQuoteId] = useState<string | null>(null);
   const [openSerialPickerId, setOpenSerialPickerId] = useState<string | null>(null);
-  const [serialSearchTerm, setSerialSearchTerm] = useState('');
 
   // Document Generator State
   const [templateFile, setTemplateFile] = useState<File | null>(null);
@@ -82,11 +78,15 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
   // Selected inverter, panel and battery state
   const [selectedInverterId, setSelectedInverterId] = useState<string | null>(null);
   const [selectedPanelId, setSelectedPanelId] = useState<string | null>(null);
-  const [selectedPanelQty, setSelectedPanelQty] = useState<number | null>(null);
   const [selectedBatteryId, setSelectedBatteryId] = useState<string | null>(null);
 
   // Archive projects state
-  const [archivedProjects, setArchivedProjects] = useState<any[]>([]);
+  const [archivedProjects, setArchivedProjects] = useState<ArchivedProject[]>([]);
+  
+  // Missing state variables
+  const [hasChanges, setHasChanges] = useState(false);
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [selectedPanelQty, setSelectedPanelQty] = useState<number>(0);
 // Confirm Dialog State
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean;
@@ -246,12 +246,13 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
             descriptionUpdatedAt: new Date()
         }
     });
-    setHasChanges(true);
   };
 
+  // Unused - kept for future use
+  /*
   const handleSaveChanges = () => {
     if (!editingClient) return;
-    let finalNeeds = { ...editingClient.needs };
+    const finalNeeds = { ...editingClient.needs };
     if (tempDescription !== editingClient.needs?.description) {
         finalNeeds.description = tempDescription;
         finalNeeds.descriptionUpdatedBy = currentUser.nickname;
@@ -280,7 +281,10 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
     setSelectedClient(finalClient);
     setHasChanges(false);
   };
+  */
 
+  // Unused - kept for future use
+  /*
   const handlePanelCalculation = (type: 'KW_TO_COUNT' | 'COUNT_TO_KW', value: number) => {
     if (!editingClient) return;
     const panelId = editingClient.needs?.panelStockItemId;
@@ -304,8 +308,8 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
             needs: { ...prev.needs, panelCount: value, panelKw: Number(kw.toFixed(3)) }
         }) : null);
     }
-    setHasChanges(true);
   };
+  */
 
   const suggestedInverters = useMemo(() => {
     if (!editingClient?.needs?.inverterKw) return [];
@@ -383,17 +387,27 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
   const handleUploadDocument = async () => {
     if (!editingClient || !uploadFile) return;
     const internalId = editingClient.internalId || 'NO_ID';
-    let typeLabel = docType;
+    const typeLabel = docType;
     let generatedName = `[${internalId}] ${typeLabel} ${editingClient.name}`;
     let description = '';
-    if (docType === 'Factura' && docInput.trim()) {
-        description = `POD: ${docInput}`;
+    
+    // Map docType to valid FileSystem types
+    let fsType: 'CI' | 'CF' | 'Fact' | 'Other' = 'Other';
+    if (docType === 'CI') fsType = 'CI';
+    else if (docType === 'CF') fsType = 'CF';
+    else if (docType === 'Factura') {
+      fsType = 'Fact';
+      if (docInput.trim()) description = `POD: ${docInput}`;
+    } else if (docType === 'CUI') {
+      fsType = 'Other';
+      generatedName = `[${internalId}] CUI ${editingClient.name}`;
     } else if (docType === 'Other' && docInput.trim()) {
-        generatedName = `[${internalId}] ${docInput.trim()} ${editingClient.name}`;
-        description = docInput.trim(); 
+      generatedName = `[${internalId}] ${docInput.trim()} ${editingClient.name}`;
+      description = docInput.trim(); 
     }
+    
     try {
-      const newDoc = await FileSystem.saveFile(editingClient, uploadFile, getFolderForDocType(docType), docType as any, generatedName);
+      const newDoc = await FileSystem.saveFile(editingClient, uploadFile, getFolderForDocType(docType), fsType, generatedName);
       newDoc.description = description;
       const updatedClient = { ...editingClient, documents: [newDoc, ...(editingClient.documents || [])] };
       onUpdateClient(updatedClient);
@@ -438,18 +452,19 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
       streamRef.current = stream;
       setTimeout(() => { if (videoRef.current) videoRef.current.srcObject = stream; }, 100);
-    } catch (err) {
+    } catch {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true });
         streamRef.current = stream;
         setTimeout(() => { if (videoRef.current) videoRef.current.srcObject = stream; }, 100);
-      } catch (err2) { alert("Could not access camera."); setIsCameraOpen(false); }
+      } catch { alert("Could not access camera."); }
     }
   };
   const stopCamera = () => {
     if (streamRef.current) streamRef.current.getTracks().forEach(track => track.stop());
-    setIsCameraOpen(false);
   };
+  // Unused - kept for future use
+  /*
   const capturePhoto = () => {
     if (!videoRef.current || !canvasRef.current) return;
     const context = canvasRef.current.getContext('2d');
@@ -464,6 +479,7 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
       stopCamera();
     }
   };
+  */
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const reader = new FileReader();
@@ -493,22 +509,22 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
     const newItem: QuoteLineItem = { id: Date.now().toString() + Math.random().toString(), description: '', unit: 'pcs', quantity: 1, netPrice: 0 };
     setQuoteItems([...quoteItems, newItem]);
   };
-  const updateQuoteLine = (id: string, field: keyof QuoteLineItem, value: any) => {
+  const updateQuoteLine = (id: string, field: keyof QuoteLineItem, value: string | number) => {
     setQuoteItems(quoteItems.map(item => item.id === id ? { ...item, [field]: value } : item));
   };
-  const selectQuoteProduct = (id: string, product: InventoryItem) => {
-    setQuoteItems(quoteItems.map(item => item.id === id ? { ...item, inventoryItemId: product.id, description: product.name, netPrice: product.sellPrice, unit: 'pcs', selectedSerialNumbers: [] } : item));
-    setFocusedRowId(null);
-  };
+  // const selectQuoteProduct = (id: string, product: InventoryItem) => {
+  //   setQuoteItems(quoteItems.map(item => item.id === id ? { ...item, inventoryItemId: product.id, description: product.name, netPrice: product.sellPrice, unit: 'pcs', selectedSerialNumbers: [] } : item));
+  //   setFocusedRowId(null);
+  // };
   const removeQuoteLine = (id: string) => setQuoteItems(quoteItems.filter(item => item.id !== id));
-  const toggleQuoteSerialNumber = (itemId: string, serial: string) => {
-    setQuoteItems(prevItems => prevItems.map(item => {
-      if (item.id !== itemId) return item;
-      const currentSerials = item.selectedSerialNumbers || [];
-      const newSerials = currentSerials.includes(serial) ? currentSerials.filter(s => s !== serial) : [...currentSerials, serial];
-      return { ...item, selectedSerialNumbers: newSerials, quantity: newSerials.length > 0 ? newSerials.length : item.quantity };
-    }));
-  };
+  // const toggleQuoteSerialNumber = (itemId: string, serial: string) => {
+  //   setQuoteItems(prevItems => prevItems.map(item => {
+  //     if (item.id !== itemId) return item;
+  //     const currentSerials = item.selectedSerialNumbers || [];
+  //     const newSerials = currentSerials.includes(serial) ? currentSerials.filter(s => s !== serial) : [...currentSerials, serial];
+  //     return { ...item, selectedSerialNumbers: newSerials, quantity: newSerials.length > 0 ? newSerials.length : item.quantity };
+  //   }));
+  // };
   const quoteTotals = useMemo(() => {
     const subtotalNet = quoteItems.reduce((acc, item) => acc + (item.quantity * item.netPrice), 0);
     const vatTotal = subtotalNet * 0.21;
@@ -824,22 +840,29 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={(e) => {
+                                  onClick={async (e) => {
                                     e.preventDefault();
                                     e.stopPropagation();
                                     if (!editingClient) return;
                                     const projectId = project.id;
                                     const projectName = project.projectName;
-                                    if (window.confirm(`Are you sure you want to delete archived project "${projectName}"? This action cannot be undone.`)) {
-                                      const updated = archivedProjects.filter(p => p.id !== projectId);
-                                      const updatedClient = {
-                                        ...editingClient,
-                                        archivedProjects: updated
-                                      };
-                                      setArchivedProjects(updated);
-                                      setEditingClient(updatedClient);
-                                      onUpdateClient(updatedClient);
-                                      setSelectedClient(updatedClient);
+                                    const confirmed = window.confirm(`Are you sure you want to delete archived project "${projectName}"? This action cannot be undone.`);
+                                    if (!confirmed) return;
+
+                                    const updated = archivedProjects.filter(p => p.id !== projectId);
+                                    const updatedClient = {
+                                      ...editingClient,
+                                      archivedProjects: updated
+                                    };
+
+                                    setArchivedProjects(updated);
+                                    setEditingClient(updatedClient);
+                                    setSelectedClient(updatedClient);
+
+                                    try {
+                                      await onUpdateClient(updatedClient);
+                                    } catch (err) {
+                                      console.error('Failed to delete archived project', err);
                                     }
                                   }}
                                   className="bg-red-500/10 hover:bg-red-500/20 text-red-400 px-3 py-1 rounded text-xs font-bold transition-colors whitespace-nowrap"

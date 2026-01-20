@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { Installer } from '../types';
-import { Wrench, Phone, Circle, Search, Plus, Trash2, X, Save } from 'lucide-react';
+import { Wrench, Phone, Search, Plus, Trash2, X, Save } from 'lucide-react';
 
 interface InstallerManagerProps {
   installers: Installer[];
@@ -180,7 +180,7 @@ export const InstallerManager: React.FC<InstallerManagerProps> = ({
                  <div className="grid grid-cols-2 gap-4">
                     <div>
                         <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Status</label>
-                        <select value={formData.status} onChange={e => setFormData({...formData, status: e.target.value as any})} className="w-full bg-slate-900 border border-slate-600 rounded-lg p-2.5 text-white focus:ring-1 focus:ring-amber-500 outline-none">
+                        <select value={formData.status} onChange={e => setFormData({...formData, status: e.target.value as 'AVAILABLE' | 'ASSIGNED' | 'OFF_DUTY'})} className="w-full bg-slate-900 border border-slate-600 rounded-lg p-2.5 text-white focus:ring-1 focus:ring-amber-500 outline-none">
                            <option value="AVAILABLE">Available</option>
                            <option value="ASSIGNED">Assigned</option>
                            <option value="OFF_DUTY">Off Duty</option>

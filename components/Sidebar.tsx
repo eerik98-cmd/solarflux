@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { LayoutDashboard, Box, Bot, Sun, Battery, Settings, FileText, Users, Wrench, FolderOpen } from 'lucide-react';
+import { Box, Sun, Battery, Settings, FileText, Users, FolderOpen } from 'lucide-react';
 import { View } from '../types';
 
 interface SidebarProps {
