@@ -144,10 +144,19 @@ const App: React.FC = () => {
   };
 
   const handleDeleteClient = async (id: string) => {
+    const clientToDelete = clients.find(c => c.id === id);
+    
+    let message = 'Are you sure you want to delete this client? This will remove all associated data and cannot be undone.';
+    
+    // Enhanced warning for archived clients with projects
+    if (clientToDelete?.status === 'CLOSED' && clientToDelete?.archivedProjects && clientToDelete.archivedProjects.length > 0) {
+      message = `This archived client has ${clientToDelete.archivedProjects.length} archived project(s). Deleting will permanently remove all project data and cannot be undone. Are you sure you want to continue?`;
+    }
+    
     setConfirmDialog({
       isOpen: true,
       title: 'Delete Client',
-      message: 'Are you sure you want to delete this client? This will remove all associated data and cannot be undone.',
+      message: message,
       variant: 'danger',
       onConfirm: async () => {
         await StorageService.deleteItem('clients', id);
@@ -300,6 +309,7 @@ const App: React.FC = () => {
               inventory={inventory} 
               savedQuotes={savedQuotes}
               onSaveQuote={handleSaveQuote}
+              onDeleteQuote={handleDeleteQuote}
             />
           )}
 

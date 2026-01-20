@@ -10,9 +10,10 @@ interface QuoteGeneratorProps {
   clients: Client[];
   savedQuotes: Quote[];
   onSaveQuote: (quote: Quote) => void;
+  onDeleteQuote?: (id: string) => void;
 }
 
-export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clients, savedQuotes, onSaveQuote }) => {
+export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clients, savedQuotes, onSaveQuote, onDeleteQuote }) => {
   const [projectTitle, setProjectTitle] = useState('');
   const [customerName, setCustomerName] = useState('');
   const [selectedClientId, setSelectedClientId] = useState<string | undefined>(undefined);
@@ -699,14 +700,33 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                         {savedQuotes.slice().reverse().map(q => (
-                            <div key={q.id} className="bg-slate-800 border border-slate-700 hover:border-amber-500/50 rounded-xl p-4 transition-all group relative cursor-pointer" onClick={() => loadQuote(q)}>
+                            <div key={q.id} className="bg-slate-800 border border-slate-700 hover:border-amber-500/50 rounded-xl p-4 transition-all group relative">
                                 <div className="flex justify-between items-start mb-2">
-                                    <h4 className="font-bold text-white truncate pr-2">{q.title || 'Untitled'}</h4>
+                                    <h4 className="font-bold text-white truncate pr-2 cursor-pointer" onClick={() => loadQuote(q)}>{q.title || 'Untitled'}</h4>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setConfirmDialog({
+                                          isOpen: true,
+                                          title: 'Delete Quote',
+                                          message: `Are you sure you want to delete quote "${q.title || 'Untitled'}"? This action cannot be undone.`,
+                                          variant: 'danger',
+                                          onConfirm: () => {
+                                            if (onDeleteQuote) onDeleteQuote(q.id);
+                                            setConfirmDialog({ ...confirmDialog, isOpen: false });
+                                          }
+                                        });
+                                      }}
+                                      className="p-1.5 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                                    >
+                                      <Trash2 size={14} />
+                                    </button>
                                 </div>
-                                <div className="text-xs text-slate-400 mb-1 flex items-center gap-1">
+                                <div className="text-xs text-slate-400 mb-1 flex items-center gap-1 cursor-pointer" onClick={() => loadQuote(q)}>
                                     <span className="font-semibold text-slate-300">{q.customerName}</span>
                                 </div>
-                                <div className="flex justify-between items-end mt-3">
+                                <div className="flex justify-between items-end mt-3 cursor-pointer" onClick={() => loadQuote(q)}>
                                     <span className="text-[10px] text-slate-500">{new Date(q.date).toLocaleDateString()}</span>
                                     <span className="text-sm font-bold text-emerald-400">{formatCurrency(q.totalGross)}</span>
                                 </div>

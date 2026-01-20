@@ -834,25 +834,26 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                                   onClick={(e) => {
                                     e.preventDefault();
                                     e.stopPropagation();
+                                    if (!editingClient) return;
                                     const projectId = project.id;
                                     const projectName = project.projectName;
+                                    const currentClient = editingClient;
+                                    const currentArchived = [...archivedProjects];
                                     setConfirmDialog({
                                       isOpen: true,
                                       title: 'Delete Archived Project',
                                       message: `Are you sure you want to delete archived project "${projectName}"? This action cannot be undone.`,
                                       variant: 'danger',
                                       onConfirm: () => {
-                                        setArchivedProjects(prev => {
-                                          const updated = prev.filter(p => p.id !== projectId);
-                                          setEditingClient(current => {
-                                            return {
-                                              ...current,
-                                              archivedProjects: updated
-                                            };
-                                          });
-                                          return updated;
-                                        });
-                                        setHasChanges(true);
+                                        const updated = currentArchived.filter(p => p.id !== projectId);
+                                        setArchivedProjects(updated);
+                                        const updatedClient = {
+                                          ...currentClient,
+                                          archivedProjects: updated
+                                        };
+                                        setEditingClient(updatedClient);
+                                        onUpdateClient(updatedClient);
+                                        setSelectedClient(updatedClient);
                                         setConfirmDialog({ ...confirmDialog, isOpen: false });
                                       }
                                     });
