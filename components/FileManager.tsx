@@ -24,97 +24,16 @@ interface FileManagerProps {
 const isPdfDoc = (doc: CompanyDocument) =>
   !!doc.url && (doc.url.startsWith('data:application/pdf') || doc.name.toLowerCase().endsWith('.pdf'));
 
-const dataUrlToUint8Array = (dataUrl: string): Uint8Array => {
-  const commaIndex = dataUrl.indexOf(',');
-  if (commaIndex < 0) throw new Error('Invalid data URL');
-  const header = dataUrl.slice(0, commaIndex);
-  const dataPart = dataUrl.slice(commaIndex + 1);
-
-  if (header.includes(';base64')) {
-    const binaryString = atob(dataPart);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
-    return bytes;
-  }
-
-  const decoded = decodeURIComponent(dataPart);
-  const bytes = new Uint8Array(decoded.length);
-  for (let i = 0; i < decoded.length; i++) bytes[i] = decoded.charCodeAt(i);
-  return bytes;
-};
-
-const PdfCanvasPreview: React.FC<{ url: string; title: string }> = ({ url, title }) => {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    let renderTask: any = null;
-    let loadingTask: any = null;
-
-    const run = async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const pdfjsLib = await import('pdfjs-dist');
-        
-        // Set worker source if not already set
-        if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
-          pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
-        }
-        
-        const data = url.startsWith('data:') ? dataUrlToUint8Array(url) : new Uint8Array(await (await fetch(url)).arrayBuffer());
-        loadingTask = pdfjsLib.getDocument({ data });
-        const pdf = await loadingTask.promise;
-        
-        if (cancelled) return;
-        
-        const page = await pdf.getPage(1);
-        
-        if (cancelled) return;
-
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        const context = canvas.getContext('2d');
-        if (!context) return;
-
-        const containerWidth = canvas.parentElement?.clientWidth ?? 800;
-        const unscaledViewport = page.getViewport({ scale: 1 });
-        const scale = Math.max(1, Math.min(2.5, (containerWidth - 24) / unscaledViewport.width));
-        const viewport = page.getViewport({ scale });
-
-        canvas.width = Math.floor(viewport.width);
-        canvas.height = Math.floor(viewport.height);
-
-        renderTask = page.render({ canvasContext: context, viewport });
-        await renderTask.promise;
-      } catch (e: any) {
-        if (!cancelled) setError(e?.message ?? 'Failed to render PDF');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
-
-    void run();
-
-    return () => {
-      cancelled = true;
-      try {
-        if (renderTask?.cancel) renderTask.cancel();
-      } catch {}
-      try {
-        if (loadingTask?.destroy) loadingTask.destroy();
-      } catch {}
-    };
-  }, [url]);
-
+const PdfPreview: React.FC<{ url: string; title: string }> = ({ url, title }) => {
   return (
     <div className="w-full h-full flex flex-col">
-      {loading && <div className="text-slate-400 text-sm mb-3">Loading PDF preview…</div>}
-      {error && <div className="text-red-300 text-sm mb-3">{error}</div>}
       <div className="flex-1 overflow-auto rounded-lg border border-slate-700 bg-slate-950">
-        <canvas ref={canvasRef} aria-label={title} className="block mx-auto" />
+        <iframe
+          src={url}
+          title={title}
+          className="w-full h-full min-h-[600px]"
+          style={{ border: 'none' }}
+        />
       </div>
     </div>
   );
@@ -394,7 +313,7 @@ export const FileManager: React.FC<FileManagerProps> = ({ documents = [], onAddD
               {previewDoc.url.includes('data:image') ? (
                 <img src={previewDoc.url} alt={previewDoc.name} className="max-w-full max-h-full object-contain rounded-lg mx-auto" />
               ) : isPdfDoc(previewDoc) ? (
-                <PdfCanvasPreview url={previewDoc.url} title={previewDoc.name} />
+                <PdfPreview url={previewDoc.url} title={previewDoc.name} />
               ) : previewDoc.url.includes('data:text') ? (
                 <div className="bg-slate-800 rounded-lg p-6 max-h-full overflow-auto border border-slate-700 w-full">
                   <pre className="text-sm text-slate-300 font-mono whitespace-pre-wrap break-words">
