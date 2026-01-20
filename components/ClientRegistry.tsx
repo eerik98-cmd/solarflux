@@ -666,19 +666,12 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
     return (
       <div className="h-full flex flex-col bg-slate-900">
         <header className="p-6 border-b border-slate-700 bg-slate-800 flex items-center gap-4">
-          <button onClick={() => setSelectedClient(null)} className="p-2 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white transition-colors"><ArrowLeft size={24} /></button>
+          <button onClick={() => {
+            setSelectedClient(null);
+            setConfirmDialog({ ...confirmDialog, isOpen: false });
+          }} className="p-2 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white transition-colors"><ArrowLeft size={24} /></button>
           <div><h1 className="text-2xl font-bold text-white leading-tight">{editingClient.name}</h1><div className="flex items-center gap-2 mt-1"><span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${getStatusColor(editingClient.status)}`}>{editingClient.status}</span><span className="text-sm text-slate-400 flex items-center gap-1">{editingClient.type === ClientType.CORPORATE ? <Building2 size={14}/> : <User size={14}/>}{editingClient.type}</span></div></div>
-          {hasChanges && (
-            <div className="ml-auto flex items-center gap-3 animate-in fade-in slide-in-from-right-4">
-              <span className="text-sm text-amber-500 italic">Unsaved changes</span>
-              <button 
-                onClick={handleSaveChanges}
-                className="px-6 py-2 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-lg flex items-center gap-2 transition-all shadow-lg shadow-amber-500/20"
-              >
-                <Save size={18} /> Save Changes
-              </button>
-            </div>
-          )}
+
         </header>
 
         <div className="flex flex-1 overflow-hidden">
@@ -837,26 +830,17 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                                     if (!editingClient) return;
                                     const projectId = project.id;
                                     const projectName = project.projectName;
-                                    const currentClient = editingClient;
-                                    const currentArchived = [...archivedProjects];
-                                    setConfirmDialog({
-                                      isOpen: true,
-                                      title: 'Delete Archived Project',
-                                      message: `Are you sure you want to delete archived project "${projectName}"? This action cannot be undone.`,
-                                      variant: 'danger',
-                                      onConfirm: () => {
-                                        const updated = currentArchived.filter(p => p.id !== projectId);
-                                        setArchivedProjects(updated);
-                                        const updatedClient = {
-                                          ...currentClient,
-                                          archivedProjects: updated
-                                        };
-                                        setEditingClient(updatedClient);
-                                        onUpdateClient(updatedClient);
-                                        setSelectedClient(updatedClient);
-                                        setConfirmDialog({ ...confirmDialog, isOpen: false });
-                                      }
-                                    });
+                                    if (window.confirm(`Are you sure you want to delete archived project "${projectName}"? This action cannot be undone.`)) {
+                                      const updated = archivedProjects.filter(p => p.id !== projectId);
+                                      const updatedClient = {
+                                        ...editingClient,
+                                        archivedProjects: updated
+                                      };
+                                      setArchivedProjects(updated);
+                                      setEditingClient(updatedClient);
+                                      onUpdateClient(updatedClient);
+                                      setSelectedClient(updatedClient);
+                                    }
                                   }}
                                   className="bg-red-500/10 hover:bg-red-500/20 text-red-400 px-3 py-1 rounded text-xs font-bold transition-colors whitespace-nowrap"
                                 >
