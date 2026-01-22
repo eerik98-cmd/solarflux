@@ -29,6 +29,8 @@ export interface InventoryItem {
   location: string;
   specs?: string; // e.g., "400W Monocrystalline"
   powerW?: number; // Power in Watts (Specific to Solar Panels)
+  panelWidth?: number; // Width in meters (Specific to Solar Panels)
+  panelHeight?: number; // Height in meters (Specific to Solar Panels)
   documents?: InventoryDocuments;
   serialNumbers?: string[]; // Array of unique serial numbers
   

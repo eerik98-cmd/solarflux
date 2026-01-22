@@ -207,6 +207,14 @@ const App: React.FC = () => {
     await StorageService.deleteItem('companyDocuments', id);
   };
 
+  const handleUpdateCompanyDocument = async (id: string, updates: any) => {
+    const existingDoc = companyDocuments.find(d => d.id === id);
+    if (existingDoc) {
+      const updatedDoc = { ...existingDoc, ...updates };
+      await StorageService.saveItem('companyDocuments', updatedDoc);
+    }
+  };
+
   const handleLogin = (u: string, p: string) => {
     // Note: In a real app, use Firebase Auth. Here we check against the 'users' collection we fetched.
     let user = users.find(user => user.username === u && user.password === p);
@@ -334,6 +342,7 @@ const App: React.FC = () => {
               documents={companyDocuments}
               onAddDocument={handleAddCompanyDocument}
               onDeleteDocument={handleDeleteCompanyDocument}
+              onUpdateDocument={handleUpdateCompanyDocument}
             />
           )}
         </Suspense>

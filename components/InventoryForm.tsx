@@ -24,6 +24,8 @@ const InventoryForm: React.FC<InventoryFormProps> = ({ initialData, onSubmit, on
     location: '',
     specs: '',
     powerW: 0,
+    panelWidth: 0,
+    panelHeight: 0,
     batteryPowerKwh: 0,
     batteryType: undefined,
     inverterPowerKw: 0,
@@ -66,6 +68,8 @@ const InventoryForm: React.FC<InventoryFormProps> = ({ initialData, onSubmit, on
         location: initialData.location,
         specs: initialData.specs || '',
         powerW: initialData.powerW || 0,
+        panelWidth: initialData.panelWidth || 0,
+        panelHeight: initialData.panelHeight || 0,
         batteryPowerKwh: initialData.batteryPowerKwh || 0,
         batteryType: initialData.batteryType,
         inverterPowerKw: initialData.inverterPowerKw || 0,
@@ -100,7 +104,7 @@ const InventoryForm: React.FC<InventoryFormProps> = ({ initialData, onSubmit, on
     const { name, value } = e.target;
     setFormData(prev => ({
       ...prev,
-      [name]: (name === 'quantity' || name === 'buyPrice' || name === 'sellPrice' || name === 'minThreshold' || name === 'powerW') ? Number(value) : value
+      [name]: (name === 'quantity' || name === 'buyPrice' || name === 'sellPrice' || name === 'minThreshold' || name === 'powerW' || name === 'panelWidth' || name === 'panelHeight') ? Number(value) : value
     }));
   };
 
@@ -410,21 +414,51 @@ const InventoryForm: React.FC<InventoryFormProps> = ({ initialData, onSubmit, on
               
               {/* Conditional Power Input for Solar Panels */}
               {formData.category === Category.PANELS && (
-                <div className="space-y-1">
-                  <label className="text-sm font-medium text-amber-500 flex items-center gap-1">
-                    <Zap size={14} /> Power (W)
-                  </label>
-                  <input
-                    name="powerW"
-                    type="number"
-                    min="0"
-                    step="1"
-                    value={formData.powerW || ''}
-                    onChange={handleChange}
-                    className="w-full bg-slate-900 border border-amber-500/50 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none"
-                    placeholder="e.g. 505"
-                  />
-                </div>
+                <>
+                  <div className="space-y-1">
+                    <label className="text-sm font-medium text-amber-500 flex items-center gap-1">
+                      <Zap size={14} /> Power (W)
+                    </label>
+                    <input
+                      name="powerW"
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={formData.powerW || ''}
+                      onChange={handleChange}
+                      className="w-full bg-slate-900 border border-amber-500/50 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none"
+                      placeholder="e.g. 505"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <label className="text-sm font-medium text-amber-500">Width (m)</label>
+                      <input
+                        name="panelWidth"
+                        type="number"
+                        min="0"
+                        step="0.001"
+                        value={formData.panelWidth || ''}
+                        onChange={handleChange}
+                        className="w-full bg-slate-900 border border-amber-500/50 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none"
+                        placeholder="e.g. 1.134"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-sm font-medium text-amber-500">Height (m)</label>
+                      <input
+                        name="panelHeight"
+                        type="number"
+                        min="0"
+                        step="0.001"
+                        value={formData.panelHeight || ''}
+                        onChange={handleChange}
+                        className="w-full bg-slate-900 border border-amber-500/50 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none"
+                        placeholder="e.g. 2.278"
+                      />
+                    </div>
+                  </div>
+                </>
               )}
 
               {/* Battery-specific fields */}

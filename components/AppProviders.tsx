@@ -201,6 +201,14 @@ export function AppProviders() {
     await StorageService.deleteItem('companyDocuments', id);
   };
 
+  const handleUpdateCompanyDocument = async (id: string, updates: any) => {
+    const existingDoc = companyDocuments.find(d => d.id === id);
+    if (existingDoc) {
+      const updatedDoc = { ...existingDoc, ...updates };
+      await StorageService.saveItem('companyDocuments', updatedDoc);
+    }
+  };
+
   const handleLogin = (u: string, p: string) => {
     let user = users.find(user => user.username === u && user.password === p);
     
@@ -308,6 +316,7 @@ export function AppProviders() {
               documents={companyDocuments}
               onAddDocument={handleAddCompanyDocument}
               onDeleteDocument={handleDeleteCompanyDocument}
+              onUpdateDocument={handleUpdateCompanyDocument}
             />
           )}
         </Suspense>

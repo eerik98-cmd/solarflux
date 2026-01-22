@@ -74,6 +74,7 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
 
   // State for alternatives dropdown
   const [showAlternatives, setShowAlternatives] = useState(false);
+  const [showBatteryAlternatives, setShowBatteryAlternatives] = useState(false);
 
   // Selected inverter, panel and battery state
   const [selectedInverterId, setSelectedInverterId] = useState<string | null>(null);
@@ -87,6 +88,13 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
   const [hasChanges, setHasChanges] = useState(false);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [selectedPanelQty, setSelectedPanelQty] = useState<number>(0);
+  
+  // Row configuration state
+  const [rowCount, setRowCount] = useState<number>(1);
+  const [rowDistribution, setRowDistribution] = useState<{[key: number]: number}>({1: 0});
+  
+  // Image preview modal state
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
 // Confirm Dialog State
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean;
@@ -776,7 +784,7 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                  <section className="bg-slate-800 p-6 rounded-xl border border-slate-700">
                     <h3 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2"><FolderOpen size={16} className="text-amber-500" />Project Archive</h3>
                     <button 
-                      onClick={() => {
+                      onClick={async () => {
                         if (!editingClient.needs?.projectName?.trim()) {
                           alert('Please enter a project name before archiving.');
                           return;
@@ -800,12 +808,23 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                           updatedArchived = [archivedProject, ...archivedProjects];
                         }
                         setArchivedProjects(updatedArchived);
-                        setEditingClient({ ...editingClient, archivedProjects: updatedArchived });
-                        setHasChanges(true);
+                        
                         // Clear current data
                         const clearedNeeds = { projectName: '', description: '', connectionType: undefined, roofType: undefined, roofTypeOther: undefined, inverterKw: undefined, panelKw: 0, panelCount: 0, panelStockItemId: undefined, storage: '', technicalNotes: '', siteImages: [] };
-                        setEditingClient({ ...editingClient, needs: clearedNeeds, archivedProjects: updatedArchived });
+                        const updatedClient = { ...editingClient, needs: clearedNeeds, archivedProjects: updatedArchived };
+                        
+                        setEditingClient(updatedClient);
+                        setSelectedClient(updatedClient);
                         setTempDescription('');
+                        
+                        // Save to database
+                        try {
+                          await onUpdateClient(updatedClient);
+                          setHasChanges(false);
+                        } catch (err) {
+                          console.error('Failed to save archived project', err);
+                          alert('Failed to save project. Please try again.');
+                        }
                       }}
                       className="w-full bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold px-4 py-3 rounded-lg flex items-center justify-center gap-2 transition-colors mb-4"
                     >
@@ -840,30 +859,37 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={async (e) => {
+                                  onClick={(e) => {
                                     e.preventDefault();
                                     e.stopPropagation();
                                     if (!editingClient) return;
                                     const projectId = project.id;
                                     const projectName = project.projectName;
-                                    const confirmed = window.confirm(`Are you sure you want to delete archived project "${projectName}"? This action cannot be undone.`);
-                                    if (!confirmed) return;
+                                    
+                                    setConfirmDialog({
+                                      isOpen: true,
+                                      title: 'Delete Archived Project',
+                                      message: `Are you sure you want to delete archived project "${projectName}"? This action cannot be undone.`,
+                                      variant: 'danger',
+                                      onConfirm: () => {
+                                        const updated = archivedProjects.filter(p => p.id !== projectId);
+                                        const updatedClient = {
+                                          ...editingClient,
+                                          archivedProjects: updated
+                                        };
 
-                                    const updated = archivedProjects.filter(p => p.id !== projectId);
-                                    const updatedClient = {
-                                      ...editingClient,
-                                      archivedProjects: updated
-                                    };
-
-                                    setArchivedProjects(updated);
-                                    setEditingClient(updatedClient);
-                                    setSelectedClient(updatedClient);
-
-                                    try {
-                                      await onUpdateClient(updatedClient);
-                                    } catch (err) {
-                                      console.error('Failed to delete archived project', err);
-                                    }
+                                        setArchivedProjects(updated);
+                                        setEditingClient(updatedClient);
+                                        setSelectedClient(updatedClient);
+                                        onUpdateClient(updatedClient);
+                                        setConfirmDialog({
+                                          isOpen: false,
+                                          title: '',
+                                          message: '',
+                                          onConfirm: () => {},
+                                        });
+                                      }
+                                    });
                                   }}
                                   className="bg-red-500/10 hover:bg-red-500/20 text-red-400 px-3 py-1 rounded text-xs font-bold transition-colors whitespace-nowrap"
                                 >
@@ -904,10 +930,12 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
 
                     {editingClient.needs?.inverterKw && (
                       <div className="space-y-4">
-                        {/* Suitable Inverters Found */}
+                        {/* SCENARIO 1: Suitable Inverters Found */}
                         {suggestedInverters.length > 0 && !selectedInverterId && (
                           <div className="space-y-3">
-                            <p className="text-xs text-emerald-400 font-bold flex items-center gap-1"><CheckCircle size={12} /> Suitable Inverters Found</p>
+                            <div className="flex items-center gap-2 text-emerald-400 font-bold text-sm bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-3 py-2">
+                              <CheckCircle size={16} /> Suitable Inverters Found
+                            </div>
                             {suggestedInverters.map(inv => (
                               <div 
                                 key={inv.id}
@@ -917,29 +945,78 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                                 <div className="flex justify-between items-start">
                                   <div className="flex-1">
                                     <p className="text-white font-bold">{inv.name}</p>
-                                    <p className="text-xs text-slate-400 mt-1">{inv.inverterPowerKw}kW • {inv.inverterConnectionType} • {inv.inverterStorageType} • {inv.quantity} in stock</p>
+                                    <p className="text-xs text-slate-400 mt-1">{inv.inverterPowerKw}kW • {inv.inverterConnectionType} • {inv.inverterStorageType}</p>
+                                    <p className="text-xs text-slate-500 mt-1">{inv.quantity} in stock</p>
                                     <p className="text-sm text-emerald-400 font-bold mt-2">{inv.sellPrice} RON</p>
                                   </div>
                                   <button 
                                     type="button"
-                                    className="ml-4 px-3 py-1 bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-bold rounded text-xs whitespace-nowrap"
+                                    className="ml-4 px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-bold rounded-lg text-sm whitespace-nowrap transition-colors"
                                   >
                                     Select
                                   </button>
                                 </div>
                               </div>
                             ))}
-                            <button 
-                              type="button"
-                              onClick={() => setShowAlternatives(true)}
-                              className="w-full px-4 py-2 border border-slate-600 hover:border-amber-500 text-slate-400 hover:text-amber-400 font-bold rounded-lg text-sm transition-colors"
-                            >
-                              Choose Different Inverter
-                            </button>
                           </div>
                         )}
 
-                        {/* Selected Inverter with Warnings */}
+                        {/* SCENARIO 2: No Suitable Inverters */}
+                        {suggestedInverters.length === 0 && !selectedInverterId && (() => {
+                          const connectionType = editingClient.needs?.connectionType;
+                          const targetKw = editingClient.needs?.inverterKw || 0;
+                          const allInverters = inventory.filter(i => i.category === Category.INVERTERS);
+                          const inStockInverters = allInverters.filter(i => i.quantity && i.quantity > 0);
+                          const similarInverters = allInverters.filter(i => 
+                            i.inverterConnectionType === connectionType && 
+                            Math.abs((i.inverterPowerKw || 0) - targetKw) <= 2
+                          );
+                          
+                          let reason = '';
+                          if (allInverters.length === 0) {
+                            reason = 'No inverters registered in inventory.';
+                          } else if (inStockInverters.length === 0) {
+                            reason = 'All inverters in inventory are currently out of stock.';
+                          } else if (similarInverters.length === 0) {
+                            reason = `No inverters match the specifications (${targetKw}kW ${connectionType || 'connection type not selected'}).`;
+                          } else {
+                            reason = `Inverters matching your requirements (${targetKw}kW ${connectionType || 'connection type not selected'}) are currently out of stock.`;
+                          }
+                          
+                          return (
+                            <div className="space-y-3">
+                              <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg">
+                                <div className="flex items-center justify-center gap-2 text-red-400 font-bold text-lg mb-2">
+                                  <AlertCircle size={20} /> No suitable inverter!
+                                </div>
+                                <p className="text-sm text-red-300 text-center mb-3">
+                                  {reason}
+                                </p>
+                                {similarInverters.length > 0 && similarInverters.every(i => !i.quantity || i.quantity === 0) && (
+                                  <div className="mt-3 pt-3 border-t border-red-500/20">
+                                    <p className="text-xs text-red-400/80 text-center">
+                                      We have {similarInverters.length} suitable {similarInverters.length === 1 ? 'inverter' : 'inverters'} registered but all are out of stock:
+                                    </p>
+                                    <div className="mt-2 space-y-1">
+                                      {similarInverters.map(inv => (
+                                        <p key={inv.id} className="text-xs text-red-300/60 text-center">• {inv.name} ({inv.inverterPowerKw}kW {inv.inverterConnectionType})</p>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                              <button 
+                                type="button"
+                                onClick={() => setShowAlternatives(true)}
+                                className="w-full px-4 py-3 bg-slate-900 border border-amber-500/50 hover:border-amber-500 text-amber-400 hover:text-amber-300 font-bold rounded-lg transition-colors"
+                              >
+                                Browse All Available Inverters
+                              </button>
+                            </div>
+                          );
+                        })()}
+
+                        {/* Selected Inverter Display */}
                         {selectedInverterId && (() => {
                           const selected = inventory.find(i => i.id === selectedInverterId && i.category === Category.INVERTERS);
                           if (!selected) return null;
@@ -947,39 +1024,72 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                           const connectionMismatch = editingClient.needs?.connectionType && selected.inverterConnectionType !== editingClient.needs.connectionType;
                           const powerDiff = selected.inverterPowerKw ? selected.inverterPowerKw - (editingClient.needs?.inverterKw || 0) : 0;
                           const hasPowerWarning = Math.abs(powerDiff) > 0.5;
+                          const isOutOfStock = !selected.quantity || selected.quantity === 0;
                           
                           return (
-                            <div className="mb-4 p-4 bg-slate-900 border-2 border-emerald-500/50 rounded-lg">
-                              <div className="flex justify-between items-start mb-2">
-                                <div>
-                                  <p className="text-white font-bold">{selected.name}</p>
-                                  <p className="text-xs text-slate-400 mt-1">{selected.inverterPowerKw}kW • {selected.inverterConnectionType} • {selected.inverterStorageType}</p>
+                            <div className="space-y-3">
+                              <div className="p-4 rounded-lg border-2 bg-emerald-500/5 border-emerald-500/50">
+                                <div className="flex items-center gap-2 mb-3">
+                                  <span className="text-emerald-400 font-bold text-sm flex items-center gap-2">
+                                    <CheckCircle size={16} /> SELECTED INVERTER
+                                  </span>
                                 </div>
-                                <button 
-                                  type="button"
-                                  onClick={() => setSelectedInverterId(null)}
-                                  className="text-slate-400 hover:text-white"
-                                >
-                                  <X size={16} />
-                                </button>
+                                <div className="flex justify-between items-start">
+                                  <div className="flex-1">
+                                    <p className="text-white font-bold">{selected.name}</p>
+                                    <p className="text-xs text-slate-400 mt-1">{selected.inverterPowerKw}kW • {selected.inverterConnectionType} • {selected.inverterStorageType}</p>
+                                    <p className="text-sm text-emerald-400 font-bold mt-2">{selected.sellPrice} RON</p>
+                                  </div>
+                                  <button 
+                                    type="button"
+                                    onClick={() => setSelectedInverterId(null)}
+                                    className="text-slate-400 hover:text-white transition-colors"
+                                  >
+                                    <X size={18} />
+                                  </button>
+                                </div>
+                                
+                                {isOutOfStock && (
+                                  <div className="mt-3 p-3 bg-red-500/10 border border-red-500/50 rounded-lg">
+                                    <div className="flex items-start gap-2">
+                                      <AlertCircle size={14} className="text-red-400 flex-shrink-0 mt-0.5" />
+                                      <div className="text-xs text-red-300">
+                                        <p className="font-bold">Out of stock!</p>
+                                        <p className="mt-1">This inverter is currently not available in inventory</p>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+                                
+                                {connectionMismatch && (
+                                  <div className="mt-3 p-3 bg-red-500/10 border border-red-500/50 rounded-lg">
+                                    <div className="flex items-start gap-2">
+                                      <AlertCircle size={14} className="text-red-400 flex-shrink-0 mt-0.5" />
+                                      <div className="text-xs text-red-300">
+                                        <p className="font-bold">Wrong connection type!</p>
+                                        <p className="mt-1">Selected: <span className="font-bold">{selected.inverterConnectionType}</span></p>
+                                        <p>Project needs: <span className="font-bold">{editingClient.needs?.connectionType}</span></p>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+                                
+                                {hasPowerWarning && (
+                                  <div className="mt-3 p-3 bg-yellow-500/10 border border-yellow-500/50 rounded-lg">
+                                    <div className="flex items-start gap-2">
+                                      <AlertCircle size={14} className="text-yellow-400 flex-shrink-0 mt-0.5" />
+                                      <p className="text-xs text-yellow-300 font-bold">
+                                        Inverter capacity is {powerDiff > 0 ? 'bigger' : 'smaller'} than requested by {Math.abs(powerDiff).toFixed(2)}kW
+                                      </p>
+                                    </div>
+                                  </div>
+                                )}
                               </div>
-                              
-                              {connectionMismatch && (
-                                <div className="mt-3 p-2 bg-red-500/10 border border-red-500/50 rounded text-xs text-red-300 font-bold flex items-center gap-2">
-                                  <AlertCircle size={14} /> Wrong bransament type. Selected: {selected.inverterConnectionType}, Project: {editingClient.needs?.connectionType}
-                                </div>
-                              )}
-                              
-                              {hasPowerWarning && (
-                                <div className="mt-3 p-2 bg-yellow-500/10 border border-yellow-500/50 rounded text-xs text-yellow-300 font-bold flex items-center gap-2">
-                                  <AlertCircle size={14} /> Inverter capacity is {powerDiff > 0 ? 'bigger' : 'smaller'} than requested by {Math.abs(powerDiff).toFixed(2)}kW
-                                </div>
-                              )}
                               
                               <button 
                                 type="button"
-                                onClick={() => setShowAlternatives(!showAlternatives)}
-                                className="w-full mt-4 px-4 py-2 border border-slate-600 hover:border-amber-500 text-slate-400 hover:text-amber-400 font-bold rounded-lg text-sm transition-colors"
+                                onClick={() => setShowAlternatives(true)}
+                                className="w-full px-4 py-2 border border-slate-600 hover:border-amber-500 text-slate-400 hover:text-amber-400 font-bold rounded-lg text-sm transition-colors"
                               >
                                 Choose Different Inverter
                               </button>
@@ -987,192 +1097,85 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                           );
                         })()}
 
-                        {/* Choose Different Inverter Modal */}
+                        {/* Inverter Selection Modal */}
                         {showAlternatives && (
-                          <div className="bg-slate-900 border border-slate-700 rounded-lg p-4 space-y-3">
-                            <div className="flex justify-between items-center mb-3">
-                              <p className="text-xs font-bold text-slate-400 uppercase">All Available Inverters</p>
-                              <button 
-                                type="button"
-                                onClick={() => setShowAlternatives(false)}
-                                className="text-slate-400 hover:text-white"
-                              >
-                                <X size={16} />
-                              </button>
-                            </div>
-                            <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
-                              {inventory.filter(i => i.category === Category.INVERTERS && i.quantity > 0).map(inv => (
-                                <div 
-                                  key={inv.id}
-                                  className="flex items-center justify-between bg-slate-800 p-3 rounded border border-slate-700 hover:border-amber-500/50 cursor-pointer transition-all"
-                                  onClick={() => {
-                                    setSelectedInverterId(inv.id);
-                                    setShowAlternatives(false);
-                                  }}
+                          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+                            <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-2xl max-h-[80vh] flex flex-col">
+                              <div className="p-4 border-b border-slate-700 flex justify-between items-center">
+                                <h3 className="text-white font-bold">All Available Inverters</h3>
+                                <button 
+                                  type="button"
+                                  onClick={() => setShowAlternatives(false)}
+                                  className="text-slate-400 hover:text-white transition-colors"
                                 >
-                                  <div className="flex-1">
-                                    <p className="text-white font-bold text-sm">{inv.name}</p>
-                                    <p className="text-xs text-slate-400 mt-1">{inv.inverterPowerKw}kW • {inv.inverterConnectionType} • {inv.inverterStorageType}</p>
-                                  </div>
-                                  <div className="text-right ml-3">
-                                    <p className="text-xs font-bold text-emerald-400">{inv.quantity} in stock</p>
-                                    <p className="text-xs text-slate-400">{inv.sellPrice} RON</p>
-                                  </div>
-                                </div>
-                              ))}
-                              {inventory.filter(i => i.category === Category.INVERTERS && i.quantity > 0).length === 0 && (
-                                <div className="text-center py-4 text-slate-500 text-sm italic">No inverters in stock</div>
-                              )}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* No Suitable Inverters - Show Dropdown */}
-                        {suggestedInverters.length === 0 && !selectedInverterId && (
-                          <div className="relative">
-                            <button 
-                              type="button"
-                              onClick={() => setShowAlternatives(!showAlternatives)}
-                              className="w-full text-left px-4 py-3 bg-slate-900 border border-amber-500/50 rounded-lg text-amber-400 font-bold flex items-center justify-between hover:bg-slate-800 transition-colors"
-                            >
-                              <span>❌ No suitable inverters found. Available options:</span>
-                              <ChevronDown size={16} className={`transform transition-transform ${showAlternatives ? 'rotate-180' : ''}`} />
-                            </button>
-                            {showAlternatives && (
-                              <div className="absolute top-full left-0 right-0 mt-1 bg-slate-900 border border-amber-500/50 rounded-lg shadow-lg z-10">
-                                <div className="max-h-60 overflow-y-auto custom-scrollbar">
-                                  {inventory.filter(i => i.category === Category.INVERTERS && i.quantity > 0).map(inv => (
+                                  <X size={20} />
+                                </button>
+                              </div>
+                              <div className="p-4 overflow-y-auto custom-scrollbar space-y-2">
+                                {inventory.filter(i => i.category === Category.INVERTERS).map(inv => {
+                                  const isCurrentSelection = inv.id === selectedInverterId;
+                                  const matchesConnection = editingClient.needs?.connectionType ? inv.inverterConnectionType === editingClient.needs.connectionType : true;
+                                  const matchesPower = editingClient.needs?.inverterKw ? Math.abs((inv.inverterPowerKw || 0) - editingClient.needs.inverterKw) <= 2 : true;
+                                  const isPerfectMatch = matchesConnection && matchesPower;
+                                  const isOutOfStock = !inv.quantity || inv.quantity === 0;
+                                  
+                                  return (
                                     <div 
                                       key={inv.id}
-                                      className="flex items-center justify-between bg-slate-800 p-3 border-b border-slate-700 hover:bg-slate-750 cursor-pointer transition-all"
+                                      className={`flex items-center justify-between bg-slate-900 p-4 rounded-lg border cursor-pointer transition-all ${
+                                        isCurrentSelection 
+                                          ? 'border-emerald-500 ring-2 ring-emerald-500/20' 
+                                          : isPerfectMatch && !isOutOfStock
+                                          ? 'border-emerald-500/30 hover:border-emerald-500/50' 
+                                          : isOutOfStock
+                                          ? 'border-red-500/30 hover:border-red-500/50'
+                                          : 'border-slate-700 hover:border-amber-500/50'
+                                      }`}
                                       onClick={() => {
                                         setSelectedInverterId(inv.id);
                                         setShowAlternatives(false);
                                       }}
                                     >
                                       <div className="flex-1">
-                                        <p className="text-white font-bold text-sm">{inv.name}</p>
+                                        <div className="flex items-center gap-2">
+                                          <p className="text-white font-bold">{inv.name}</p>
+                                          {isPerfectMatch && !isCurrentSelection && !isOutOfStock && (
+                                            <span className="text-xs bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded font-bold">MATCH</span>
+                                          )}
+                                          {isCurrentSelection && (
+                                            <span className="text-xs bg-emerald-500 text-slate-900 px-2 py-0.5 rounded font-bold">SELECTED</span>
+                                          )}
+                                          {isOutOfStock && (
+                                            <span className="text-xs bg-red-500/20 text-red-400 px-2 py-0.5 rounded font-bold">OUT OF STOCK</span>
+                                          )}
+                                        </div>
                                         <p className="text-xs text-slate-400 mt-1">{inv.inverterPowerKw}kW • {inv.inverterConnectionType} • {inv.inverterStorageType}</p>
+                                        {!matchesConnection && (
+                                          <p className="text-xs text-red-400 mt-1 flex items-center gap-1">
+                                            <AlertCircle size={10} /> Wrong connection type
+                                          </p>
+                                        )}
                                       </div>
-                                      <div className="text-right ml-3">
-                                        <p className="text-xs font-bold text-emerald-400">{inv.quantity} in stock</p>
-                                        <p className="text-xs text-slate-400">{inv.sellPrice} RON</p>
+                                      <div className="text-right ml-4">
+                                        <p className="text-xs font-bold text-slate-400">{inv.quantity || 0} in stock</p>
+                                        <p className="text-sm font-bold text-emerald-400 mt-1">{inv.sellPrice} RON</p>
                                       </div>
                                     </div>
-                                  ))}
-                                  {inventory.filter(i => i.category === Category.INVERTERS && i.quantity > 0).length === 0 && (
-                                    <div className="text-center py-4 text-slate-500 text-sm italic">No inverters in stock</div>
-                                  )}
-                                </div>
+                                  );
+                                })}
+                                {inventory.filter(i => i.category === Category.INVERTERS).length === 0 && (
+                                  <div className="text-center py-8 text-slate-500">
+                                    <p className="font-bold mb-1">No inverters in inventory</p>
+                                    <p className="text-sm">Please add inverter items to inventory first</p>
+                                  </div>
+                                )}
                               </div>
-                            )}
+                            </div>
                           </div>
                         )}
                       </div>
                     )}
                  </section>
-                 <section className="bg-slate-800 p-6 rounded-xl border border-slate-700">
-                    <h3 className="text-sm font-bold text-slate-300 mb-6 flex items-center gap-2"><Package size={16} className="text-amber-500" />Panels Calculator</h3>
-                    <div className="space-y-6">
-                      {/* Input: Total Power */}
-                      <div>
-                        <label className="text-xs font-bold text-slate-500 uppercase mb-2 block">Total Power Required (kW)</label>
-                        <input 
-                          type="number" 
-                          step="0.1"
-                          value={editingClient.needs?.panelKw || ''} 
-                          onChange={(e) => handleNeedsChange('panelKw', Number(e.target.value))} 
-                          className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500" 
-                          placeholder="e.g. 6" 
-                        />
-                      </div>
-
-                      {/* Panel Suggestions */}
-                      {editingClient.needs?.panelKw && editingClient.needs.panelKw > 0 && (
-                        <div className="border-t border-slate-700 pt-4">
-                          <p className="text-xs text-slate-400 font-bold mb-3">💡 Panel Combinations Available:</p>
-                          <div className="space-y-2">
-                            {inventory
-                              .filter(i => i.category === Category.PANELS && i.powerW && i.powerW > 0)
-                              .map(panel => {
-                                const targetWatts = editingClient.needs!.panelKw! * 1000; // Convert kW to W
-                                const piecesNeeded = Math.ceil(targetWatts / panel.powerW!);
-                                const actualPower = (piecesNeeded * panel.powerW!) / 1000; // Convert back to kW
-                                const isSelected = selectedPanelId === panel.id;
-                                
-                                return (
-                                  <div 
-                                    key={panel.id} 
-                                    className={`p-3 rounded border transition-all flex justify-between items-center cursor-pointer ${
-                                      isSelected 
-                                        ? 'bg-emerald-500/10 border-emerald-500/50' 
-                                        : 'bg-slate-900 border-slate-700 hover:border-amber-500/50'
-                                    }`}
-                                    onClick={() => {
-                                      setSelectedPanelId(panel.id);
-                                      setSelectedPanelQty(piecesNeeded);
-                                      handleNeedsChange('panelStockItemId', panel.id);
-                                      handleNeedsChange('panelCount', piecesNeeded);
-                                    }}
-                                  >
-                                    <div>
-                                      <p className={`font-bold text-sm ${isSelected ? 'text-emerald-400' : 'text-white'}`}>{panel.name}</p>
-                                      <p className="text-xs text-slate-400">{panel.powerW}W • {piecesNeeded} pieces needed • {actualPower.toFixed(2)}kW total</p>
-                                    </div>
-                                    <div className="text-right">
-                                      <p className="text-xs font-bold text-emerald-400">{panel.quantity} in stock</p>
-                                      <p className="text-xs text-slate-400">{panel.sellPrice} RON</p>
-                                    </div>
-                                  </div>
-                                );
-                              })
-                            }
-                            {inventory.filter(i => i.category === Category.PANELS && i.powerW && i.powerW > 0).length === 0 && (
-                              <div className="text-center py-4 text-slate-500 text-sm italic">No solar panels in inventory</div>
-                            )}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Selected Configuration */}
-                      {editingClient.needs?.panelStockItemId && editingClient.needs?.panelCount && (
-                        <div className="bg-emerald-500/10 border border-emerald-500/30 p-4 rounded-lg">
-                          <p className="text-xs font-bold text-emerald-400 mb-2">✓ Selected Configuration</p>
-                          <div className="space-y-1">
-                            {(() => {
-                              const selected = inventory.find(i => i.id === editingClient.needs?.panelStockItemId);
-                              if (!selected) return null;
-                              const total = (editingClient.needs.panelCount * selected.powerW!) / 1000;
-                              return (
-                                <>
-                                  <p className="text-sm text-white font-bold">{editingClient.needs.panelCount} x {selected.name}</p>
-                                  <p className="text-xs text-emerald-300">{selected.powerW}W per panel = {total.toFixed(2)}kW total</p>
-                                </>
-                              );
-                            })()}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Manual Pieces Input */}
-                      <div>
-                        <label className="text-xs font-bold text-slate-500 uppercase mb-2 block">Or Enter Pieces Manually</label>
-                        <input 
-                          type="number"
-                          min="0"
-                          value={editingClient.needs?.panelCount || ''} 
-                          onChange={(e) => {
-                            const newQty = Number(e.target.value);
-                            handleNeedsChange('panelCount', newQty);
-                            setSelectedPanelQty(newQty);
-                          }} 
-                          className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500" 
-                          placeholder="Number of pieces" 
-                        />
-                      </div>
-                    </div>
-                 </section>
-
                  <section className="bg-slate-800 p-6 rounded-xl border border-slate-700">
                     <h3 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2"><Package size={16} className="text-amber-500" />Battery</h3>
                     
@@ -1206,17 +1209,12 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                       const batteryType = selectedInv.inverterStorageType;
                       const targetCapacity = editingClient.needs.batteryKwh || 0;
                       
-                      // Get compatible batteries
-                      const compatible = inventory.filter(i => 
+                      // Get suitable batteries (matching type and close capacity)
+                      const suitableBatteries = inventory.filter(i => 
                         i.category === Category.BATTERIES && 
                         i.batteryType === batteryType &&
-                        i.quantity > 0
-                      );
-
-                      // Get all batteries sorted by capacity difference
-                      const allBatteries = inventory.filter(i => 
-                        i.category === Category.BATTERIES &&
-                        i.quantity > 0
+                        i.quantity > 0 &&
+                        Math.abs((i.batteryPowerKwh || 0) - targetCapacity) <= 3
                       ).sort((a, b) => {
                         const diffA = Math.abs((a.batteryPowerKwh || 0) - targetCapacity);
                         const diffB = Math.abs((b.batteryPowerKwh || 0) - targetCapacity);
@@ -1225,7 +1223,92 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
 
                       return (
                         <div className="space-y-4">
-                          {/* Selected Battery with Warnings */}
+                          {/* SCENARIO 1: Suitable Batteries Found */}
+                          {suitableBatteries.length > 0 && !selectedBatteryId && (
+                            <div className="space-y-3">
+                              <div className="flex items-center gap-2 text-emerald-400 font-bold text-sm bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-3 py-2">
+                                <CheckCircle size={16} /> Suitable Batteries Found
+                              </div>
+                              {suitableBatteries.map(bat => (
+                                <div 
+                                  key={bat.id}
+                                  className="bg-slate-900 p-4 rounded-lg border border-slate-700 hover:border-emerald-500/50 cursor-pointer transition-all"
+                                  onClick={() => setSelectedBatteryId(bat.id)}
+                                >
+                                  <div className="flex justify-between items-start">
+                                    <div className="flex-1">
+                                      <p className="text-white font-bold">{bat.name}</p>
+                                      <p className="text-xs text-slate-400 mt-1">{bat.batteryPowerKwh}kWh • {bat.batteryType}</p>
+                                      <p className="text-xs text-slate-500 mt-1">{bat.quantity} in stock</p>
+                                      <p className="text-sm text-emerald-400 font-bold mt-2">{bat.sellPrice} RON</p>
+                                    </div>
+                                    <button 
+                                      type="button"
+                                      className="ml-4 px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-bold rounded-lg text-sm whitespace-nowrap transition-colors"
+                                    >
+                                      Select
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* SCENARIO 2: No Suitable Batteries */}
+                          {suitableBatteries.length === 0 && !selectedBatteryId && (() => {
+                            const targetCapacity = editingClient.needs?.batteryKwh || 0;
+                            const allBatteries = inventory.filter(i => i.category === Category.BATTERIES);
+                            const inStockBatteries = allBatteries.filter(i => i.quantity && i.quantity > 0);
+                            const similarBatteries = allBatteries.filter(i => 
+                              i.batteryType === batteryType && 
+                              Math.abs((i.batteryPowerKwh || 0) - targetCapacity) <= 3
+                            );
+                            
+                            let reason = '';
+                            if (allBatteries.length === 0) {
+                              reason = 'No batteries registered in inventory.';
+                            } else if (inStockBatteries.length === 0) {
+                              reason = 'All batteries in inventory are currently out of stock.';
+                            } else if (similarBatteries.length === 0) {
+                              reason = `No batteries match the specifications (${targetCapacity}kWh ${batteryType}).`;
+                            } else {
+                              reason = `Batteries matching your requirements (${targetCapacity}kWh ${batteryType}) are currently out of stock.`;
+                            }
+                            
+                            return (
+                              <div className="space-y-3">
+                                <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg">
+                                  <div className="flex items-center justify-center gap-2 text-red-400 font-bold text-lg mb-2">
+                                    <AlertCircle size={20} /> No suitable battery!
+                                  </div>
+                                  <p className="text-sm text-red-300 text-center mb-3">
+                                    {reason}
+                                  </p>
+                                  {similarBatteries.length > 0 && similarBatteries.every(i => !i.quantity || i.quantity === 0) && (
+                                    <div className="mt-3 pt-3 border-t border-red-500/20">
+                                      <p className="text-xs text-red-400/80 text-center">
+                                        We have {similarBatteries.length} suitable {similarBatteries.length === 1 ? 'battery' : 'batteries'} registered but all are out of stock:
+                                      </p>
+                                      <div className="mt-2 space-y-1">
+                                        {similarBatteries.map(bat => (
+                                          <p key={bat.id} className="text-xs text-red-300/60 text-center">• {bat.name} ({bat.batteryPowerKwh}kWh {bat.batteryType})</p>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                                <button 
+                                  type="button"
+                                  onClick={() => setShowBatteryAlternatives(true)}
+                                  className="w-full px-4 py-3 bg-slate-900 border border-amber-500/50 hover:border-amber-500 text-amber-400 hover:text-amber-300 font-bold rounded-lg transition-colors"
+                                >
+                                  Browse All Available Batteries
+                                </button>
+                              </div>
+                            );
+                          })()}
+
+                          {/* Selected Battery Display */}
                           {selectedBatteryId && (() => {
                             const selected = inventory.find(i => i.id === selectedBatteryId && i.category === Category.BATTERIES);
                             if (!selected) return null;
@@ -1233,68 +1316,526 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                             const typeMismatch = selected.batteryType !== batteryType;
                             const capacityDiff = (selected.batteryPowerKwh || 0) - targetCapacity;
                             const hasCapacityWarning = Math.abs(capacityDiff) > 0.5;
+                            const isOutOfStock = !selected.quantity || selected.quantity === 0;
                             
                             return (
-                              <div className="mb-4 p-4 bg-slate-900 border-2 border-emerald-500/50 rounded-lg">
-                                <div className="flex justify-between items-start mb-2">
-                                  <div>
-                                    <p className="text-white font-bold">{selected.name}</p>
-                                    <p className="text-xs text-slate-400 mt-1">{selected.batteryPowerKwh}kWh • {selected.batteryType} • {selected.quantity} in stock</p>
+                              <div className="space-y-3">
+                                <div className="p-4 rounded-lg border-2 bg-emerald-500/5 border-emerald-500/50">
+                                  <div className="flex items-center gap-2 mb-3">
+                                    <span className="text-emerald-400 font-bold text-sm flex items-center gap-2">
+                                      <CheckCircle size={16} /> SELECTED BATTERY
+                                    </span>
                                   </div>
-                                  <button 
-                                    onClick={() => setSelectedBatteryId(null)}
-                                    className="text-slate-400 hover:text-white"
-                                  >
-                                    <X size={16} />
-                                  </button>
+                                  <div className="flex justify-between items-start">
+                                    <div className="flex-1">
+                                      <p className="text-white font-bold">{selected.name}</p>
+                                      <p className="text-xs text-slate-400 mt-1">{selected.batteryPowerKwh}kWh • {selected.batteryType}</p>
+                                      <p className="text-sm text-emerald-400 font-bold mt-2">{selected.sellPrice} RON</p>
+                                    </div>
+                                    <button 
+                                      type="button"
+                                      onClick={() => setSelectedBatteryId(null)}
+                                      className="text-slate-400 hover:text-white transition-colors"
+                                    >
+                                      <X size={18} />
+                                    </button>
+                                  </div>
+                                  
+                                  {isOutOfStock && (
+                                    <div className="mt-3 p-3 bg-red-500/10 border border-red-500/50 rounded-lg">
+                                      <div className="flex items-start gap-2">
+                                        <AlertCircle size={14} className="text-red-400 flex-shrink-0 mt-0.5" />
+                                        <div className="text-xs text-red-300">
+                                          <p className="font-bold">Out of stock!</p>
+                                          <p className="mt-1">This battery is currently not available in inventory</p>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
+                                  
+                                  {typeMismatch && (
+                                    <div className="mt-3 p-3 bg-red-500/10 border border-red-500/50 rounded-lg">
+                                      <div className="flex items-start gap-2">
+                                        <AlertCircle size={14} className="text-red-400 flex-shrink-0 mt-0.5" />
+                                        <div className="text-xs text-red-300">
+                                          <p className="font-bold">Battery type not compatible!</p>
+                                          <p className="mt-1">Selected: <span className="font-bold">{selected.batteryType}</span></p>
+                                          <p>Inverter needs: <span className="font-bold">{batteryType}</span></p>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
+                                  
+                                  {hasCapacityWarning && (
+                                    <div className="mt-3 p-3 bg-yellow-500/10 border border-yellow-500/50 rounded-lg">
+                                      <div className="flex items-start gap-2">
+                                        <AlertCircle size={14} className="text-yellow-400 flex-shrink-0 mt-0.5" />
+                                        <p className="text-xs text-yellow-300 font-bold">
+                                          Battery capacity is {capacityDiff > 0 ? 'higher' : 'lower'} than requested by {Math.abs(capacityDiff).toFixed(1)}kWh
+                                        </p>
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
                                 
-                                {typeMismatch && (
-                                  <div className="mt-3 p-2 bg-red-500/10 border border-red-500/50 rounded text-xs text-red-300 font-bold flex items-center gap-2">
-                                    <AlertCircle size={14} /> Battery type not compatible. Selected: {selected.batteryType}, Needed: {batteryType}
-                                  </div>
-                                )}
-                                
-                                {hasCapacityWarning && (
-                                  <div className="mt-3 p-2 bg-yellow-500/10 border border-yellow-500/50 rounded text-xs text-yellow-300 font-bold flex items-center gap-2">
-                                    <AlertCircle size={14} /> Battery capacity is {capacityDiff > 0 ? 'higher' : 'lower'} than requested by {Math.abs(capacityDiff).toFixed(1)}kWh
-                                  </div>
-                                )}
+                                <button 
+                                  type="button"
+                                  onClick={() => setShowBatteryAlternatives(true)}
+                                  className="w-full px-4 py-2 border border-slate-600 hover:border-amber-500 text-slate-400 hover:text-amber-400 font-bold rounded-lg text-sm transition-colors"
+                                >
+                                  Choose Different Battery
+                                </button>
                               </div>
                             );
                           })()}
 
-                          {/* Battery Selection Dropdown */}
-                          <div className="relative">
-                            <label className="text-xs font-bold text-slate-400 uppercase block mb-2">Select Battery</label>
-                            <select 
-                              value={selectedBatteryId || ''} 
-                              onChange={(e) => setSelectedBatteryId(e.target.value || null)}
-                              className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500"
-                            >
-                              <option value="">-- Choose battery --</option>
-                              {compatible.length > 0 && (
-                                <optgroup label="Compatible (Sorted by Stock)">
-                                  {compatible.sort((a, b) => (b.quantity || 0) - (a.quantity || 0)).map(bat => (
-                                    <option key={bat.id} value={bat.id}>{bat.name} ({bat.batteryPowerKwh}kWh) - {bat.quantity} in stock</option>
-                                  ))}
-                                </optgroup>
-                              )}
-                              {allBatteries.filter(b => !compatible.find(c => c.id === b.id)).length > 0 && (
-                                <optgroup label="Alternatives (Sorted by Stock)">
-                                  {allBatteries.filter(b => !compatible.find(c => c.id === b.id)).sort((a, b) => (b.quantity || 0) - (a.quantity || 0)).map(bat => (
-                                    <option key={bat.id} value={bat.id}>{bat.name} ({bat.batteryPowerKwh}kWh, {bat.batteryType}) - {bat.quantity} in stock</option>
-                                  ))}
-                                </optgroup>
-                              )}
-                            </select>
-                          </div>
+                          {/* Battery Selection Modal */}
+                          {showBatteryAlternatives && (
+                            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+                              <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-2xl max-h-[80vh] flex flex-col">
+                                <div className="p-4 border-b border-slate-700 flex justify-between items-center">
+                                  <h3 className="text-white font-bold">All Available Batteries</h3>
+                                  <button 
+                                    type="button"
+                                    onClick={() => setShowBatteryAlternatives(false)}
+                                    className="text-slate-400 hover:text-white transition-colors"
+                                  >
+                                    <X size={20} />
+                                  </button>
+                                </div>
+                                <div className="p-4 overflow-y-auto custom-scrollbar space-y-2">
+                                  {inventory.filter(i => i.category === Category.BATTERIES).map(bat => {
+                                    const isCurrentSelection = bat.id === selectedBatteryId;
+                                    const matchesType = bat.batteryType === batteryType;
+                                    const matchesCapacity = Math.abs((bat.batteryPowerKwh || 0) - targetCapacity) <= 3;
+                                    const isPerfectMatch = matchesType && matchesCapacity;
+                                    const isOutOfStock = !bat.quantity || bat.quantity === 0;
+                                    
+                                    return (
+                                      <div 
+                                        key={bat.id}
+                                        className={`flex items-center justify-between bg-slate-900 p-4 rounded-lg border cursor-pointer transition-all ${
+                                          isCurrentSelection 
+                                            ? 'border-emerald-500 ring-2 ring-emerald-500/20' 
+                                            : isPerfectMatch && !isOutOfStock
+                                            ? 'border-emerald-500/30 hover:border-emerald-500/50' 
+                                            : isOutOfStock
+                                            ? 'border-red-500/30 hover:border-red-500/50'
+                                            : 'border-slate-700 hover:border-amber-500/50'
+                                        }`}
+                                        onClick={() => {
+                                          setSelectedBatteryId(bat.id);
+                                          setShowBatteryAlternatives(false);
+                                        }}
+                                      >
+                                        <div className="flex-1">
+                                          <div className="flex items-center gap-2">
+                                            <p className="text-white font-bold">{bat.name}</p>
+                                            {isPerfectMatch && !isCurrentSelection && !isOutOfStock && (
+                                              <span className="text-xs bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded font-bold">MATCH</span>
+                                            )}
+                                            {isCurrentSelection && (
+                                              <span className="text-xs bg-emerald-500 text-slate-900 px-2 py-0.5 rounded font-bold">SELECTED</span>
+                                            )}
+                                            {isOutOfStock && (
+                                              <span className="text-xs bg-red-500/20 text-red-400 px-2 py-0.5 rounded font-bold">OUT OF STOCK</span>
+                                            )}
+                                          </div>
+                                          <p className="text-xs text-slate-400 mt-1">{bat.batteryPowerKwh}kWh • {bat.batteryType}</p>
+                                          {!matchesType && (
+                                            <p className="text-xs text-red-400 mt-1 flex items-center gap-1">
+                                              <AlertCircle size={10} /> Wrong battery type
+                                            </p>
+                                          )}
+                                        </div>
+                                        <div className="text-right ml-4">
+                                          <p className="text-xs font-bold text-slate-400">{bat.quantity} in stock</p>
+                                          <p className="text-sm font-bold text-emerald-400 mt-1">{bat.sellPrice} RON</p>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                  {inventory.filter(i => i.category === Category.BATTERIES).length === 0 && (
+                                    <div className="text-center py-8 text-slate-500">
+                                      <p className="font-bold mb-1">No batteries in inventory</p>
+                                      <p className="text-sm">Please add battery items to inventory first</p>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       );
                     })()}
                  </section>
 
-                 <section className="bg-slate-800 p-6 rounded-xl border border-slate-700"><h3 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2"><ImageIcon size={16} className="text-amber-500" />Site Pictures</h3><div className="flex gap-4 mb-6"><label className="cursor-pointer bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg font-medium text-sm flex items-center gap-2"><Upload size={16} /> Upload<input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" /></label><button onClick={startCamera} className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg font-medium text-sm flex items-center gap-2"><Camera size={16} /> Take Photo</button></div><div className="grid grid-cols-2 md:grid-cols-4 gap-4">{editingClient.needs?.siteImages?.map(img => (<div key={img.id} className="relative group aspect-square bg-slate-900 rounded-lg overflow-hidden border border-slate-700"><img src={img.url} className="w-full h-full object-cover cursor-pointer" onClick={() => window.open(img.url)} /><button onClick={(e) => { e.stopPropagation(); handleDeleteImage(img.id); }} className="absolute top-1 right-1 bg-red-500 hover:bg-red-600 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={12} /></button></div>))}</div></section>
+                 <section className="bg-slate-800 p-6 rounded-xl border border-slate-700">
+                    <h3 className="text-sm font-bold text-slate-300 mb-6 flex items-center gap-2"><Package size={16} className="text-amber-500" />Panels Calculator</h3>
+                    <div className="space-y-6">
+                      {/* Input: Total Power */}
+                      <div>
+                        <label className="text-xs font-bold text-slate-500 uppercase mb-2 block">Total Power Required (kW)</label>
+                        <input 
+                          type="number" 
+                          step="0.1"
+                          value={editingClient.needs?.panelKw || ''} 
+                          onChange={(e) => handleNeedsChange('panelKw', Number(e.target.value))} 
+                          className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500" 
+                          placeholder="e.g. 6" 
+                        />
+                      </div>
+
+                      {/* Panel Suggestions */}
+                      {editingClient.needs?.panelKw && editingClient.needs.panelKw > 0 && (
+                        <div className="border-t border-slate-700 pt-4">
+                          <p className="text-xs text-slate-400 font-bold mb-3">💡 Panel Combinations Available:</p>
+                          <div className="space-y-2">
+                            {inventory
+                              .filter(i => i.category === Category.PANELS && i.powerW && i.powerW > 0)
+                              .map(panel => {
+                                const targetWatts = editingClient.needs!.panelKw! * 1000; // Convert kW to W
+                                const piecesNeeded = Math.ceil(targetWatts / panel.powerW!);
+                                const actualPower = (piecesNeeded * panel.powerW!) / 1000; // Convert back to kW
+                                const isSelected = selectedPanelId === panel.id;
+                                const stockQuantity = panel.quantity || 0;
+                                const isOutOfStock = stockQuantity === 0;
+                                const isLowStock = !isOutOfStock && stockQuantity < piecesNeeded;
+                                
+                                return (
+                                  <div 
+                                    key={panel.id} 
+                                    className={`p-3 rounded border transition-all cursor-pointer ${
+                                      isSelected 
+                                        ? 'bg-emerald-500/10 border-emerald-500/50' 
+                                        : isOutOfStock
+                                        ? 'bg-slate-900 border-red-500/30 hover:border-red-500/50'
+                                        : isLowStock
+                                        ? 'bg-slate-900 border-yellow-500/30 hover:border-yellow-500/50'
+                                        : 'bg-slate-900 border-slate-700 hover:border-amber-500/50'
+                                    }`}
+                                    onClick={() => {
+                                      setSelectedPanelId(panel.id);
+                                      setSelectedPanelQty(piecesNeeded);
+                                      handleNeedsChange('panelStockItemId', panel.id);
+                                      handleNeedsChange('panelCount', piecesNeeded);
+                                    }}
+                                  >
+                                    <div className="flex-1 space-y-2">
+                                      <div className="flex items-center justify-between">
+                                        <div>
+                                          {isSelected && (
+                                            <span className="text-emerald-400 font-bold text-xs flex items-center gap-1 mb-1">
+                                              <CheckCircle size={14} /> SELECTED PANELS
+                                            </span>
+                                          )}
+                                          <p className={`font-bold text-sm ${isSelected ? 'text-emerald-400' : 'text-white'}`}>{panel.name}</p>
+                                          <p className="text-xs text-slate-400">{panel.powerW}W • {piecesNeeded} pieces needed • {actualPower.toFixed(2)}kW total</p>
+                                        </div>
+                                        <div className="text-right">
+                                          <p className={`text-xs font-bold ${
+                                            isOutOfStock ? 'text-red-400' : isLowStock ? 'text-yellow-400' : 'text-emerald-400'
+                                          }`}>
+                                            {stockQuantity} in stock
+                                          </p>
+                                          <p className="text-xs text-slate-400">{panel.sellPrice} RON</p>
+                                        </div>
+                                      </div>
+                                      
+                                      {isOutOfStock && (
+                                        <div className="p-2 bg-red-500/10 border border-red-500/50 rounded">
+                                          <div className="flex items-start gap-2">
+                                            <AlertCircle size={12} className="text-red-400 flex-shrink-0 mt-0.5" />
+                                            <p className="text-xs text-red-300 font-bold">Out of stock! Cannot fulfill order.</p>
+                                          </div>
+                                        </div>
+                                      )}
+                                      
+                                      {isLowStock && (
+                                        <div className="p-2 bg-yellow-500/10 border border-yellow-500/50 rounded">
+                                          <div className="flex items-start gap-2">
+                                            <AlertCircle size={12} className="text-yellow-400 flex-shrink-0 mt-0.5" />
+                                            <p className="text-xs text-yellow-300 font-bold">
+                                              Low stock! Need {piecesNeeded} but only {stockQuantity} available. Short by {piecesNeeded - stockQuantity} panels.
+                                            </p>
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })
+                            }
+                            {inventory.filter(i => i.category === Category.PANELS && i.powerW && i.powerW > 0).length === 0 && (
+                              <div className="text-center py-4 text-slate-500 text-sm italic">No solar panels in inventory</div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Manual Pieces Input */}
+                      <div>
+                        <label className="text-xs font-bold text-slate-500 uppercase mb-2 block">Or Enter Pieces Manually</label>
+                        <input 
+                          type="number"
+                          min="0"
+                          value={editingClient.needs?.panelCount || ''} 
+                          onChange={(e) => {
+                            const newQty = Number(e.target.value);
+                            handleNeedsChange('panelCount', newQty);
+                            setSelectedPanelQty(newQty);
+                          }} 
+                          className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500" 
+                          placeholder="Number of pieces" 
+                        />
+                      </div>
+
+                      {/* Row Configuration & Structure Calculator */}
+                      {editingClient.needs?.panelCount && editingClient.needs.panelCount > 0 && (
+                        <div className="border-t border-slate-700 pt-6 space-y-4">
+                          <h4 className="text-sm font-bold text-white mb-3 flex items-center gap-2">
+                            <Package size={14} /> Structure Components Calculator
+                          </h4>
+                          
+                          {/* Row Count Input */}
+                          <div>
+                            <label className="text-xs font-bold text-slate-500 uppercase mb-2 block">Panel Placement - Number of Rows</label>
+                            <input 
+                              type="number"
+                              min="1"
+                              value={rowCount}
+                              onChange={(e) => {
+                                const count = Number(e.target.value);
+                                if (count >= 1) {
+                                  setRowCount(count);
+                                  // Initialize row distribution
+                                  const newDist: {[key: number]: number} = {};
+                                  for (let i = 1; i <= count; i++) {
+                                    newDist[i] = rowDistribution[i] || 0;
+                                  }
+                                  setRowDistribution(newDist);
+                                }
+                              }}
+                              className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500" 
+                              placeholder="Number of rows" 
+                            />
+                          </div>
+
+                          {/* Dynamic Row Distribution Inputs */}
+                          {rowCount > 1 && (
+                            <div className="space-y-2 bg-slate-900 p-4 rounded-lg border border-slate-700">
+                              <p className="text-xs text-slate-400 font-bold mb-2">Distribute {editingClient.needs.panelCount} panels across {rowCount} rows:</p>
+                              {Array.from({length: rowCount}, (_, i) => i + 1).map(rowNum => (
+                                <div key={rowNum} className="flex items-center gap-3">
+                                  <label className="text-sm text-slate-300 w-20">Row {rowNum}:</label>
+                                  <input 
+                                    type="number"
+                                    min="0"
+                                    value={rowDistribution[rowNum] || ''}
+                                    onChange={(e) => {
+                                      const val = Number(e.target.value);
+                                      setRowDistribution({...rowDistribution, [rowNum]: val});
+                                    }}
+                                    className="flex-1 bg-slate-800 border border-slate-600 rounded-lg p-2 text-white outline-none focus:ring-1 focus:ring-amber-500 text-sm" 
+                                    placeholder="Panels in this row" 
+                                  />
+                                </div>
+                              ))}
+                              {(() => {
+                                const totalDistributed = Object.values(rowDistribution).reduce((sum, val) => sum + val, 0);
+                                const diff = editingClient.needs!.panelCount! - totalDistributed;
+                                return (
+                                  <p className={`text-xs font-bold mt-2 ${
+                                    diff === 0 ? 'text-emerald-400' : diff > 0 ? 'text-yellow-400' : 'text-red-400'
+                                  }`}>
+                                    {diff === 0 ? '✓ All panels distributed' : diff > 0 ? `⚠ ${diff} panels not distributed yet` : `❌ Over by ${Math.abs(diff)} panels`}
+                                  </p>
+                                );
+                              })()}
+                            </div>
+                          )}
+
+                          {/* Structure Components Calculation */}
+                          {(() => {
+                            const totalPanels = editingClient.needs!.panelCount!;
+                            const roofType = editingClient.needs?.roofType;
+                            
+                            // Determine panels per row
+                            let rowConfigs: number[] = [];
+                            if (rowCount === 1) {
+                              rowConfigs = [totalPanels];
+                            } else {
+                              const totalDistributed = Object.values(rowDistribution).reduce((sum, val) => sum + val, 0);
+                              if (totalDistributed === totalPanels) {
+                                rowConfigs = Array.from({length: rowCount}, (_, i) => rowDistribution[i + 1] || 0);
+                              }
+                            }
+
+                            // Only calculate if we have valid row configuration
+                            if (rowConfigs.length === 0 || rowConfigs.some(c => c === 0)) {
+                              return (
+                                <div className="bg-yellow-500/10 border border-yellow-500/30 p-4 rounded-lg">
+                                  <p className="text-xs text-yellow-300">
+                                    ⚠ Complete row distribution to calculate structure components
+                                  </p>
+                                </div>
+                              );
+                            }
+
+                            // Calculate structure components
+                            const numRows = rowConfigs.length;
+                            
+                            // End clamps: 4 per row (2 on each end of 2 rails)
+                            const endClamps = numRows * 4;
+                            
+                            // Mid clamps: (panels_per_row - 1) * 2 rails per row
+                            const midClamps = rowConfigs.reduce((sum, panelsInRow) => {
+                              return sum + (panelsInRow - 1) * 2;
+                            }, 0);
+                            
+                            // Rails: Get actual panel dimensions for accurate calculation
+                            const selectedPanel = editingClient.needs?.panelStockItemId 
+                              ? inventory.find(i => i.id === editingClient.needs!.panelStockItemId) 
+                              : null;
+                            
+                            const panelWidth = selectedPanel?.panelWidth || 1.134; // Default to typical panel width if not set
+                            const maxPanelsInRow = Math.max(...rowConfigs);
+                            const railLengthPerRow = maxPanelsInRow * panelWidth; // Base length needed per row
+                            const railLengthWithWaste = railLengthPerRow * 1.1; // Add 10% for cuts and waste
+                            const railsPerRow = 2; // Top and bottom rails
+                            
+                            // Calculate 6m rail sections needed
+                            const sectionsPerRail = Math.ceil(railLengthWithWaste / 6);
+                            const railsOf6m = sectionsPerRail * numRows * railsPerRow;
+                            
+                            // Calculate combiners (rail connectors) needed when joining sections
+                            const combinersPerRail = sectionsPerRail > 1 ? sectionsPerRail - 1 : 0;
+                            const totalCombiners = combinersPerRail * numRows * railsPerRow;
+                            
+                            // Estimate cuts needed (one cut per rail that needs trimming)
+                            const needsCut = (railLengthWithWaste % 6) !== 0 && sectionsPerRail > 0;
+                            const totalCuts = needsCut ? numRows * railsPerRow : 0;
+                            
+                            // Roof attachments based on roof type
+                            let attachmentType = 'Hooks/Bolts';
+                            let attachmentsPerPanel = 4;
+                            
+                            if (roofType === 'Tigla ceramica' || roofType === 'Tigla metalica') {
+                              attachmentType = 'Tile Hooks';
+                              attachmentsPerPanel = 5;
+                            } else if (roofType === 'Tabla' || roofType === 'Tabla ondulata' || roofType === 'Tabla cutata') {
+                              attachmentType = 'Hanger Bolts';
+                              attachmentsPerPanel = 4;
+                            } else if (roofType === 'Panou sandwich') {
+                              attachmentType = 'Sandwich Panel Bolts';
+                              attachmentsPerPanel = 4;
+                            }
+                            
+                            const totalAttachments = totalPanels * attachmentsPerPanel;
+
+                            return (
+                              <div className="bg-blue-500/10 border border-blue-500/30 p-4 rounded-lg space-y-3">
+                                <p className="text-sm font-bold text-blue-300 mb-3 flex items-center gap-2">
+                                  <CheckCircle size={14} /> Structure Components Required
+                                </p>
+                                
+                                <div className="grid grid-cols-2 gap-3">
+                                  <div className="bg-slate-900 p-3 rounded border border-slate-700">
+                                    <p className="text-xs text-slate-400 uppercase">End Clamps</p>
+                                    <p className="text-lg font-bold text-white">{endClamps} pcs</p>
+                                    <p className="text-xs text-slate-500 mt-1">{numRows} rows × 4</p>
+                                  </div>
+                                  
+                                  <div className="bg-slate-900 p-3 rounded border border-slate-700">
+                                    <p className="text-xs text-slate-400 uppercase">Mid Clamps</p>
+                                    <p className="text-lg font-bold text-white">{midClamps} pcs</p>
+                                    <p className="text-xs text-slate-500 mt-1">Between panels</p>
+                                  </div>
+                                  
+                                  <div className="bg-slate-900 p-3 rounded border border-slate-700">
+                                    <p className="text-xs text-slate-400 uppercase">Rails (6m)</p>
+                                    <p className="text-lg font-bold text-white">{railsOf6m} pcs</p>
+                                    <p className="text-xs text-slate-500 mt-1">+10% waste included</p>
+                                  </div>
+                                  
+                                  <div className="bg-slate-900 p-3 rounded border border-slate-700">
+                                    <p className="text-xs text-slate-400 uppercase">Rail Combiners</p>
+                                    <p className="text-lg font-bold text-white">{totalCombiners} pcs</p>
+                                    <p className="text-xs text-slate-500 mt-1">{combinersPerRail > 0 ? `${combinersPerRail} per rail` : 'None needed'}</p>
+                                  </div>
+                                  
+                                  <div className="bg-slate-900 p-3 rounded border border-slate-700">
+                                    <p className="text-xs text-slate-400 uppercase">{attachmentType}</p>
+                                    <p className="text-lg font-bold text-white">{totalAttachments} pcs</p>
+                                    <p className="text-xs text-slate-500 mt-1">{attachmentsPerPanel} per panel</p>
+                                  </div>
+                                  
+                                  <div className="bg-slate-900 p-3 rounded border border-slate-700">
+                                    <p className="text-xs text-slate-400 uppercase">Estimated Cuts</p>
+                                    <p className="text-lg font-bold text-white">{totalCuts}</p>
+                                    <p className="text-xs text-slate-500 mt-1">{needsCut ? 'Trimming required' : 'No cuts needed'}</p>
+                                  </div>
+                                </div>
+
+                                {!roofType && (
+                                  <div className="mt-3 p-2 bg-yellow-500/10 border border-yellow-500/30 rounded">
+                                    <p className="text-xs text-yellow-300">
+                                      ⚠ Roof type not specified. Default calculation used (4 bolts/panel)
+                                    </p>
+                                  </div>
+                                )}
+
+                                {selectedPanel && (!selectedPanel.panelWidth || selectedPanel.panelWidth === 0) && (
+                                  <div className="mt-3 p-2 bg-yellow-500/10 border border-yellow-500/30 rounded">
+                                    <p className="text-xs text-yellow-300">
+                                      ⚠ Panel dimensions not set in inventory. Using default width (1.134m) for rail calculation. Please update panel dimensions for accurate results.
+                                    </p>
+                                  </div>
+                                )}
+
+                                {/* Row Configuration & Rail Details - Hidden for now */}
+                                {false && (
+                                <div className="mt-3 pt-3 border-t border-blue-500/20">
+                                  <p className="text-xs text-blue-200 font-bold mb-2">Row Configuration & Rail Details:</p>
+                                  <div className="space-y-3">
+                                    {rowConfigs.map((panelCount, idx) => {
+                                      const rowRailLength = panelCount * panelWidth;
+                                      const rowRailWithWaste = rowRailLength * 1.1;
+                                      const rowSections = Math.ceil(rowRailWithWaste / 6);
+                                      const rowCombiners = rowSections > 1 ? rowSections - 1 : 0;
+                                      const rowNeedsCut = (rowRailWithWaste % 6) !== 0 && rowSections > 0;
+                                      const excessLength = (rowSections * 6) - rowRailWithWaste;
+                                      
+                                      return (
+                                        <div key={idx} className="bg-slate-900/50 p-3 rounded border border-slate-700">
+                                          <p className="text-sm text-white font-bold mb-2">Row {idx + 1}: {panelCount} panels</p>
+                                          <div className="space-y-1 text-xs text-slate-400">
+                                            <p>• Rail length needed: {rowRailLength.toFixed(2)}m</p>
+                                            <p>• With 10% waste: {rowRailWithWaste.toFixed(2)}m</p>
+                                            <p>• Sections per rail: {rowSections} × 6m = {(rowSections * 6).toFixed(1)}m</p>
+                                            <p>• Rails needed: {rowSections * 2} pcs (top + bottom)</p>
+                                            {rowCombiners > 0 && (
+                                              <p className="text-amber-400">• Combiners: {rowCombiners * 2} pcs ({rowCombiners} per rail × 2 rails)</p>
+                                            )}
+                                            {rowNeedsCut ? (
+                                              <p className="text-yellow-400">• Cuts: 2 cuts needed (trim {excessLength.toFixed(2)}m excess from each rail)</p>
+                                            ) : (
+                                              <p className="text-emerald-400">• Cuts: None - rails fit perfectly</p>
+                                            )}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                                )}
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      )}
+                    </div>
+                 </section>
               </div>
             )}
 
@@ -1743,6 +2284,31 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
         onConfirm={confirmDialog.onConfirm}
         onCancel={() => setConfirmDialog({ ...confirmDialog, isOpen: false })}
       />
+
+      {/* Image Preview Modal */}
+      {previewImageUrl && (
+        <div 
+          className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4"
+          onClick={() => setPreviewImageUrl(null)}
+        >
+          <button
+            onClick={() => setPreviewImageUrl(null)}
+            className="absolute top-4 right-4 text-white hover:text-amber-500 bg-slate-800/80 hover:bg-slate-700 rounded-full p-3 transition-all z-10"
+          >
+            <X size={24} />
+          </button>
+          <div 
+            className="relative max-w-6xl max-h-[90vh] w-full h-full flex items-center justify-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img 
+              src={previewImageUrl} 
+              alt="Preview" 
+              className="max-w-full max-h-full object-contain rounded-lg shadow-2xl"
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };
