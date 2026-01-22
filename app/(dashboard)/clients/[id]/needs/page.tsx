@@ -1,0 +1,1125 @@
+'use client';
+
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { 
+  FileText, Zap, Package, FolderOpen, Save, Briefcase, CheckCircle, 
+  AlertCircle, X, ImageIcon, Upload, Camera, Trash2
+} from 'lucide-react';
+import { useClient } from '@/contexts/ClientContext';
+import { useData } from '@/contexts/DataContext';
+import { useAuth } from '@/contexts/AuthContext';
+import { Category, ClientSiteImage, ArchivedProject } from '@/types';
+
+export default function ClientNeedsPage() {
+  const { client, updateClient } = useClient();
+  const { inventory } = useData();
+  const { currentUser } = useAuth();
+  
+  const [tempDescription, setTempDescription] = useState('');
+  const [selectedInverterId, setSelectedInverterId] = useState<string | null>(null);
+  const [selectedBatteryId, setSelectedBatteryId] = useState<string | null>(null);
+  const [selectedPanelId, setSelectedPanelId] = useState<string | null>(null);
+  const [showPanelAlternatives, setShowPanelAlternatives] = useState(false);
+  const [rowCount, setRowCount] = useState<number>(1);
+  const [rowDistribution, setRowDistribution] = useState<{[key: number]: number}>({1: 0});
+  const [archivedProjects, setArchivedProjects] = useState<ArchivedProject[]>([]);
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [showAlternatives, setShowAlternatives] = useState(false);
+  const [showBatteryAlternatives, setShowBatteryAlternatives] = useState(false);
+  
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  useEffect(() => {
+    if (client) {
+      setTempDescription(client.needs?.description || '');
+      setArchivedProjects(client.archivedProjects || []);
+      setSelectedInverterId(client.needs?.selectedInverterId || null);
+      setSelectedBatteryId(client.needs?.selectedBatteryId || null);
+      setSelectedPanelId(client.needs?.panelStockItemId || null);
+    }
+  }, [client]);
+
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, []);
+
+  if (!client) return null;
+
+  const handleNeedsChange = async (field: string, value: any) => {
+    await updateClient({ needs: { ...client.needs, [field]: value } });
+  };
+
+  const saveDescription = async () => {
+    if (tempDescription === client.needs?.description) return;
+    await updateClient({
+      needs: {
+        ...client.needs,
+        description: tempDescription,
+        descriptionUpdatedBy: currentUser?.nickname || 'Unknown',
+        descriptionUpdatedAt: new Date()
+      }
+    });
+  };
+
+  const suggestedInverters = useMemo(() => {
+    if (!client?.needs?.inverterKw) return [];
+    const connectionType = client.needs.connectionType;
+    const targetKw = client.needs.inverterKw;
+    const tolerance = 2;
+    
+    return inventory.filter(item => {
+      if (item.category !== Category.INVERTERS) return false;
+      if (connectionType && item.inverterConnectionType && item.inverterConnectionType !== connectionType) return false;
+      if (item.inverterPowerKw) {
+        return Math.abs(item.inverterPowerKw - targetKw) <= tolerance && (item.quantity || 0) > 0;
+      }
+      return false;
+    });
+  }, [client?.needs?.inverterKw, client?.needs?.connectionType, inventory]);
+
+  const suggestedBatteries = useMemo(() => {
+    if (!client?.needs?.selectedInverterId) return [];
+    const selectedInverter = inventory.find(i => i.id === client.needs.selectedInverterId);
+    if (!selectedInverter?.inverterStorageType) return [];
+
+    return inventory.filter(item => {
+      if (item.category !== Category.BATTERIES) return false;
+      if (item.batteryType === selectedInverter.inverterStorageType && (item.quantity || 0) > 0) return true;
+      return false;
+    });
+  }, [client?.needs?.selectedInverterId, inventory]);
+
+  const suggestedPanels = useMemo(() => {
+    if (!client?.needs?.panelKw || client.needs.panelKw <= 0) return [];
+    const targetWatts = client.needs.panelKw * 1000;
+    
+    return inventory
+      .filter(item => item.category === Category.PANELS && item.powerW && item.powerW > 0)
+      .map(panel => {
+        const piecesNeeded = Math.ceil(targetWatts / panel.powerW!);
+        const actualPower = (piecesNeeded * panel.powerW!) / 1000;
+        const stockQuantity = panel.quantity || 0;
+        const isInStock = stockQuantity >= piecesNeeded;
+        const isOutOfStock = stockQuantity === 0;
+        
+        return { ...panel, piecesNeeded, actualPower, isInStock, isOutOfStock, stockQuantity };
+      })
+      .filter(p => p.stockQuantity > 0) // Show only items in stock
+      .sort((a, b) => {
+        // Sort by stock availability first, then by power match
+        if (a.isInStock && !b.isInStock) return -1;
+        if (!a.isInStock && b.isInStock) return 1;
+        return Math.abs(a.actualPower - client.needs!.panelKw!) - Math.abs(b.actualPower - client.needs!.panelKw!);
+      });
+  }, [client?.needs?.panelKw, inventory]);
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const currentImages = client?.needs?.siteImages || [];
+      const newImages: ClientSiteImage[] = [];
+      let processed = 0;
+      
+      Array.from(e.target.files).forEach((file, index) => {
+        const reader = new FileReader();
+        reader.onload = async () => {
+          newImages.push({
+            id: `${Date.now()}_${index}`,
+            url: reader.result as string,
+            timestamp: new Date() as any,
+            label: '',
+            category: undefined
+          });
+          processed++;
+          
+          if (processed === e.target.files!.length) {
+            const updatedImages = [...currentImages, ...newImages];
+            await updateClient({ needs: { ...client.needs, siteImages: updatedImages } });
+          }
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+  };
+
+  const handleDeleteImage = async (imageId: string) => {
+    if (confirm('Are you sure you want to delete this image?')) {
+      const currentImages = client?.needs?.siteImages || [];
+      const updatedImages = currentImages.filter(img => img.id !== imageId);
+      await updateClient({ needs: { ...client.needs, siteImages: updatedImages } });
+    }
+  };
+
+  const startCamera = async () => {
+    setIsCameraOpen(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      streamRef.current = stream;
+      setTimeout(() => { if (videoRef.current) videoRef.current.srcObject = stream; }, 100);
+    } catch {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        streamRef.current = stream;
+        setTimeout(() => { if (videoRef.current) videoRef.current.srcObject = stream; }, 100);
+      } catch { alert("Could not access camera."); setIsCameraOpen(false); }
+    }
+  };
+
+  const stopCamera = () => {
+    if (streamRef.current) streamRef.current.getTracks().forEach(track => track.stop());
+    setIsCameraOpen(false);
+  };
+
+  return (
+    <div className="h-full overflow-y-auto p-8 bg-slate-900">
+      <div className="max-w-4xl mx-auto space-y-8 pb-12">
+        {/* Project Archive Section */}
+        <section className="bg-slate-800 p-6 rounded-xl border border-slate-700">
+          <h3 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2">
+            <FolderOpen size={16} className="text-amber-500" />Project Archive
+          </h3>
+          <button 
+            onClick={async () => {
+              if (!client.needs?.projectName?.trim()) {
+                alert('Please enter a project name before archiving.');
+                return;
+              }
+              const projectNameToArchive = client.needs.projectName;
+              const existingProjectIndex = archivedProjects.findIndex(p => p.projectName === projectNameToArchive);
+              const archivedProject = {
+                id: existingProjectIndex !== -1 ? archivedProjects[existingProjectIndex].id : Date.now().toString(),
+                projectName: projectNameToArchive,
+                archivedAt: new Date(),
+                data: JSON.parse(JSON.stringify(client.needs))
+              };
+              let updatedArchived;
+              if (existingProjectIndex !== -1) {
+                updatedArchived = [...archivedProjects];
+                updatedArchived[existingProjectIndex] = archivedProject;
+              } else {
+                updatedArchived = [archivedProject, ...archivedProjects];
+              }
+              setArchivedProjects(updatedArchived);
+              
+              const clearedNeeds = { 
+                projectName: '', description: '', connectionType: undefined, roofType: undefined, 
+                roofTypeOther: undefined, inverterKw: undefined, panelKw: 0, panelCount: 0, 
+                panelStockItemId: undefined, storage: '', technicalNotes: '', siteImages: [] 
+              };
+              
+              await updateClient({ needs: clearedNeeds, archivedProjects: updatedArchived });
+              setTempDescription('');
+              setSelectedInverterId(null);
+              setSelectedBatteryId(null);
+              setSelectedPanelId(null);
+            }}
+            className="w-full bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold px-4 py-3 rounded-lg flex items-center justify-center gap-2 transition-colors mb-4"
+          >
+            <Save size={18} /> Save Project
+          </button>
+          {archivedProjects.length > 0 && (
+            <div className="space-y-2 border-t border-slate-700 pt-4">
+              <p className="text-xs font-bold text-slate-500 uppercase mb-3">Saved Projects</p>
+              <div className="space-y-2 max-h-64 overflow-y-auto">
+                {archivedProjects.map(project => {
+                  const isCurrent = client.needs?.projectName === project.projectName;
+                  return (
+                    <div 
+                      key={project.id}
+                      className={`p-3 rounded border transition-all cursor-pointer group ${
+                        isCurrent
+                          ? 'bg-emerald-500/10 border-emerald-500/50'
+                          : 'bg-slate-900 border-slate-700 hover:border-amber-500/50'
+                      }`}
+                      onClick={() => {
+                        if (isCurrent) {
+                          const clearedNeeds = {
+                            description: '', projectName: '', connectionType: undefined, roofType: undefined,
+                            inverterKw: undefined, selectedInverterId: undefined, batteryKwh: undefined,
+                            selectedBatteryId: undefined, panelStockItemId: undefined,
+                            panelKw: undefined, panelCount: undefined, siteImages: []
+                          };
+                          updateClient({ needs: clearedNeeds });
+                          setTempDescription('');
+                          setSelectedInverterId(null);
+                          setSelectedBatteryId(null);
+                          setSelectedPanelId(null);
+                          return;
+                        }
+                        
+                        const loadedData = JSON.parse(JSON.stringify(project.data));
+                        updateClient({ needs: loadedData });
+                        setTempDescription(loadedData.description || '');
+                        setSelectedInverterId(loadedData.selectedInverterId || null);
+                        setSelectedBatteryId(loadedData.selectedBatteryId || null);
+                        setSelectedPanelId(loadedData.panelStockItemId || null);
+                      }}
+                    >
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1 min-w-0">
+                          {isCurrent && (
+                            <span className="text-emerald-400 font-bold text-xs flex items-center gap-1 mb-1">
+                              <CheckCircle size={14} /> LOADED
+                            </span>
+                          )}
+                          <p className={`font-bold text-sm truncate ${isCurrent ? 'text-emerald-400' : 'text-white'}`}>
+                            {project.projectName}
+                          </p>
+                          <p className="text-xs text-slate-400 mt-1">
+                            Saved: {new Date(project.archivedAt).toLocaleDateString()}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            if (confirm(`Delete saved project "${project.projectName}"?`)) {
+                              const updated = archivedProjects.filter(p => p.id !== project.id);
+                              setArchivedProjects(updated);
+                              await updateClient({ archivedProjects: updated });
+                            }
+                          }}
+                          className="opacity-0 group-hover:opacity-100 transition-opacity bg-red-500/10 hover:bg-red-500/20 text-red-400 p-2 rounded text-xs"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </section>
+
+        {/* Project Name */}
+        <section className="bg-slate-800 p-6 rounded-xl border border-slate-700">
+          <h3 className="text-sm font-bold text-slate-300 mb-3 flex items-center gap-2">
+            <Briefcase size={16} className="text-amber-500" />Project Name
+          </h3>
+          <input 
+            type="text" 
+            value={client.needs?.projectName || ''} 
+            onChange={(e) => handleNeedsChange('projectName', e.target.value)} 
+            className="w-full bg-slate-900 border border-slate-600 rounded-lg p-4 text-white outline-none focus:ring-1 focus:ring-amber-500" 
+            placeholder="Enter project name..." 
+          />
+        </section>
+
+        {/* Scope of Work */}
+        <section className="bg-slate-800 p-6 rounded-xl border border-slate-700">
+          <h3 className="text-sm font-bold text-slate-300 mb-3 flex items-center gap-2">
+            <FileText size={16} className="text-amber-500" />Scope of Work
+          </h3>
+          <div className="relative">
+            <textarea 
+              value={tempDescription} 
+              onChange={(e) => setTempDescription(e.target.value)} 
+              onBlur={saveDescription} 
+              rows={4} 
+              className="w-full bg-slate-900 border border-slate-600 rounded-lg p-4 text-white outline-none resize-none focus:ring-1 focus:ring-amber-500" 
+              placeholder="Enter detailed client requirements here..." 
+            />
+            {client.needs?.descriptionUpdatedAt && (
+              <div className="absolute bottom-2 right-4 text-[10px] text-slate-500">
+                Updated by <span className="font-bold text-slate-400">{client.needs.descriptionUpdatedBy}</span> on {new Date(client.needs.descriptionUpdatedAt).toLocaleDateString()}
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* Connection Type & Roof Type */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="bg-slate-800 p-6 rounded-xl border border-slate-700">
+            <label className="text-sm font-bold text-slate-300 mb-3 block">Bransament</label>
+            <div className="flex gap-4">
+              {['Monofazat', 'Trifazat'].map(type => (
+                <label 
+                  key={type} 
+                  className={`flex-1 cursor-pointer border rounded-lg p-4 flex items-center justify-center transition-all ${
+                    client.needs?.connectionType === type 
+                      ? 'bg-amber-500/10 border-amber-500 text-amber-400' 
+                      : 'bg-slate-900 border-slate-700 hover:bg-slate-700'
+                  }`}
+                >
+                  <span className="font-medium">{type}</span>
+                  <input 
+                    type="radio" 
+                    name="connectionType" 
+                    checked={client.needs?.connectionType === type} 
+                    onChange={() => handleNeedsChange('connectionType', type)} 
+                    className="hidden" 
+                  />
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-slate-800 p-6 rounded-xl border border-slate-700">
+            <label className="text-sm font-bold text-slate-300 mb-3 block">Tip Acoperis</label>
+            <select 
+              value={client.needs?.roofType || ''} 
+              onChange={(e) => handleNeedsChange('roofType', e.target.value)} 
+              className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500 appearance-none"
+            >
+              <option value="">-- Select --</option>
+              {['Tigla ceramica', 'Tabla', 'Tigla metalica', 'Tabla ondulata', 'Tabla cutata', 'Panou sandwich', 'Other'].map(opt => (
+                <option key={opt} value={opt}>{opt}</option>
+              ))}
+            </select>
+            {client.needs?.roofType === 'Other' && (
+              <input 
+                type="text" 
+                value={client.needs?.roofTypeOther || ''} 
+                onChange={(e) => handleNeedsChange('roofTypeOther', e.target.value)} 
+                placeholder="Please specify..." 
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500 mt-2" 
+              />
+            )}
+          </div>
+        </div>
+
+        {/* Inverter Section */}
+        <section className="bg-slate-800 p-6 rounded-xl border border-slate-700">
+          <h3 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2">
+            <Zap size={16} className="text-amber-500" />Inverter Requested
+          </h3>
+          {client.needs?.connectionType && (
+            <div className="mb-4 p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+              <p className="text-xs text-blue-300 font-bold">
+                ℹ️ The Bransament type is <span className="text-blue-200">{client.needs.connectionType}</span>. 
+                You should select a <span className="text-blue-200">{client.needs.connectionType}</span> inverter.
+              </p>
+            </div>
+          )}
+          <div className="flex items-center gap-4 mb-4">
+            <div className="flex-1">
+              <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Power (kW)</label>
+              <input 
+                type="number" 
+                value={client.needs?.inverterKw || ''} 
+                onChange={(e) => handleNeedsChange('inverterKw', Number(e.target.value))} 
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500" 
+                placeholder="e.g. 5" 
+              />
+            </div>
+          </div>
+
+          {client.needs?.inverterKw && (
+            <div className="space-y-4">
+              {suggestedInverters.length > 0 && !selectedInverterId && (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 text-emerald-400 font-bold text-sm bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-3 py-2">
+                    <CheckCircle size={16} /> Suitable Inverters Found
+                  </div>
+                  {suggestedInverters.map(inv => (
+                    <div 
+                      key={inv.id}
+                      className="bg-slate-900 p-4 rounded-lg border border-slate-700 hover:border-emerald-500/50 cursor-pointer transition-all"
+                      onClick={async () => {
+                        setSelectedInverterId(inv.id);
+                        await updateClient({ needs: { ...client.needs, selectedInverterId: inv.id } });
+                      }}
+                    >
+                      <div className="flex justify-between items-start">
+                        <div className="flex-1">
+                          <p className="text-white font-bold">{inv.name}</p>
+                          <p className="text-xs text-slate-400 mt-1">
+                            {inv.inverterPowerKw}kW • {inv.inverterConnectionType} • {inv.inverterStorageType}
+                          </p>
+                          <p className="text-xs text-slate-500 mt-1">{inv.quantity} in stock</p>
+                          <p className="text-sm text-emerald-400 font-bold mt-2">{inv.sellPrice} RON</p>
+                        </div>
+                        <button 
+                          type="button"
+                          className="ml-4 px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-bold rounded-lg text-sm whitespace-nowrap transition-colors"
+                        >
+                          Select
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {suggestedInverters.length === 0 && !selectedInverterId && (
+                <div className="space-y-3">
+                  <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg">
+                    <div className="flex items-center justify-center gap-2 text-red-400 font-bold text-lg mb-2">
+                      <AlertCircle size={20} /> No suitable inverter!
+                    </div>
+                    <p className="text-sm text-red-300 text-center">
+                      No inverters match the specifications.
+                    </p>
+                  </div>
+                  <button 
+                    type="button"
+                    onClick={() => setShowAlternatives(true)}
+                    className="w-full px-4 py-3 bg-slate-900 border border-amber-500/50 hover:border-amber-500 text-amber-400 hover:text-amber-300 font-bold rounded-lg transition-colors"
+                  >
+                    Browse All Available Inverters
+                  </button>
+                </div>
+              )}
+
+              {selectedInverterId && (() => {
+                const selected = inventory.find(i => i.id === selectedInverterId && i.category === Category.INVERTERS);
+                if (!selected) return null;
+                
+                return (
+                  <div className="p-4 rounded-lg border-2 bg-emerald-500/5 border-emerald-500/50">
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className="text-emerald-400 font-bold text-sm flex items-center gap-2">
+                        <CheckCircle size={16} /> SELECTED INVERTER
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-start">
+                      <div className="flex-1">
+                        <p className="text-white font-bold">{selected.name}</p>
+                        <p className="text-xs text-slate-400 mt-1">
+                          {selected.inverterPowerKw}kW • {selected.inverterConnectionType} • {selected.inverterStorageType}
+                        </p>
+                        <p className="text-sm text-emerald-400 font-bold mt-2">{selected.sellPrice} RON</p>
+                      </div>
+                      <button 
+                        type="button"
+                        onClick={async () => {
+                          setSelectedInverterId(null);
+                          await updateClient({ needs: { ...client.needs, selectedInverterId: undefined } });
+                        }}
+                        className="text-slate-400 hover:text-white transition-colors"
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+        </section>
+
+        {/* Battery Section */}
+        <section className="bg-slate-800 p-6 rounded-xl border border-slate-700">
+          <h3 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2">
+            <Package size={16} className="text-amber-500" />Battery
+          </h3>
+          <div className="mb-4">
+            <label className="text-xs font-bold text-slate-500 uppercase mb-2 block">Capacity (kWh)</label>
+            <input 
+              type="number" 
+              value={client.needs?.batteryKwh || ''} 
+              onChange={(e) => handleNeedsChange('batteryKwh', Number(e.target.value))} 
+              className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500" 
+              placeholder="e.g. 10" 
+            />
+          </div>
+
+          {!!(client.needs?.batteryKwh && client.needs.batteryKwh > 0 && selectedInverterId) && (
+            <div className="space-y-4">
+              {suggestedBatteries.length > 0 && !selectedBatteryId && (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 text-emerald-400 font-bold text-sm bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-3 py-2">
+                    <CheckCircle size={16} /> Suitable Batteries Found
+                  </div>
+                  {suggestedBatteries.map(bat => (
+                    <div 
+                      key={bat.id}
+                      className="bg-slate-900 p-4 rounded-lg border border-slate-700 hover:border-emerald-500/50 cursor-pointer transition-all"
+                      onClick={async () => {
+                        setSelectedBatteryId(bat.id);
+                        await updateClient({ needs: { ...client.needs, selectedBatteryId: bat.id } });
+                      }}
+                    >
+                      <div className="flex justify-between items-start">
+                        <div className="flex-1">
+                          <p className="text-white font-bold">{bat.name}</p>
+                          <p className="text-xs text-slate-400 mt-1">{bat.batteryPowerKwh}kWh • {bat.batteryType}</p>
+                          <p className="text-xs text-slate-500 mt-1">{bat.quantity} in stock</p>
+                          <p className="text-sm text-emerald-400 font-bold mt-2">{bat.sellPrice} RON</p>
+                        </div>
+                        <button 
+                          type="button"
+                          className="ml-4 px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-bold rounded-lg text-sm whitespace-nowrap transition-colors"
+                        >
+                          Select
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {selectedBatteryId && (() => {
+                const selected = inventory.find(i => i.id === selectedBatteryId && i.category === Category.BATTERIES);
+                if (!selected) return null;
+                
+                return (
+                  <div className="p-4 rounded-lg border-2 bg-emerald-500/5 border-emerald-500/50">
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className="text-emerald-400 font-bold text-sm flex items-center gap-2">
+                        <CheckCircle size={16} /> SELECTED BATTERY
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-start">
+                      <div className="flex-1">
+                        <p className="text-white font-bold">{selected.name}</p>
+                        <p className="text-xs text-slate-400 mt-1">{selected.batteryPowerKwh}kWh • {selected.batteryType}</p>
+                        <p className="text-sm text-emerald-400 font-bold mt-2">{selected.sellPrice} RON</p>
+                      </div>
+                      <button 
+                        type="button"
+                        onClick={async () => {
+                          setSelectedBatteryId(null);
+                          await updateClient({ needs: { ...client.needs, selectedBatteryId: undefined } });
+                        }}
+                        className="text-slate-400 hover:text-white transition-colors"
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+        </section>
+
+        {/* Panels Section */}
+        <section className="bg-slate-800 p-6 rounded-xl border border-slate-700">
+          <h3 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2">
+            <Package size={16} className="text-amber-500" />Panels Calculator
+          </h3>
+          
+          <div className="space-y-4">
+            <div>
+              <label className="text-xs font-bold text-slate-500 uppercase mb-2 block">Total Power Required (kW)</label>
+              <input 
+                type="number" 
+                step="0.1"
+                value={client.needs?.panelKw || ''} 
+                onChange={(e) => handleNeedsChange('panelKw', Number(e.target.value))} 
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500" 
+                placeholder="e.g. 6" 
+              />
+            </div>
+
+            {/* Panel Suggestions */}
+            {suggestedPanels.length > 0 && !selectedPanelId && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 text-emerald-400 font-bold text-sm bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-3 py-2">
+                  <CheckCircle size={16} /> Panel Suggestions ({suggestedPanels.length} available)
+                </div>
+                {suggestedPanels.slice(0, 3).map((panel: any) => (
+                  <div 
+                    key={panel.id}
+                    className={`bg-slate-900 p-4 rounded-lg border cursor-pointer transition-all ${
+                      panel.isInStock 
+                        ? 'border-emerald-500/30 hover:border-emerald-500/50' 
+                        : 'border-yellow-500/30 hover:border-yellow-500/50'
+                    }`}
+                    onClick={async () => {
+                      setSelectedPanelId(panel.id);
+                      await updateClient({ 
+                        needs: { 
+                          ...client.needs, 
+                          panelStockItemId: panel.id,
+                          panelCount: panel.piecesNeeded
+                        } 
+                      });
+                    }}
+                  >
+                    <div className="flex justify-between items-start">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <p className="text-white font-bold">{panel.name}</p>
+                          {panel.isInStock ? (
+                            <span className="text-xs bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded font-bold">IN STOCK</span>
+                          ) : (
+                            <span className="text-xs bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded font-bold">LOW STOCK</span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-400 mt-1">
+                          {panel.powerW}W • {panel.piecesNeeded} pcs = {panel.actualPower.toFixed(2)}kW
+                        </p>
+                        {!panel.isInStock && (
+                          <p className="text-xs text-yellow-400 mt-1 flex items-center gap-1">
+                            <AlertCircle size={10} /> Only {panel.stockQuantity} available, need {panel.piecesNeeded}
+                          </p>
+                        )}
+                        <p className="text-sm text-emerald-400 font-bold mt-2">{panel.sellPrice} RON/piece</p>
+                      </div>
+                      <button 
+                        type="button"
+                        className="ml-4 px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-bold rounded-lg text-sm whitespace-nowrap transition-colors"
+                      >
+                        Select
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                {suggestedPanels.length > 3 && (
+                  <button 
+                    type="button"
+                    onClick={() => setShowPanelAlternatives(true)}
+                    className="w-full px-4 py-2 border border-slate-600 hover:border-amber-500 text-slate-400 hover:text-amber-400 font-bold rounded-lg text-sm transition-colors"
+                  >
+                    Show All {suggestedPanels.length} Panels
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Selected Panel */}
+            {selectedPanelId && (() => {
+              const selected = inventory.find(i => i.id === selectedPanelId && i.category === Category.PANELS);
+              if (!selected) return null;
+              
+              const targetWatts = client.needs?.panelKw ? client.needs.panelKw * 1000 : 0;
+              const piecesNeeded = selected.powerW ? Math.ceil(targetWatts / selected.powerW) : 0;
+              const actualPower = selected.powerW ? (piecesNeeded * selected.powerW) / 1000 : 0;
+              const stockQuantity = selected.quantity || 0;
+              const isOutOfStock = stockQuantity === 0;
+              const isLowStock = !isOutOfStock && piecesNeeded > 0 && stockQuantity < piecesNeeded;
+              
+              return (
+                <div className="space-y-3">
+                  <div className="p-4 rounded-lg border-2 bg-emerald-500/5 border-emerald-500/50">
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className="text-emerald-400 font-bold text-sm flex items-center gap-2">
+                        <CheckCircle size={16} /> SELECTED PANELS
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-start">
+                      <div className="flex-1">
+                        <p className="text-white font-bold">{selected.name}</p>
+                        <p className="text-xs text-slate-400 mt-1">
+                          {selected.powerW}W
+                          {piecesNeeded > 0 && ` • ${piecesNeeded} pieces = ${actualPower.toFixed(2)}kW`}
+                        </p>
+                        <p className="text-sm text-emerald-400 font-bold mt-2">{selected.sellPrice} RON/piece</p>
+                      </div>
+                      <button 
+                        type="button"
+                        onClick={async () => {
+                          setSelectedPanelId(null);
+                          await updateClient({ needs: { ...client.needs, panelStockItemId: undefined, panelCount: undefined } });
+                        }}
+                        className="text-slate-400 hover:text-white transition-colors"
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+                    
+                    {isOutOfStock && (
+                      <div className="mt-3 p-3 bg-red-500/10 border border-red-500/50 rounded-lg flex items-start gap-2">
+                        <AlertCircle size={14} className="text-red-400 flex-shrink-0 mt-0.5" />
+                        <div className="text-xs text-red-300">
+                          <p className="font-bold">Out of stock!</p>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {isLowStock && (
+                      <div className="mt-3 p-3 bg-yellow-500/10 border border-yellow-500/50 rounded-lg flex items-start gap-2">
+                        <AlertCircle size={14} className="text-yellow-400 flex-shrink-0 mt-0.5" />
+                        <p className="text-xs text-yellow-300 font-bold">
+                          Low stock! Need {piecesNeeded} but only {stockQuantity} available
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                  
+                  {client.needs?.panelKw && client.needs.panelKw > 0 && (
+                    <button 
+                      type="button"
+                      onClick={() => setShowPanelAlternatives(true)}
+                      className="w-full px-4 py-2 border border-slate-600 hover:border-amber-500 text-slate-400 hover:text-amber-400 font-bold rounded-lg text-sm transition-colors"
+                    >
+                      Choose Different Panels
+                    </button>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Manual Panel Count Override */}
+            {selectedPanelId && (
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase mb-2 block">Manual Quantity Override</label>
+                <input 
+                  type="number"
+                  min="0"
+                  value={client.needs?.panelCount || ''} 
+                  onChange={(e) => handleNeedsChange('panelCount', Number(e.target.value))} 
+                  className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500" 
+                  placeholder="Override calculated quantity" 
+                />
+              </div>
+            )}
+
+            {/* Row Configuration & Mounting Structure Calculator */}
+            {client.needs?.panelCount && client.needs.panelCount > 0 && (
+              <div className="border-t border-slate-700 pt-6 space-y-4">
+                <h4 className="text-sm font-bold text-white mb-3 flex items-center gap-2">
+                  <Package size={14} /> Structure Components Calculator
+                </h4>
+                
+                {/* Row Count Input */}
+                <div>
+                  <label className="text-xs font-bold text-slate-500 uppercase mb-2 block">Number of Rows</label>
+                  <input 
+                    type="number"
+                    min="1"
+                    value={rowCount}
+                    onChange={(e) => {
+                      const count = Number(e.target.value);
+                      if (count >= 1) {
+                        setRowCount(count);
+                        const newDist: {[key: number]: number} = {};
+                        for (let i = 1; i <= count; i++) {
+                          newDist[i] = rowDistribution[i] || 0;
+                        }
+                        setRowDistribution(newDist);
+                      }
+                    }}
+                    className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500" 
+                    placeholder="Number of rows" 
+                  />
+                </div>
+
+                {/* Row Distribution */}
+                {rowCount > 1 && (
+                  <div className="space-y-2 bg-slate-900 p-4 rounded-lg border border-slate-700">
+                    <p className="text-xs text-slate-400 font-bold mb-2">Distribute {client.needs.panelCount} panels across {rowCount} rows:</p>
+                    {Array.from({length: rowCount}, (_, i) => i + 1).map(rowNum => (
+                      <div key={rowNum} className="flex items-center gap-3">
+                        <label className="text-sm text-slate-300 w-20">Row {rowNum}:</label>
+                        <input 
+                          type="number"
+                          min="0"
+                          value={rowDistribution[rowNum] || ''}
+                          onChange={(e) => setRowDistribution({...rowDistribution, [rowNum]: Number(e.target.value)})}
+                          className="flex-1 bg-slate-800 border border-slate-600 rounded-lg p-2 text-white outline-none focus:ring-1 focus:ring-amber-500 text-sm" 
+                          placeholder="Panels in this row" 
+                        />
+                      </div>
+                    ))}
+                    {(() => {
+                      const totalDistributed = Object.values(rowDistribution).reduce((sum, val) => sum + val, 0);
+                      const diff = client.needs!.panelCount! - totalDistributed;
+                      return (
+                        <p className={`text-xs font-bold mt-2 ${
+                          diff === 0 ? 'text-emerald-400' : diff > 0 ? 'text-yellow-400' : 'text-red-400'
+                        }`}>
+                          {diff === 0 ? '✓ All panels distributed' : diff > 0 ? `⚠ ${diff} panels not distributed yet` : `❌ Over by ${Math.abs(diff)} panels`}
+                        </p>
+                      );
+                    })()}
+                  </div>
+                )}
+
+                {/* Structure Components Calculation */}
+                {(() => {
+                  const totalPanels = client.needs!.panelCount!;
+                  const roofType = client.needs?.roofType;
+                  
+                  let rowConfigs: number[] = [];
+                  if (rowCount === 1) {
+                    rowConfigs = [totalPanels];
+                  } else {
+                    const totalDistributed = Object.values(rowDistribution).reduce((sum, val) => sum + val, 0);
+                    if (totalDistributed === totalPanels) {
+                      rowConfigs = Array.from({length: rowCount}, (_, i) => rowDistribution[i + 1] || 0);
+                    }
+                  }
+
+                  if (rowConfigs.length === 0 || rowConfigs.some(c => c === 0)) {
+                    return (
+                      <div className="bg-yellow-500/10 border border-yellow-500/30 p-4 rounded-lg">
+                        <p className="text-xs text-yellow-300">
+                          ⚠ Complete row distribution to calculate structure components
+                        </p>
+                      </div>
+                    );
+                  }
+
+                  const numRows = rowConfigs.length;
+                  const endClamps = numRows * 4;
+                  const midClamps = rowConfigs.reduce((sum, panelsInRow) => sum + (panelsInRow - 1) * 2, 0);
+                  
+                  const selectedPanel = client.needs?.panelStockItemId 
+                    ? inventory.find(i => i.id === client.needs.panelStockItemId) 
+                    : null;
+                  const panelWidth = selectedPanel?.panelWidth || 1.134;
+                  const maxPanelsInRow = Math.max(...rowConfigs);
+                  const railLengthPerRow = maxPanelsInRow * panelWidth;
+                  const railLengthWithWaste = railLengthPerRow * 1.1;
+                  const sectionsPerRail = Math.ceil(railLengthWithWaste / 6);
+                  const railsOf6m = sectionsPerRail * numRows * 2;
+                  const combinersPerRail = sectionsPerRail > 1 ? sectionsPerRail - 1 : 0;
+                  const totalCombiners = combinersPerRail * numRows * 2;
+                  
+                  let attachmentType = 'Hooks/Bolts';
+                  let attachmentsPerPanel = 4;
+                  
+                  if (roofType === 'Tigla ceramica' || roofType === 'Tigla metalica') {
+                    attachmentType = 'Tile Hooks';
+                    attachmentsPerPanel = 5;
+                  } else if (roofType === 'Tabla' || roofType === 'Tabla ondulata' || roofType === 'Tabla cutata') {
+                    attachmentType = 'Hanger Bolts';
+                    attachmentsPerPanel = 4;
+                  }
+                  
+                  const totalAttachments = totalPanels * attachmentsPerPanel;
+
+                  return (
+                    <div className="bg-blue-500/10 border border-blue-500/30 p-4 rounded-lg space-y-3">
+                      <p className="text-sm font-bold text-blue-300 mb-3 flex items-center gap-2">
+                        <CheckCircle size={14} /> Structure Components Required
+                      </p>
+                      
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="bg-slate-900 p-3 rounded-lg border border-slate-700">
+                          <p className="text-xs text-slate-400">End Clamps</p>
+                          <p className="text-xl font-bold text-white mt-1">{endClamps} pcs</p>
+                        </div>
+                        <div className="bg-slate-900 p-3 rounded-lg border border-slate-700">
+                          <p className="text-xs text-slate-400">Mid Clamps</p>
+                          <p className="text-xl font-bold text-white mt-1">{midClamps} pcs</p>
+                        </div>
+                        <div className="bg-slate-900 p-3 rounded-lg border border-slate-700">
+                          <p className="text-xs text-slate-400">Rails (6m)</p>
+                          <p className="text-xl font-bold text-white mt-1">{railsOf6m} pcs</p>
+                        </div>
+                        {totalCombiners > 0 && (
+                          <div className="bg-slate-900 p-3 rounded-lg border border-slate-700">
+                            <p className="text-xs text-slate-400">Rail Combiners</p>
+                            <p className="text-xl font-bold text-white mt-1">{totalCombiners} pcs</p>
+                          </div>
+                        )}
+                        <div className="bg-slate-900 p-3 rounded-lg border border-slate-700 col-span-2">
+                          <p className="text-xs text-slate-400">{attachmentType}</p>
+                          <p className="text-xl font-bold text-white mt-1">{totalAttachments} pcs</p>
+                        </div>
+                      </div>
+
+                      <div className="text-xs text-slate-400 mt-3 p-2 bg-slate-900 rounded">
+                        <p>📐 Configuration: {numRows} row{numRows > 1 ? 's' : ''} • Max {maxPanelsInRow} panels/row • ~{railLengthPerRow.toFixed(2)}m rail length</p>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+          </div>
+
+          {/* Panel Selection Modal */}
+          {showPanelAlternatives && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+              <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-2xl max-h-[80vh] flex flex-col">
+                <div className="p-4 border-b border-slate-700 flex justify-between items-center">
+                  <h3 className="text-white font-bold">All Available Panels</h3>
+                  <button 
+                    type="button"
+                    onClick={() => setShowPanelAlternatives(false)}
+                    className="text-slate-400 hover:text-white transition-colors"
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+                <div className="p-4 overflow-y-auto custom-scrollbar space-y-2">
+                  {suggestedPanels.map((panel: any) => (
+                    <div 
+                      key={panel.id}
+                      className={`flex items-center justify-between bg-slate-900 p-4 rounded-lg border cursor-pointer transition-all ${
+                        panel.id === selectedPanelId
+                          ? 'border-emerald-500 ring-2 ring-emerald-500/20' 
+                          : panel.isInStock
+                          ? 'border-emerald-500/30 hover:border-emerald-500/50' 
+                          : panel.isOutOfStock
+                          ? 'border-red-500/30 hover:border-red-500/50'
+                          : 'border-yellow-500/30 hover:border-yellow-500/50'
+                      }`}
+                      onClick={async () => {
+                        setSelectedPanelId(panel.id);
+                        await updateClient({ 
+                          needs: { 
+                            ...client.needs, 
+                            panelStockItemId: panel.id,
+                            panelCount: panel.piecesNeeded
+                          } 
+                        });
+                        setShowPanelAlternatives(false);
+                      }}
+                    >
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <p className="text-white font-bold">{panel.name}</p>
+                          {panel.id === selectedPanelId && (
+                            <span className="text-xs bg-emerald-500 text-slate-900 px-2 py-0.5 rounded font-bold">SELECTED</span>
+                          )}
+                          {panel.isInStock && panel.id !== selectedPanelId && (
+                            <span className="text-xs bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded font-bold">IN STOCK</span>
+                          )}
+                          {panel.isOutOfStock && (
+                            <span className="text-xs bg-red-500/20 text-red-400 px-2 py-0.5 rounded font-bold">OUT OF STOCK</span>
+                          )}
+                          {!panel.isInStock && !panel.isOutOfStock && (
+                            <span className="text-xs bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded font-bold">LOW STOCK</span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-400 mt-1">
+                          {panel.powerW}W • {panel.piecesNeeded} pcs = {panel.actualPower.toFixed(2)}kW
+                        </p>
+                        {!panel.isInStock && !panel.isOutOfStock && (
+                          <p className="text-xs text-yellow-400 mt-1 flex items-center gap-1">
+                            <AlertCircle size={10} /> Only {panel.stockQuantity} available, need {panel.piecesNeeded}
+                          </p>
+                        )}
+                      </div>
+                      <div className="text-right ml-4">
+                        <p className={`text-xs font-bold ${
+                          panel.isOutOfStock ? 'text-red-400' : !panel.isInStock ? 'text-yellow-400' : 'text-emerald-400'
+                        }`}>{panel.stockQuantity} in stock</p>
+                        <p className="text-sm font-bold text-emerald-400 mt-1">{panel.sellPrice} RON</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
+
+        {/* On-site Pictures */}
+        <section className="bg-slate-800 p-6 rounded-xl border border-slate-700">
+          <h3 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2">
+            <ImageIcon size={16} className="text-amber-500" />On-site Pictures
+          </h3>
+          
+          <div className="flex gap-4 mb-6">
+            <label className="cursor-pointer bg-amber-500 hover:bg-amber-400 text-slate-900 px-4 py-2 rounded-lg font-bold text-sm flex items-center gap-2 transition-colors">
+              <Upload size={16} /> Upload Photos
+              <input 
+                type="file" 
+                accept="image/*" 
+                multiple
+                onChange={handleImageUpload} 
+                className="hidden" 
+              />
+            </label>
+            <button 
+              onClick={startCamera} 
+              className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg font-medium text-sm flex items-center gap-2 transition-colors"
+            >
+              <Camera size={16} /> Take Photo
+            </button>
+          </div>
+
+          {(!client.needs?.siteImages || client.needs.siteImages.length === 0) ? (
+            <div className="text-center py-12 text-slate-500 italic border border-slate-700 border-dashed rounded-xl">
+              <ImageIcon size={40} className="mx-auto mb-3 text-slate-600" />
+              <p>No pictures uploaded yet</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {client.needs.siteImages.map((img, idx) => (
+                <div 
+                  key={img.id} 
+                  className="bg-slate-900 rounded-lg border border-slate-700 overflow-hidden hover:border-amber-500/50 transition-all"
+                >
+                  <div 
+                    className="relative aspect-video group cursor-pointer" 
+                    onClick={() => setPreviewImageUrl(img.url)}
+                  >
+                    <img 
+                      src={img.url} 
+                      alt={img.label || "Site photo"}
+                      className="w-full h-full object-cover" 
+                    />
+                    {img.category && (
+                      <span className="absolute top-2 left-2 bg-amber-500 text-slate-900 text-xs px-2 py-1 rounded font-bold shadow-lg">
+                        {img.category}
+                      </span>
+                    )}
+                    <button 
+                      type="button"
+                      onClick={(e) => { 
+                        e.stopPropagation();
+                        handleDeleteImage(img.id); 
+                      }} 
+                      className="absolute top-2 right-2 bg-red-500 hover:bg-red-600 text-white p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity shadow-lg z-10"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                  
+                  <div className="p-4">
+                    <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Description</label>
+                    <input
+                      type="text"
+                      value={img.label || ''}
+                      onChange={async (e) => {
+                        const updatedImages = client.needs?.siteImages?.map(i => 
+                          i.id === img.id ? { ...i, label: e.target.value } : i
+                        ) || [];
+                        await updateClient({ needs: { ...client.needs, siteImages: updatedImages } });
+                      }}
+                      placeholder="e.g., Main roof view..."
+                      className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {/* Image Preview Modal */}
+        {previewImageUrl && (
+          <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4" onClick={() => setPreviewImageUrl(null)}>
+            <div className="relative max-w-7xl max-h-full">
+              <button 
+                onClick={() => setPreviewImageUrl(null)}
+                className="absolute -top-12 right-0 text-white hover:text-amber-400 transition-colors"
+              >
+                <X size={32} />
+              </button>
+              <img 
+                src={previewImageUrl} 
+                alt="Preview" 
+                className="max-w-full max-h-[90vh] object-contain"
+                onClick={(e) => e.stopPropagation()}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Camera Modal */}
+        {isCameraOpen && (
+          <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4">
+            <div className="bg-slate-800 rounded-xl p-6 max-w-2xl w-full">
+              <video ref={videoRef} autoPlay className="w-full rounded-lg mb-4"></video>
+              <canvas ref={canvasRef} className="hidden"></canvas>
+              <div className="flex gap-4 justify-center">
+                <button
+                  onClick={stopCamera}
+                  className="px-6 py-3 bg-slate-700 hover:bg-slate-600 text-white font-bold rounded-lg"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

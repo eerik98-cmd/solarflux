@@ -19,6 +19,8 @@ interface DataContextType {
   setUsers: (users: User[]) => void;
   setDocTemplates: (templates: DocTemplate[]) => void;
   setCompanyDocuments: (docs: Record<string, unknown>[]) => void;
+  saveQuote: (quote: Quote) => Promise<void>;
+  deleteQuote: (quoteId: string) => Promise<void>;
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
@@ -73,6 +75,14 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+  const saveQuote = async (quote: Quote) => {
+    await StorageService.saveItem('quotes', quote);
+  };
+
+  const deleteQuote = async (quoteId: string) => {
+    await StorageService.deleteItem('quotes', quoteId);
+  };
+
   return (
     <DataContext.Provider
       value={{
@@ -89,6 +99,8 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         setUsers,
         setDocTemplates,
         setCompanyDocuments,
+        saveQuote,
+        deleteQuote,
       }}
     >
       {children}

@@ -1,71 +1,245 @@
 'use client';
 
-import React, { Suspense } from 'react';
-import { Loader2 } from 'lucide-react';
-import { ClientRegistry as ClientRegistryComponent } from '@/components/ClientRegistry';
+import React, { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { Search, Building2, User, Plus, Trash2 } from 'lucide-react';
+import { Client, ClientType } from '@/types';
 import { useData } from '@/contexts/DataContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { StorageService } from '@/services/storageService';
-import { Client, Quote } from '@/types';
+import { FileSystem } from '@/services/fileSystemService';
 
-function LoadingSpinner() {
-  return (
-    <div className="flex items-center justify-center h-screen">
-      <Loader2 className="w-8 h-8 animate-spin text-amber-500" />
-    </div>
-  );
-}
-
-function ClientRegistryWrapper() {
-  const { clients, inventory, savedQuotes, docTemplates } = useData();
+export default function ClientsListPage() {
+  const router = useRouter();
+  const { clients } = useData();
   const { currentUser } = useAuth();
+  const [searchTerm, setSearchTerm] = useState('');
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [selectedType, setSelectedType] = useState<ClientType>(ClientType.PRIVATE);
+  const [newClientFormData, setNewClientFormData] = useState<Partial<Client>>({ country: 'Romania' });
 
-  // Don't render until data is loaded
-  if (!currentUser) {
-    return <LoadingSpinner />;
-  }
+  const filteredClients = (clients || []).filter(client => {
+    const searchLower = searchTerm.toLowerCase();
+    return (
+      client.name.toLowerCase().includes(searchLower) ||
+      client.email.toLowerCase().includes(searchLower) ||
+      (client.internalId && client.internalId.toLowerCase().includes(searchLower)) ||
+      (client.companyName && client.companyName.toLowerCase().includes(searchLower))
+    );
+  });
 
-  const handleAddClient = async (client: Client) => {
-    const newClient = { ...client, id: client.id || Date.now().toString() };
-    await StorageService.saveItem('clients', newClient);
+  const getStatusColor = (status: string) => {
+    switch(status) {
+      case 'ACTIVE': return 'bg-green-500 text-green-50';
+      case 'LEAD': return 'bg-amber-500 text-amber-50';
+      case 'CLOSED': return 'bg-slate-600 text-slate-200';
+      default: return 'bg-slate-700 text-slate-400';
+    }
   };
 
-  const handleUpdateClient = async (client: Client) => {
-    await StorageService.saveItem('clients', client);
+  const generateNextInternalId = (type: ClientType): string => {
+    const prefix = "SI_";
+    const isCorp = type === ClientType.CORPORATE;
+    const min = isCorp ? 2000 : 3000;
+    const max = isCorp ? 2999 : 3999;
+    const existingIds = clients
+      .filter(c => c.type === type && c.internalId && c.internalId.startsWith(prefix))
+      .map(c => parseInt(c.internalId!.replace(prefix, ''), 10))
+      .filter(n => !isNaN(n) && n >= min && n <= max);
+    const nextNum = existingIds.length > 0 ? Math.max(...existingIds) + 1 : min;
+    return `${prefix}${nextNum}`;
+  };
+
+  const handleSaveNewClient = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const displayName = selectedType === ClientType.PRIVATE 
+      ? `${newClientFormData.lastName || ''} ${newClientFormData.firstName || ''}`.trim()
+      : newClientFormData.companyName || 'Unknown Company';
+    
+    const addressString = [
+      newClientFormData.street, 
+      newClientFormData.streetNumber ? `Nr. ${newClientFormData.streetNumber}` : '',
+      newClientFormData.city,
+      newClientFormData.county,
+      newClientFormData.country
+    ].filter(Boolean).join(', ');
+    
+    const newClient: Client = {
+      id: Date.now().toString(),
+      internalId: generateNextInternalId(selectedType),
+      type: selectedType,
+      status: 'LEAD',
+      name: displayName,
+      address: addressString,
+      email: newClientFormData.email || '',
+      phone: newClientFormData.phone || '',
+      needs: {},
+      notes: [],
+      documents: [],
+      ...newClientFormData
+    } as Client;
+    
+    await FileSystem.createClientRepository(newClient);
+    await StorageService.saveItem('clients', newClient);
+    setIsModalOpen(false);
+    setNewClientFormData({ country: 'Romania' });
   };
 
   const handleDeleteClient = async (id: string) => {
-    await StorageService.deleteItem('clients', id);
-  };
-
-  const handleSaveQuote = async (quote: Quote) => {
-    await StorageService.saveItem('quotes', quote);
-  };
-
-  const handleDeleteQuote = async (id: string) => {
-    await StorageService.deleteItem('quotes', id);
+    if (confirm('Are you sure you want to delete this client?')) {
+      await StorageService.deleteItem('clients', id);
+    }
   };
 
   return (
-    <ClientRegistryComponent
-      clients={clients || []}
-      currentUser={currentUser}
-      onAddClient={handleAddClient}
-      onUpdateClient={handleUpdateClient}
-      onDeleteClient={handleDeleteClient}
-      inventory={inventory || []}
-      savedQuotes={savedQuotes || []}
-      onSaveQuote={handleSaveQuote}
-      onDeleteQuote={handleDeleteQuote}
-      docTemplates={docTemplates || []}
-    />
-  );
-}
+    <div className="h-full flex flex-col bg-slate-900 p-8">
+      <header className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold text-white mb-2">Client Registry</h1>
+          <p className="text-slate-400">Manage your customer base</p>
+        </div>
+        {currentUser?.role !== 'INSTALLER' && (
+          <button
+            onClick={() => setIsModalOpen(true)}
+            className="bg-amber-500 hover:bg-amber-400 text-slate-900 px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-amber-500/20"
+          >
+            <Plus size={20} /> New Client
+          </button>
+        )}
+      </header>
 
-export default function ClientsPage() {
-  return (
-    <Suspense fallback={<LoadingSpinner />}>
-      <ClientRegistryWrapper />
-    </Suspense>
+      <div className="bg-slate-800 rounded-2xl border border-slate-700 overflow-hidden flex flex-col flex-1">
+        <div className="p-4 border-b border-slate-700 bg-slate-800/50">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={20} />
+            <input
+              type="text"
+              placeholder="Search clients..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-10 pr-4 py-2 text-white outline-none"
+            />
+          </div>
+        </div>
+
+        <div className="overflow-y-auto flex-1 p-4 space-y-2">
+          {filteredClients.map(client => (
+            <div
+              key={client.id}
+              className="bg-slate-900 border border-slate-700 rounded-xl p-4 hover:border-amber-500/50 transition-all cursor-pointer group"
+              onClick={() => router.push(`/clients/${client.id}`)}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4 flex-1">
+                  <div className="p-3 bg-slate-800 rounded-lg">
+                    {client.type === ClientType.CORPORATE ? (
+                      <Building2 className="text-amber-500" size={24} />
+                    ) : (
+                      <User className="text-amber-500" size={24} />
+                    )}
+                  </div>
+                  <div className="flex-1">
+                    <div className="flex items-center gap-3 mb-1">
+                      <h3 className="text-lg font-bold text-white">{client.name}</h3>
+                      <span className={`text-xs px-2 py-1 rounded-full font-bold ${getStatusColor(client.status)}`}>
+                        {client.status}
+                      </span>
+                      {client.internalId && (
+                        <span className="text-xs text-slate-500 font-mono">{client.internalId}</span>
+                      )}
+                    </div>
+                    <div className="text-sm text-slate-400">
+                      {client.email} • {client.phone}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      router.push(`/clients/${client.id}`);
+                    }}
+                    className="bg-amber-500 hover:bg-amber-400 text-slate-900 px-4 py-2 rounded-lg font-bold"
+                  >
+                    Open
+                  </button>
+                  {currentUser?.role === 'SUPER_ADMIN' && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteClient(client.id);
+                      }}
+                      className="bg-slate-800 hover:bg-red-500/10 text-slate-400 hover:text-red-500 p-2 rounded-lg border border-slate-700"
+                    >
+                      <Trash2 size={20} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* New Client Modal */}
+      {isModalOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-800 rounded-2xl border border-slate-700 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-6">
+              <h2 className="text-2xl font-bold text-white mb-6">New Client</h2>
+              <form onSubmit={handleSaveNewClient} className="space-y-4">
+                <div className="flex gap-4 mb-6">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedType(ClientType.PRIVATE)}
+                    className={`flex-1 p-4 rounded-xl border-2 transition-all ${
+                      selectedType === ClientType.PRIVATE
+                        ? 'border-amber-500 bg-amber-500/10'
+                        : 'border-slate-700 hover:border-slate-600'
+                    }`}
+                  >
+                    <User size={32} className="mx-auto mb-2" />
+                    <div className="font-bold">Private Individual</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedType(ClientType.CORPORATE)}
+                    className={`flex-1 p-4 rounded-xl border-2 transition-all ${
+                      selectedType === ClientType.CORPORATE
+                        ? 'border-amber-500 bg-amber-500/10'
+                        : 'border-slate-700 hover:border-slate-600'
+                    }`}
+                  >
+                    <Building2 size={32} className="mx-auto mb-2" />
+                    <div className="font-bold">Corporate Client</div>
+                  </button>
+                </div>
+
+                {selectedType === ClientType.PRIVATE ? (
+                  <>
+                    <input name="firstName" placeholder="First Name" onChange={(e) => setNewClientFormData({ ...newClientFormData, firstName: e.target.value })} className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white" required />
+                    <input name="lastName" placeholder="Last Name" onChange={(e) => setNewClientFormData({ ...newClientFormData, lastName: e.target.value })} className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white" required />
+                  </>
+                ) : (
+                  <input name="companyName" placeholder="Company Name" onChange={(e) => setNewClientFormData({ ...newClientFormData, companyName: e.target.value })} className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white" required />
+                )}
+
+                <input name="email" type="email" placeholder="Email" onChange={(e) => setNewClientFormData({ ...newClientFormData, email: e.target.value })} className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white" required />
+                <input name="phone" placeholder="Phone" onChange={(e) => setNewClientFormData({ ...newClientFormData, phone: e.target.value })} className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white" required />
+
+                <div className="flex gap-4 mt-6">
+                  <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 bg-slate-700 hover:bg-slate-600 text-white px-4 py-3 rounded-lg font-bold">
+                    Cancel
+                  </button>
+                  <button type="submit" className="flex-1 bg-amber-500 hover:bg-amber-400 text-slate-900 px-4 py-3 rounded-lg font-bold">
+                    Create Client
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
