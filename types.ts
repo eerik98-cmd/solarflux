@@ -89,6 +89,8 @@ export interface ClientSiteImage {
   id: string;
   url: string; // Base64 data URL
   timestamp: Date;
+  label?: string;
+  category?: 'Roof' | 'Electrical' | 'Access' | 'Obstacles' | 'Meter' | 'Other';
 }
 
 export interface ClientNeed {
@@ -109,9 +111,11 @@ export interface ClientNeed {
   
   // Inverter Requirements
   inverterKw?: number;
+  selectedInverterId?: string; // Selected inverter from inventory
   
   // Battery Requirements
   batteryKwh?: number;
+  selectedBatteryId?: string; // Selected battery from inventory
   
   // Panel Requirements
   panelSizeType?: '2093x1134' | '1722x1134' | 'STOCK_ITEM';
@@ -203,7 +207,24 @@ export type UserRole = 'SUPER_ADMIN' | 'WAREHOUSEMAN' | 'INSTALLER';
 export interface User {
   id: string;
   username: string;
-  password: string; // In a real app, this would be hashed
+  password: string; // Hashed password stored in database
+  nickname: string;
+  role: UserRole;
+}
+
+// Session data stored in encrypted cookie
+export interface SessionData {
+  userId: string;
+  username: string;
+  role: string;
+  nickname: string;
+  isLoggedIn: boolean;
+}
+
+// User data returned to client (without password)
+export interface SafeUser {
+  id: string;
+  username: string;
   nickname: string;
   role: UserRole;
 }

@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { InventoryItem, Quote, QuoteLineItem, Client } from '../types';
-import { Plus, Trash2, Save, History, RefreshCcw, CheckSquare, Square, Search, ChevronDown, Package, Printer, Edit3 } from 'lucide-react';
+import { InventoryItem, Quote, QuoteLineItem, Client, DocTemplate } from '../types';
+import { Plus, Trash2, Save, History, RefreshCcw, CheckSquare, Square, Search, ChevronDown, Package, Printer, Edit3, FileText, Download, X } from 'lucide-react';
 import { ConfirmDialog } from './ConfirmDialog';
 
 interface QuoteGeneratorProps {
@@ -11,9 +11,10 @@ interface QuoteGeneratorProps {
   savedQuotes: Quote[];
   onSaveQuote: (quote: Quote) => void;
   onDeleteQuote?: (id: string) => void;
+  docTemplates: DocTemplate[];
 }
 
-export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clients, savedQuotes, onSaveQuote, onDeleteQuote }) => {
+export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clients, savedQuotes, onSaveQuote, onDeleteQuote, docTemplates }) => {
   const [projectTitle, setProjectTitle] = useState('');
   const [customerName, setCustomerName] = useState('');
   const [selectedClientId, setSelectedClientId] = useState<string | undefined>(undefined);
@@ -27,6 +28,12 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
   
   // Customer Search State
   const [isCustomerSearchOpen, setIsCustomerSearchOpen] = useState(false);
+  
+  // Document Generation State
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generatedDocuments, setGeneratedDocuments] = useState<Array<{id: string, name: string, blob: Blob, date: Date}>>([]);
+  const [previewDoc, setPreviewDoc] = useState<{name: string, url: string} | null>(null);
   
   // Confirm Dialog State
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -288,6 +295,116 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
     }
   };
 
+  const generateDocument = async () => {
+    if (!selectedTemplateId) {
+      alert('Please select a template first');
+      return;
+    }
+    if (!customerName.trim()) {
+      alert('Please enter a customer name');
+      return;
+    }
+    if (items.length === 0) {
+      alert('Please add at least one item');
+      return;
+    }
+
+    setIsGenerating(true);
+    try {
+      // Dynamic imports
+      const [PizZipModule, DocxtemplaterModule, FileSaverModule] = await Promise.all([
+        import('pizzip'),
+        import('docxtemplater'),
+        import('file-saver')
+      ]);
+      const PizZip = (PizZipModule as any).default || PizZipModule;
+      const Docxtemplater = (DocxtemplaterModule as any).default || DocxtemplaterModule;
+      const saveAs = (FileSaverModule as any).saveAs || (FileSaverModule as any).default?.saveAs;
+
+      const template = docTemplates?.find(t => t.id === selectedTemplateId);
+      if (!template) {
+        alert('Template not found');
+        setIsGenerating(false);
+        return;
+      }
+
+      // Convert data URL to blob using fetch (more reliable than atob for large files)
+      let blob: Blob;
+      try {
+        // If it's already a data URL, fetch can handle it directly
+        const response = await fetch(template.content);
+        blob = await response.blob();
+      } catch (e) {
+        console.error('Failed to convert template:', e);
+        alert('Template file is corrupted. Please re-upload the template.');
+        setIsGenerating(false);
+        return;
+      }
+
+      // Convert blob to ArrayBuffer
+      const arrayBuffer = await blob.arrayBuffer();
+      const byteArray = new Uint8Array(arrayBuffer);
+
+      // Process the template
+      const zip = new PizZip(byteArray);
+      const doc = new Docxtemplater(zip, { 
+        paragraphLoop: true, 
+        linebreaks: true,
+        nullGetter: () => '' 
+      });
+
+      // Get client data if available
+      const client = selectedClientId ? clients.find(c => c.id === selectedClientId) : undefined;
+
+      const data = {
+        customer_name: customerName,
+        customer_email: client?.email || '',
+        customer_phone: client?.phone || '',
+        customer_address: client?.address || '',
+        project_title: projectTitle || 'Untitled Quote',
+        description: description || '',
+        today_date: new Date().toLocaleDateString('ro-RO'),
+        subtotal_net: formatCurrency(calculateTotals.subtotalNet),
+        vat_total: formatCurrency(calculateTotals.vatTotal),
+        total_gross: formatCurrency(calculateTotals.totalGross),
+        items: items.map(item => ({
+          description: item.description || '',
+          qty: item.quantity || 0,
+          unit: item.unit || 'pcs',
+          net_price: formatCurrency(item.netPrice || 0),
+          total_price: formatCurrency((item.quantity || 0) * (item.netPrice || 0)),
+          serials: item.selectedSerialNumbers?.join(', ') || ''
+        }))
+      };
+
+      doc.render(data);
+      
+      const out = doc.getZip().generate({
+        type: "blob",
+        mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      });
+
+      const fileName = `Quote - ${projectTitle || customerName} - ${new Date().toLocaleDateString('ro-RO').replace(/\//g, '-')}.docx`;
+      
+      // Add to generated documents list
+      setGeneratedDocuments(prev => [{
+        id: Date.now().toString(),
+        name: fileName,
+        blob: out,
+        date: new Date()
+      }, ...prev]);
+
+      setIsGenerating(false);
+      alert('Document generated successfully!');
+      
+    } catch (err) {
+      console.error('Document generation error:', err);
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      alert(`Failed to generate document: ${errorMessage}`);
+      setIsGenerating(false);
+    }
+  };
+
   // Close serial picker when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -392,6 +509,103 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
                     </div>
                 </div>
             </div>
+
+            {/* DOCUMENT GENERATION */}
+            {docTemplates && docTemplates.length > 0 && (
+                <div className="bg-slate-800 rounded-xl border border-slate-700 p-6 shadow-lg">
+                    <div className="flex items-center gap-4">
+                        <div className="flex-1">
+                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">
+                                <FileText className="inline-block mr-2" size={14} />
+                                Document Template
+                            </label>
+                            <select
+                                value={selectedTemplateId}
+                                onChange={(e) => setSelectedTemplateId(e.target.value)}
+                                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-amber-500 outline-none"
+                            >
+                                <option value="">Select a template...</option>
+                                {docTemplates.map(tmpl => (
+                                    <option key={tmpl.id} value={tmpl.id}>{tmpl.name}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div className="pt-7">
+                            <button
+                                onClick={generateDocument}
+                                disabled={!selectedTemplateId || isGenerating || items.length === 0}
+                                className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed font-semibold transition-all flex items-center gap-2 shadow-lg hover:shadow-xl"
+                            >
+                                {isGenerating ? (
+                                    <>
+                                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                        Generating...
+                                    </>
+                                ) : (
+                                    <>
+                                        <FileText size={18} />
+                                        Generate Document
+                                    </>
+                                )}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* GENERATED DOCUMENTS LIST */}
+            {generatedDocuments.length > 0 && (
+                <div className="bg-slate-800 rounded-xl border border-slate-700 p-6 shadow-lg">
+                    <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                        <FileText size={20} className="text-green-500" />
+                        Generated Documents ({generatedDocuments.length})
+                    </h3>
+                    <div className="space-y-2">
+                        {generatedDocuments.map(doc => (
+                            <div key={doc.id} className="flex items-center justify-between p-3 bg-slate-700/30 border border-slate-600 rounded-lg hover:bg-slate-700/50 transition-colors">
+                                <div className="flex-1 min-w-0">
+                                    <p className="text-white font-semibold text-sm truncate">{doc.name}</p>
+                                    <p className="text-xs text-slate-400 mt-1">
+                                        {doc.date.toLocaleString('ro-RO')} • {(doc.blob.size / 1024).toFixed(1)} KB
+                                    </p>
+                                </div>
+                                <div className="flex items-center gap-2 ml-4">
+                                    <button
+                                        onClick={() => {
+                                            setPreviewDoc({ name: doc.name, url: URL.createObjectURL(doc.blob) });
+                                        }}
+                                        className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
+                                    >
+                                        <FileText size={14} />
+                                        Open
+                                    </button>
+                                    <button
+                                        onClick={async () => {
+                                            const FileSaverModule = await import('file-saver');
+                                            const saveAs = (FileSaverModule as any).saveAs || (FileSaverModule as any).default?.saveAs;
+                                            saveAs(doc.blob, doc.name);
+                                        }}
+                                        className="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
+                                    >
+                                        <Download size={14} />
+                                        Download
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            if (confirm(`Delete "${doc.name}"?`)) {
+                                                setGeneratedDocuments(prev => prev.filter(d => d.id !== doc.id));
+                                            }
+                                        }}
+                                        className="p-2 text-red-500 hover:text-red-400 hover:bg-slate-600 rounded transition-colors"
+                                    >
+                                        <Trash2 size={16} />
+                                    </button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
 
             {/* SECTION 2: QUOTE EDITOR */}
             <div className="bg-slate-800 rounded-xl border border-slate-700 flex flex-col min-h-[500px] shadow-lg overflow-hidden">
@@ -745,6 +959,62 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
         onConfirm={confirmDialog.onConfirm}
         onCancel={() => setConfirmDialog({ ...confirmDialog, isOpen: false })}
       />
+
+      {/* Document Preview Modal */}
+      {previewDoc && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => {
+          URL.revokeObjectURL(previewDoc.url);
+          setPreviewDoc(null);
+        }}>
+          <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-2xl flex flex-col shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b border-slate-700">
+              <div className="flex items-center gap-3">
+                <FileText className="text-blue-500" size={24} />
+                <h3 className="text-lg font-bold text-white truncate">{previewDoc.name}</h3>
+              </div>
+              <button
+                onClick={() => {
+                  URL.revokeObjectURL(previewDoc.url);
+                  setPreviewDoc(null);
+                }}
+                className="p-2 hover:bg-slate-700 rounded-lg transition-colors text-slate-400 hover:text-white"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-8 text-center">
+              <div className="mb-6">
+                <div className="w-20 h-20 mx-auto mb-4 bg-blue-500/20 rounded-full flex items-center justify-center">
+                  <FileText className="text-blue-500" size={40} />
+                </div>
+                <p className="text-slate-300 text-lg mb-2">Word Document (.docx)</p>
+                <p className="text-slate-500 text-sm">
+                  This file needs to be opened in Microsoft Word, LibreOffice, or Google Docs.
+                </p>
+              </div>
+              <div className="flex gap-3 justify-center">
+                <a
+                  href={previewDoc.url}
+                  download={previewDoc.name}
+                  className="px-6 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-semibold transition-colors flex items-center gap-2 shadow-lg"
+                >
+                  <Download size={18} />
+                  Download & Open
+                </a>
+                <button
+                  onClick={() => {
+                    window.open(previewDoc.url, '_blank');
+                  }}
+                  className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition-colors flex items-center gap-2 shadow-lg"
+                >
+                  <FileText size={18} />
+                  Open in New Tab
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

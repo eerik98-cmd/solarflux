@@ -13,20 +13,35 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setLoading(true);
 
-    // Simulate API delay
-    setTimeout(() => {
-      try {
-        onLogin(username, password);
-      } catch (err) {
-        setError((err as Error).message || 'Authentication failed');
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ username, password }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        setError(data.error || 'Authentication failed');
         setLoading(false);
+        return;
       }
-    }, 800);
+
+      // Call onLogin with username and password for backward compatibility
+      // The actual authentication is now handled by the API
+      onLogin(username, password);
+    } catch (err) {
+      setError('Network error. Please try again.');
+      setLoading(false);
+    }
   };
 
   return (

@@ -318,6 +318,7 @@ const App: React.FC = () => {
               savedQuotes={savedQuotes}
               onSaveQuote={handleSaveQuote}
               onDeleteQuote={handleDeleteQuote}
+              docTemplates={docTemplates}
             />
           )}
 

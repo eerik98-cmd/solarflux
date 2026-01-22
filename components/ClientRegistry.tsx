@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Client, ClientType, ClientNote, ClientSiteImage, InventoryItem, Quote, QuoteLineItem, DocTemplate, Category, ArchivedProject } from '../types';
 // Added Loader2 to the lucide-react imports
-import { Search, Building2, User, Phone, Mail, MapPin, Plus, ArrowLeft, X, CheckCircle, FileText, Zap, FolderOpen, Upload, Trash2, ExternalLink, Printer, Save, ClipboardList, Camera, Image as ImageIcon, History, RefreshCcw, ChevronDown, Package, FileCog, FileOutput, Hash, Briefcase, Info, Code, Loader2, AlertCircle } from 'lucide-react';
+import { Search, Building2, User, Phone, Mail, MapPin, Plus, ArrowLeft, ArrowRight, X, CheckCircle, FileText, Zap, FolderOpen, Upload, Trash2, ExternalLink, Printer, Save, ClipboardList, Camera, Image as ImageIcon, History, RefreshCcw, ChevronDown, Package, FileCog, FileOutput, Hash, Briefcase, Info, Code, Loader2, AlertCircle, Eye, Edit2, Download, File, CheckSquare, Square } from 'lucide-react';
 import { FileSystem, getFolderForDocType } from '../services/fileSystemService';
 import { ConfirmDialog } from './ConfirmDialog';
 
@@ -22,6 +22,24 @@ interface ClientRegistryProps {
 
 type ModalStep = 'TYPE_SELECTION' | 'FORM';
 type DetailTab = 'DATA' | 'NEEDS' | 'DOCUMENTS' | 'QUOTES' | 'DOC_GEN';
+
+const isPdfDoc = (doc: any) =>
+  !!doc.url && (doc.url.startsWith('data:application/pdf') || doc.name?.toLowerCase().endsWith('.pdf'));
+
+const PdfPreview: React.FC<{ url: string; title: string }> = ({ url, title }) => {
+  return (
+    <div className="w-full h-full flex flex-col">
+      <div className="flex-1 overflow-auto rounded-lg border border-slate-700 bg-slate-950">
+        <iframe
+          src={url}
+          title={title}
+          className="w-full h-full min-h-[600px]"
+          style={{ border: 'none' }}
+        />
+      </div>
+    </div>
+  );
+};
 
 export const ClientRegistry: React.FC<ClientRegistryProps> = ({ 
   clients, currentUser, onAddClient, onUpdateClient, onDeleteClient, inventory, savedQuotes, onSaveQuote, onDeleteQuote, docTemplates
@@ -50,7 +68,8 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
   // Documents / File System State
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [docType, setDocType] = useState<string>('CI');
-  const [docInput, setDocInput] = useState(''); 
+  const [docInput, setDocInput] = useState('');
+  const [docDescription, setDocDescription] = useState(''); 
 
   // Camera State for Needs Tab
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -62,6 +81,7 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
   const [quoteItems, setQuoteItems] = useState<QuoteLineItem[]>([]);
   const [editingQuoteId, setEditingQuoteId] = useState<string | null>(null);
   const [openSerialPickerId, setOpenSerialPickerId] = useState<string | null>(null);
+  const [selectedProjectForQuote, setSelectedProjectForQuote] = useState<string>('');
 
   // Document Generator State
   const [templateFile, setTemplateFile] = useState<File | null>(null);
@@ -75,13 +95,14 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
   // State for alternatives dropdown
   const [showAlternatives, setShowAlternatives] = useState(false);
   const [showBatteryAlternatives, setShowBatteryAlternatives] = useState(false);
+  const [showPanelAlternatives, setShowPanelAlternatives] = useState(false);
 
   // Selected inverter, panel and battery state
   const [selectedInverterId, setSelectedInverterId] = useState<string | null>(null);
   const [selectedPanelId, setSelectedPanelId] = useState<string | null>(null);
   const [selectedBatteryId, setSelectedBatteryId] = useState<string | null>(null);
 
-  // Archive projects state
+  // Saved projects state
   const [archivedProjects, setArchivedProjects] = useState<ArchivedProject[]>([]);
   
   // Missing state variables
@@ -95,12 +116,22 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
   
   // Image preview modal state
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const [previewImageIndex, setPreviewImageIndex] = useState<number>(0);
+  
+  // Document preview and edit modals
+  const [previewDoc, setPreviewDoc] = useState<any>(null);
+  const [editingDoc, setEditingDoc] = useState<any>(null);
 // Confirm Dialog State
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean;
     title: string;
     message: string;
+    confirmLabel?: string;
+    cancelLabel?: string;
+    thirdButtonLabel?: string;
     onConfirm: () => void;
+    onCancel?: () => void;
+    onThirdButton?: () => void;
     variant?: 'danger' | 'warning' | 'info';
   }>({
     isOpen: false,
@@ -123,6 +154,12 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
       setSelectedTemplateId('');
       setSelectedQuoteForGen('');
       setDocType('CI');
+      
+      // Restore selected items
+      setSelectedInverterId(selectedClient.needs?.selectedInverterId || null);
+      setSelectedBatteryId(selectedClient.needs?.selectedBatteryId || null);
+      setSelectedPanelId(selectedClient.needs?.panelStockItemId || null);
+      setSelectedPanelQty(selectedClient.needs?.panelCount || 0);
       setDocInput('');
       setUploadFile(null);
     }
@@ -342,21 +379,19 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
   }, [editingClient?.needs?.inverterKw, editingClient?.needs?.connectionType, inventory]);
 
   const suggestedBatteries = useMemo(() => {
-    if (!editingClient?.needs?.inverterKw) return [];
-    const storageType = editingClient.needs.inverterKw ? inventory.find(i => 
-      i.category === Category.INVERTERS && 
-      Math.abs(i.inverterPowerKw || 0 - editingClient.needs.inverterKw!) <= 2 &&
-      i.inverterStorageType
-    )?.inverterStorageType : null;
+    if (!editingClient?.needs?.selectedInverterId) return [];
+    
+    // Get the selected inverter from inventory
+    const selectedInverter = inventory.find(i => i.id === editingClient.needs.selectedInverterId);
+    if (!selectedInverter?.inverterStorageType) return [];
 
-    if (!storageType) return [];
-
+    // Filter batteries by matching storage type
     return inventory.filter(item => {
       if (item.category !== Category.BATTERIES) return false;
-      if (item.batteryType === storageType && item.quantity > 0) return true;
+      if (item.batteryType === selectedInverter.inverterStorageType && item.quantity > 0) return true;
       return false;
     });
-  }, [editingClient?.needs?.inverterKw, inventory]);
+  }, [editingClient?.needs?.selectedInverterId, inventory]);
 
   const handleAddNote = () => {
     if (!editingClient || !newNote.trim()) return;
@@ -397,7 +432,7 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
     const internalId = editingClient.internalId || 'NO_ID';
     const typeLabel = docType;
     let generatedName = `[${internalId}] ${typeLabel} ${editingClient.name}`;
-    let description = '';
+    let description = docDescription.trim();
     
     // Map docType to valid FileSystem types
     let fsType: 'CI' | 'CF' | 'Fact' | 'Other' = 'Other';
@@ -405,13 +440,12 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
     else if (docType === 'CF') fsType = 'CF';
     else if (docType === 'Factura') {
       fsType = 'Fact';
-      if (docInput.trim()) description = `POD: ${docInput}`;
+      if (docInput.trim()) description = description ? `${description} - POD: ${docInput}` : `POD: ${docInput}`;
     } else if (docType === 'CUI') {
       fsType = 'Other';
       generatedName = `[${internalId}] CUI ${editingClient.name}`;
     } else if (docType === 'Other' && docInput.trim()) {
       generatedName = `[${internalId}] ${docInput.trim()} ${editingClient.name}`;
-      description = docInput.trim(); 
     }
     
     try {
@@ -423,23 +457,36 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
       setEditingClient(updatedClient);
       setUploadFile(null);
       setDocInput('');
+      setDocDescription('');
       setDocType('CI');
     } catch (error) { console.error(error); alert("Failed to upload document"); }
   };
 
   const handleDeleteDocument = (docId: string) => {
-    if (!editingClient) return;
+    console.log('handleDeleteDocument called with docId:', docId);
+    console.log('Current editingClient:', editingClient);
+    console.log('Current documents:', editingClient?.documents);
+    
+    if (!editingClient) {
+      console.log('No editingClient - aborting delete');
+      return;
+    }
+    
     setConfirmDialog({
       isOpen: true,
       title: 'Delete Document',
       message: 'Are you sure you want to delete this document? This action cannot be undone.',
       variant: 'danger',
       onConfirm: () => {
+        console.log('Delete confirmed for docId:', docId);
         const updatedClient = { ...editingClient, documents: editingClient.documents?.filter(d => d.id !== docId) || [] };
+        console.log('Updated client:', updatedClient);
+        console.log('Calling onUpdateClient...');
         onUpdateClient(updatedClient);
         setSelectedClient(updatedClient);
         setEditingClient(updatedClient);
         setConfirmDialog({ ...confirmDialog, isOpen: false });
+        console.log('Delete complete');
       }
     });
   };
@@ -449,9 +496,98 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
      if (win) win.document.write(`<iframe src="${url}" frameborder="0" style="border:0; top:0px; left:0px; bottom:0px; right:0px; width:100%; height:100%;" allowfullscreen></iframe>`);
   };
 
+  const downloadDocument = (url: string, filename: string) => {
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename || 'document';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const printDocument = (url: string) => {
-    const win = window.open('', '_blank');
-    if (win) { win.document.write(`<img src="${url}" onload="window.print();window.close()" />`); win.focus(); }
+    // Simple approach: open in new window with print-ready content
+    const printWindow = window.open('', '_blank', 'width=800,height=600');
+    if (!printWindow) {
+      alert('Please allow pop-ups to print documents');
+      return;
+    }
+    
+    const isImage = url.includes('data:image') || url.match(/\.(jpg|jpeg|png|gif|webp)$/i);
+    const isPdf = url.includes('data:application/pdf') || url.toLowerCase().endsWith('.pdf');
+    
+    if (isPdf) {
+      printWindow.document.write(`
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>Print PDF</title>
+            <style>
+              body { margin: 0; padding: 0; }
+              iframe { width: 100vw; height: 100vh; border: none; }
+            </style>
+          </head>
+          <body>
+            <iframe src="${url}" onload="setTimeout(() => { this.contentWindow.print(); }, 1000);"></iframe>
+          </body>
+        </html>
+      `);
+    } else if (isImage) {
+      printWindow.document.write(`
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>Print Image</title>
+            <style>
+              body { margin: 0; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+              img { max-width: 100%; height: auto; }
+            </style>
+          </head>
+          <body>
+            <img src="${url}" onload="setTimeout(() => { window.print(); }, 500);" />
+          </body>
+        </html>
+      `);
+    } else if (url.includes('data:text')) {
+      const textContent = atob(url.split(',')[1]);
+      printWindow.document.write(`
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>Print Document</title>
+            <style>
+              body { margin: 20px; font-family: monospace; white-space: pre-wrap; }
+            </style>
+          </head>
+          <body><pre>${textContent.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>
+          <script>setTimeout(() => { window.print(); }, 500);</script>
+          </body>
+        </html>
+      `);
+    } else {
+      printWindow.document.write(`
+        <!DOCTYPE html>
+        <html>
+          <head><title>Print</title></head>
+          <body>
+            <p>Unable to preview this file type for printing.</p>
+            <script>setTimeout(() => { window.print(); }, 500);</script>
+          </body>
+        </html>
+      `);
+    }
+    
+    printWindow.document.close();
+  };
+  
+  const handleEditDocument = () => {
+    if (!editingDoc || !editingClient) return;
+    const updatedDocs = editingClient.documents?.map(d => 
+      d.id === editingDoc.id ? editingDoc : d
+    ) || [];
+    const updated = { ...editingClient, documents: updatedDocs };
+    onUpdateClient(updated);
+    setEditingDoc(null);
   };
 
   const startCamera = async () => {
@@ -489,14 +625,32 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
   };
   */
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const newImage: ClientSiteImage = { id: Date.now().toString(), url: reader.result as string, timestamp: new Date() };
-        const currentImages = editingClient?.needs?.siteImages || [];
-        handleNeedsChange('siteImages', currentImages ? [...currentImages, newImage] : [newImage]);
-      };
-      reader.readAsDataURL(e.target.files[0]);
+    if (e.target.files && e.target.files.length > 0) {
+      const currentImages = editingClient?.needs?.siteImages || [];
+      const newImages: ClientSiteImage[] = [];
+      let processed = 0;
+      
+      Array.from(e.target.files).forEach((file, index) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          newImages.push({
+            id: `${Date.now()}_${index}`,
+            url: reader.result as string,
+            timestamp: new Date() as any,
+            label: '',
+            category: undefined
+          });
+          processed++;
+          
+          if (processed === e.target.files!.length) {
+            const updatedImages = [...currentImages, ...newImages];
+            const updated = { ...editingClient, needs: { ...editingClient.needs, siteImages: updatedImages } };
+            setEditingClient(updated);
+            onUpdateClient(updated);
+          }
+        };
+        reader.readAsDataURL(file);
+      });
     }
   };
   const handleDeleteImage = (imageId: string) => {
@@ -507,7 +661,10 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
       variant: 'danger',
       onConfirm: () => {
         const currentImages = editingClient?.needs?.siteImages || [];
-        handleNeedsChange('siteImages', currentImages.filter(img => img.id !== imageId));
+        const updatedImages = currentImages.filter(img => img.id !== imageId);
+        const updated = { ...editingClient, needs: { ...editingClient.needs, siteImages: updatedImages } };
+        setEditingClient(updated);
+        onUpdateClient(updated);
         setConfirmDialog({ ...confirmDialog, isOpen: false });
       }
     });
@@ -525,6 +682,152 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
   //   setFocusedRowId(null);
   // };
   const removeQuoteLine = (id: string) => setQuoteItems(quoteItems.filter(item => item.id !== id));
+  
+  // Function to calculate and add mounting structure components to quote
+  const addMountingStructuresToQuote = () => {
+    if (!editingClient?.needs?.panelCount) {
+      alert('Panel count not configured in Client Needs');
+      return;
+    }
+
+    const totalPanels = editingClient.needs.panelCount;
+    const roofType = editingClient.needs.roofType;
+    
+    // Determine row configuration
+    let rowConfigs: number[] = [];
+    if (rowCount === 1) {
+      rowConfigs = [totalPanels];
+    } else {
+      const totalDistributed = Object.values(rowDistribution).reduce((sum, val) => sum + val, 0);
+      if (totalDistributed === totalPanels) {
+        rowConfigs = Array.from({length: rowCount}, (_, i) => rowDistribution[i + 1] || 0);
+      } else {
+        alert('Please complete row distribution in Client Needs before adding mounting structures');
+        return;
+      }
+    }
+
+    if (rowConfigs.length === 0 || rowConfigs.some(c => c === 0)) {
+      alert('Please configure row distribution in Client Needs');
+      return;
+    }
+
+    // Calculate components
+    const numRows = rowConfigs.length;
+    const endClamps = numRows * 4;
+    const midClamps = rowConfigs.reduce((sum, panelsInRow) => sum + (panelsInRow - 1) * 2, 0);
+    
+    // Rail calculations
+    const selectedPanel = editingClient.needs.panelStockItemId 
+      ? inventory.find(i => i.id === editingClient.needs.panelStockItemId) 
+      : null;
+    const panelWidth = selectedPanel?.panelWidth || 1.134;
+    const maxPanelsInRow = Math.max(...rowConfigs);
+    const railLengthPerRow = maxPanelsInRow * panelWidth;
+    const railLengthWithWaste = railLengthPerRow * 1.1;
+    const railsPerRow = 2;
+    const sectionsPerRail = Math.ceil(railLengthWithWaste / 6);
+    const railsOf6m = sectionsPerRail * numRows * railsPerRow;
+    const combinersPerRail = sectionsPerRail > 1 ? sectionsPerRail - 1 : 0;
+    const totalCombiners = combinersPerRail * numRows * railsPerRow;
+    
+    // Roof attachments
+    let attachmentType = 'Roof Attachments (Hooks/Bolts)';
+    let attachmentsPerPanel = 4;
+    
+    if (roofType === 'Tigla ceramica' || roofType === 'Tigla metalica') {
+      attachmentType = 'Tile Hooks';
+      attachmentsPerPanel = 5;
+    } else if (roofType === 'Tabla' || roofType === 'Tabla ondulata' || roofType === 'Tabla cutata') {
+      attachmentType = 'Hanger Bolts';
+      attachmentsPerPanel = 4;
+    } else if (roofType === 'Panou sandwich') {
+      attachmentType = 'Sandwich Panel Bolts';
+      attachmentsPerPanel = 4;
+    }
+    
+    const totalAttachments = totalPanels * attachmentsPerPanel;
+
+    // Find matching items from inventory for pricing
+    const findMountingItem = (name: string, category: Category = Category.MOUNTING) => {
+      return inventory.find(i => 
+        i.category === category && 
+        i.name.toLowerCase().includes(name.toLowerCase())
+      );
+    };
+
+    // Create line items for mounting structures
+    const mountingItems: QuoteLineItem[] = [];
+    const timestamp = Date.now();
+
+    // End Clamps
+    const endClampItem = findMountingItem('end clamp');
+    mountingItems.push({
+      id: `${timestamp}-end-clamps`,
+      inventoryItemId: endClampItem?.id,
+      description: endClampItem ? `${endClampItem.name} (End Clamps)` : 'End Clamps',
+      unit: 'pcs',
+      quantity: endClamps,
+      netPrice: endClampItem?.sellPrice || 0
+    });
+
+    // Mid Clamps
+    const midClampItem = findMountingItem('mid clamp');
+    mountingItems.push({
+      id: `${timestamp}-mid-clamps`,
+      inventoryItemId: midClampItem?.id,
+      description: midClampItem ? `${midClampItem.name} (Mid Clamps)` : 'Mid Clamps',
+      unit: 'pcs',
+      quantity: midClamps,
+      netPrice: midClampItem?.sellPrice || 0
+    });
+
+    // Rails
+    const railItem = findMountingItem('rail');
+    mountingItems.push({
+      id: `${timestamp}-rails`,
+      inventoryItemId: railItem?.id,
+      description: railItem ? `${railItem.name} (6m Rails)` : 'Mounting Rails (6m)',
+      unit: 'pcs',
+      quantity: railsOf6m,
+      netPrice: railItem?.sellPrice || 0
+    });
+
+    // Combiners
+    if (totalCombiners > 0) {
+      const combinerItem = findMountingItem('combiner') || findMountingItem('connector');
+      mountingItems.push({
+        id: `${timestamp}-combiners`,
+        inventoryItemId: combinerItem?.id,
+        description: combinerItem ? `${combinerItem.name} (Rail Combiners)` : 'Rail Combiners/Connectors',
+        unit: 'pcs',
+        quantity: totalCombiners,
+        netPrice: combinerItem?.sellPrice || 0
+      });
+    }
+
+    // Roof Attachments
+    const attachmentItem = findMountingItem(attachmentType);
+    mountingItems.push({
+      id: `${timestamp}-attachments`,
+      inventoryItemId: attachmentItem?.id,
+      description: attachmentItem ? `${attachmentItem.name}` : attachmentType,
+      unit: 'pcs',
+      quantity: totalAttachments,
+      netPrice: attachmentItem?.sellPrice || 0
+    });
+
+    // Add all mounting items to quote
+    setQuoteItems([...quoteItems, ...mountingItems]);
+    
+    // Show confirmation
+    const missingPrices = mountingItems.filter(i => i.netPrice === 0).length;
+    if (missingPrices > 0) {
+      alert(`Mounting structures added! Note: ${missingPrices} item(s) have no price set. Please update prices manually or add the items to inventory.`);
+    } else {
+      alert('Mounting structures added successfully!');
+    }
+  };
   // const toggleQuoteSerialNumber = (itemId: string, serial: string) => {
   //   setQuoteItems(prevItems => prevItems.map(item => {
   //     if (item.id !== itemId) return item;
@@ -539,7 +842,12 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
     const totalGross = subtotalNet + vatTotal;
     return { subtotalNet, vatTotal, totalGross };
   }, [quoteItems]);
-  const handleNewQuoteClick = () => { setQuoteItems([]); setQuoteProjectName(''); setEditingQuoteId(null); };
+  const handleNewQuoteClick = () => { 
+    setQuoteItems([]); 
+    setQuoteProjectName(''); 
+    setEditingQuoteId(null);
+    setSelectedProjectForQuote('');
+  };
   const handleLoadQuote = (quote: Quote) => {
     setQuoteProjectName(quote.title || '');
     setQuoteItems(quote.items.map(i => ({...i, selectedSerialNumbers: i.selectedSerialNumbers || []})));
@@ -704,8 +1012,7 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
               { id: 'DATA', label: 'Client Data', icon: FileText },
               { id: 'NEEDS', label: 'Clients Need', icon: Zap },
               { id: 'DOCUMENTS', label: 'File Manager', icon: FolderOpen },
-              { id: 'QUOTES', label: 'Client Quotes', icon: FileText },
-              { id: 'DOC_GEN', label: 'Doc Generator', icon: FileCog }
+              { id: 'QUOTES', label: 'Client Quotes', icon: ClipboardList }
             ].map(tab => (
               <button key={tab.id} onClick={() => setActiveTab(tab.id as DetailTab)} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all text-left ${activeTab === tab.id ? 'bg-amber-500/10 text-amber-500 border border-amber-500/20' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}>
                 <tab.icon size={18} /> <span className="font-medium">{tab.label}</span>
@@ -785,6 +1092,9 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                     <h3 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2"><FolderOpen size={16} className="text-amber-500" />Project Archive</h3>
                     <button 
                       onClick={async () => {
+                        console.log('Saving project - editingClient.needs:', editingClient.needs);
+                        console.log('panelStockItemId being saved:', editingClient.needs?.panelStockItemId);
+                        
                         if (!editingClient.needs?.projectName?.trim()) {
                           alert('Please enter a project name before archiving.');
                           return;
@@ -822,7 +1132,7 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                           await onUpdateClient(updatedClient);
                           setHasChanges(false);
                         } catch (err) {
-                          console.error('Failed to save archived project', err);
+                          console.error('Failed to save project', err);
                           alert('Failed to save project. Please try again.');
                         }
                       }}
@@ -832,72 +1142,208 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                     </button>
                     {archivedProjects.length > 0 && (
                       <div className="space-y-2 border-t border-slate-700 pt-4">
-                        <p className="text-xs font-bold text-slate-500 uppercase mb-3">Archived Projects</p>
-                        <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar">
-                          {archivedProjects.map(project => (
-                            <div 
-                              key={project.id}
-                              className="flex items-center justify-between bg-slate-900 p-3 rounded border border-slate-700 hover:border-amber-500/50 transition-all cursor-pointer group"
-                            >
-                              <div className="flex-1 min-w-0">
-                                <p className="text-white font-bold text-sm truncate">{project.projectName}</p>
-                                <p className="text-xs text-slate-500">{new Date(project.archivedAt).toLocaleDateString()}</p>
-                              </div>
-                              <div className="flex gap-2 ml-2 pointer-events-auto">
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.preventDefault();
-                                    e.stopPropagation();
-                                    setEditingClient({ ...editingClient, needs: JSON.parse(JSON.stringify(project.data)) });
-                                    setTempDescription(project.data.description || '');
-                                    setHasChanges(true);
-                                  }}
-                                  className="bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 px-3 py-1 rounded text-xs font-bold transition-colors whitespace-nowrap"
-                                >
-                                  Load
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.preventDefault();
-                                    e.stopPropagation();
-                                    if (!editingClient) return;
-                                    const projectId = project.id;
-                                    const projectName = project.projectName;
+                        <p className="text-xs font-bold text-slate-500 uppercase mb-3">Saved Projects</p>
+                        <div className="space-y-2 max-h-64 overflow-y-auto custom-scrollbar">
+                          {archivedProjects.map(project => {
+                            const isCurrent = editingClient.needs?.projectName === project.projectName;
+                            return (
+                              <div 
+                                key={project.id}
+                                className={`p-3 rounded border transition-all cursor-pointer group ${
+                                  isCurrent
+                                    ? 'bg-emerald-500/10 border-emerald-500/50'
+                                    : 'bg-slate-900 border-slate-700 hover:border-amber-500/50'
+                                }`}
+                                onClick={() => {
+                                  // If clicking on the currently loaded project, unload it
+                                  if (isCurrent) {
+                                    // Check if there are unsaved changes
+                                    if (hasChanges) {
+                                      setConfirmDialog({
+                                        isOpen: true,
+                                        title: 'Unsaved Changes',
+                                        message: 'You have unsaved changes. Do you want to save before unloading this project?',
+                                        variant: 'warning',
+                                        confirmLabel: 'Save',
+                                        thirdButtonLabel: "Don't Save",
+                                        cancelLabel: 'Cancel',
+                                        onConfirm: async () => {
+                                          // Save changes first
+                                          try {
+                                            const updatedClient = { ...editingClient };
+                                            await onUpdateClient(updatedClient);
+                                            setHasChanges(false);
+                                            
+                                            // Then clear the needs data
+                                            const clearedNeeds = {
+                                              description: '',
+                                              projectName: '',
+                                              connectionType: undefined,
+                                              roofType: undefined,
+                                              inverterKw: undefined,
+                                              selectedInverterId: undefined,
+                                              batteryKwh: undefined,
+                                              selectedBatteryId: undefined,
+                                              panelSizeType: undefined,
+                                              panelStockItemId: undefined,
+                                              panelKw: undefined,
+                                              panelCount: undefined,
+                                              storage: undefined,
+                                              technicalNotes: undefined,
+                                              siteImages: []
+                                            };
+                                            setEditingClient({ ...editingClient, needs: clearedNeeds });
+                                            setTempDescription('');
+                                            // Reset selection states
+                                            setSelectedInverterId(null);
+                                            setSelectedBatteryId(null);
+                                            setSelectedPanelId(null);
+                                            setConfirmDialog({ isOpen: false, title: '', message: '', onConfirm: () => {} });
+                                          } catch (err) {
+                                            console.error('Failed to save before unloading', err);
+                                            alert('Failed to save changes. Please try again.');
+                                          }
+                                        },
+                                        onThirdButton: () => {
+                                          // Don't save, just clear the data
+                                          const clearedNeeds = {
+                                            description: '',
+                                            projectName: '',
+                                            connectionType: undefined,
+                                            roofType: undefined,
+                                            inverterKw: undefined,
+                                            selectedInverterId: undefined,
+                                            batteryKwh: undefined,
+                                            selectedBatteryId: undefined,
+                                            panelSizeType: undefined,
+                                            panelStockItemId: undefined,
+                                            panelKw: undefined,
+                                            panelCount: undefined,
+                                            storage: undefined,
+                                            technicalNotes: undefined,
+                                            siteImages: []
+                                          };
+                                          setEditingClient({ ...editingClient, needs: clearedNeeds });
+                                          setTempDescription('');
+                                          setHasChanges(false);
+                                          // Reset selection states
+                                          setSelectedInverterId(null);
+                                          setSelectedBatteryId(null);
+                                          setSelectedPanelId(null);
+                                          setConfirmDialog({ isOpen: false, title: '', message: '', onConfirm: () => {} });
+                                        },
+                                        onCancel: () => {
+                                          // Cancel, do nothing
+                                          setConfirmDialog({ isOpen: false, title: '', message: '', onConfirm: () => {} });
+                                        }
+                                      });
+                                      return;
+                                    }
                                     
-                                    setConfirmDialog({
-                                      isOpen: true,
-                                      title: 'Delete Archived Project',
-                                      message: `Are you sure you want to delete archived project "${projectName}"? This action cannot be undone.`,
-                                      variant: 'danger',
-                                      onConfirm: () => {
-                                        const updated = archivedProjects.filter(p => p.id !== projectId);
-                                        const updatedClient = {
-                                          ...editingClient,
-                                          archivedProjects: updated
-                                        };
+                                    // No changes, just clear the data
+                                    const clearedNeeds = {
+                                      description: '',
+                                      projectName: '',
+                                      connectionType: undefined,
+                                      roofType: undefined,
+                                      inverterKw: undefined,
+                                      selectedInverterId: undefined,
+                                      batteryKwh: undefined,
+                                      selectedBatteryId: undefined,
+                                      panelSizeType: undefined,
+                                      panelStockItemId: undefined,
+                                      panelKw: undefined,
+                                      panelCount: undefined,
+                                      storage: undefined,
+                                      technicalNotes: undefined,
+                                      siteImages: []
+                                    };
+                                    setEditingClient({ ...editingClient, needs: clearedNeeds });
+                                    setTempDescription('');
+                                    // Reset selection states
+                                    setSelectedInverterId(null);
+                                    setSelectedBatteryId(null);
+                                    setSelectedPanelId(null);
+                                    return;
+                                  }
+                                  
+                                  // Not current, load the project
+                                  const loadedData = JSON.parse(JSON.stringify(project.data));
+                                  console.log('Loading project data:', loadedData);
+                                  console.log('panelStockItemId from loaded data:', loadedData.panelStockItemId);
+                                  const updatedClient = {
+                                    ...editingClient,
+                                    needs: loadedData
+                                  };
+                                  setEditingClient(updatedClient);
+                                  setTempDescription(loadedData.description || '');
+                                  // Restore selection states from loaded data
+                                  setSelectedInverterId(loadedData.selectedInverterId || null);
+                                  setSelectedBatteryId(loadedData.selectedBatteryId || null);
+                                  setSelectedPanelId(loadedData.panelStockItemId || null);
+                                  console.log('Setting selectedPanelId to:', loadedData.panelStockItemId || null);
+                                  setHasChanges(true);
+                                }}
+                              >
+                                <div className="flex items-start justify-between">
+                                  <div className="flex-1 min-w-0">
+                                    {isCurrent && (
+                                      <span className="text-emerald-400 font-bold text-xs flex items-center gap-1 mb-1">
+                                        <CheckCircle size={14} /> LOADED
+                                      </span>
+                                    )}
+                                    <p className={`font-bold text-sm truncate ${
+                                      isCurrent ? 'text-emerald-400' : 'text-white'
+                                    }`}>{project.projectName}</p>
+                                    <p className="text-xs text-slate-400 mt-1">Saved: {new Date(project.archivedAt).toLocaleDateString()}</p>
+                                    {project.data.inverterKw && (
+                                      <p className="text-xs text-slate-500 mt-1">
+                                        {project.data.inverterKw}kW Inverter • {project.data.panelKw}kW Panels
+                                      </p>
+                                    )}
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      if (!editingClient) return;
+                                      const projectId = project.id;
+                                      const projectName = project.projectName;
+                                      
+                                      setConfirmDialog({
+                                        isOpen: true,
+                                        title: 'Delete Saved Project',
+                                        message: `Are you sure you want to delete saved project "${projectName}"? This action cannot be undone.`,
+                                        variant: 'danger',
+                                        onConfirm: () => {
+                                          const updated = archivedProjects.filter(p => p.id !== projectId);
+                                          const updatedClient = {
+                                            ...editingClient,
+                                            archivedProjects: updated
+                                          };
 
-                                        setArchivedProjects(updated);
-                                        setEditingClient(updatedClient);
-                                        setSelectedClient(updatedClient);
-                                        onUpdateClient(updatedClient);
-                                        setConfirmDialog({
-                                          isOpen: false,
-                                          title: '',
-                                          message: '',
-                                          onConfirm: () => {},
-                                        });
-                                      }
-                                    });
-                                  }}
-                                  className="bg-red-500/10 hover:bg-red-500/20 text-red-400 px-3 py-1 rounded text-xs font-bold transition-colors whitespace-nowrap"
-                                >
-                                  Delete
-                                </button>
+                                          setArchivedProjects(updated);
+                                          setEditingClient(updatedClient);
+                                          setSelectedClient(updatedClient);
+                                          onUpdateClient(updatedClient);
+                                          setConfirmDialog({
+                                            isOpen: false,
+                                            title: '',
+                                            message: '',
+                                            onConfirm: () => {},
+                                          });
+                                        }
+                                      });
+                                    }}
+                                    className="opacity-0 group-hover:opacity-100 transition-opacity bg-red-500/10 hover:bg-red-500/20 text-red-400 p-2 rounded text-xs"
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                </div>
                               </div>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
                     )}
@@ -940,7 +1386,12 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                               <div 
                                 key={inv.id}
                                 className="bg-slate-900 p-4 rounded-lg border border-slate-700 hover:border-emerald-500/50 cursor-pointer transition-all"
-                                onClick={() => setSelectedInverterId(inv.id)}
+                                onClick={() => {
+                                  setSelectedInverterId(inv.id);
+                                  handleNeedsChange('selectedInverterId', inv.id);
+                                  const updated = { ...editingClient, needs: { ...editingClient.needs, selectedInverterId: inv.id } };
+                                  onUpdateClient(updated);
+                                }}
                               >
                                 <div className="flex justify-between items-start">
                                   <div className="flex-1">
@@ -1042,7 +1493,12 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                                   </div>
                                   <button 
                                     type="button"
-                                    onClick={() => setSelectedInverterId(null)}
+                                    onClick={() => {
+                                      setSelectedInverterId(null);
+                                      handleNeedsChange('selectedInverterId', undefined);
+                                      const updated = { ...editingClient, needs: { ...editingClient.needs, selectedInverterId: undefined } };
+                                      onUpdateClient(updated);
+                                    }}
                                     className="text-slate-400 hover:text-white transition-colors"
                                   >
                                     <X size={18} />
@@ -1113,7 +1569,7 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                               </div>
                               <div className="p-4 overflow-y-auto custom-scrollbar space-y-2">
                                 {inventory.filter(i => i.category === Category.INVERTERS).map(inv => {
-                                  const isCurrentSelection = inv.id === selectedInverterId;
+                                  const isCurrentSelection = inv.id === selectedInverterId || editingClient.needs?.selectedInverterId === inv.id;
                                   const matchesConnection = editingClient.needs?.connectionType ? inv.inverterConnectionType === editingClient.needs.connectionType : true;
                                   const matchesPower = editingClient.needs?.inverterKw ? Math.abs((inv.inverterPowerKw || 0) - editingClient.needs.inverterKw) <= 2 : true;
                                   const isPerfectMatch = matchesConnection && matchesPower;
@@ -1133,6 +1589,9 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                                       }`}
                                       onClick={() => {
                                         setSelectedInverterId(inv.id);
+                                        handleNeedsChange('selectedInverterId', inv.id);
+                                        const updated = { ...editingClient, needs: { ...editingClient.needs, selectedInverterId: inv.id } };
+                                        onUpdateClient(updated);
                                         setShowAlternatives(false);
                                       }}
                                     >
@@ -1200,9 +1659,12 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                         className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500" 
                         placeholder="e.g. 10" 
                       />
+                      {(!editingClient.needs?.batteryKwh || editingClient.needs?.batteryKwh === 0) && (
+                        <p className="text-xs text-slate-500 mt-2 italic">Leave empty if you don't want a battery</p>
+                      )}
                     </div>
 
-                    {editingClient.needs?.batteryKwh && selectedInverterId && (() => {
+                    {!!(editingClient.needs?.batteryKwh && editingClient.needs.batteryKwh > 0 && selectedInverterId) && (() => {
                       const selectedInv = inventory.find(i => i.id === selectedInverterId && i.category === Category.INVERTERS);
                       if (!selectedInv?.inverterStorageType) return null;
 
@@ -1233,7 +1695,12 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                                 <div 
                                   key={bat.id}
                                   className="bg-slate-900 p-4 rounded-lg border border-slate-700 hover:border-emerald-500/50 cursor-pointer transition-all"
-                                  onClick={() => setSelectedBatteryId(bat.id)}
+                                  onClick={() => {
+                                    setSelectedBatteryId(bat.id);
+                                    handleNeedsChange('selectedBatteryId', bat.id);
+                                    const updated = { ...editingClient, needs: { ...editingClient.needs, selectedBatteryId: bat.id } };
+                                    onUpdateClient(updated);
+                                  }}
                                 >
                                   <div className="flex justify-between items-start">
                                     <div className="flex-1">
@@ -1334,7 +1801,12 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                                     </div>
                                     <button 
                                       type="button"
-                                      onClick={() => setSelectedBatteryId(null)}
+                                      onClick={() => {
+                                        setSelectedBatteryId(null);
+                                        handleNeedsChange('selectedBatteryId', undefined);
+                                        const updated = { ...editingClient, needs: { ...editingClient.needs, selectedBatteryId: undefined } };
+                                        onUpdateClient(updated);
+                                      }}
                                       className="text-slate-400 hover:text-white transition-colors"
                                     >
                                       <X size={18} />
@@ -1405,7 +1877,7 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                                 </div>
                                 <div className="p-4 overflow-y-auto custom-scrollbar space-y-2">
                                   {inventory.filter(i => i.category === Category.BATTERIES).map(bat => {
-                                    const isCurrentSelection = bat.id === selectedBatteryId;
+                                    const isCurrentSelection = bat.id === selectedBatteryId || editingClient.needs?.selectedBatteryId === bat.id;
                                     const matchesType = bat.batteryType === batteryType;
                                     const matchesCapacity = Math.abs((bat.batteryPowerKwh || 0) - targetCapacity) <= 3;
                                     const isPerfectMatch = matchesType && matchesCapacity;
@@ -1425,6 +1897,9 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                                         }`}
                                         onClick={() => {
                                           setSelectedBatteryId(bat.id);
+                                          handleNeedsChange('selectedBatteryId', bat.id);
+                                          const updated = { ...editingClient, needs: { ...editingClient.needs, selectedBatteryId: bat.id } };
+                                          onUpdateClient(updated);
                                           setShowBatteryAlternatives(false);
                                         }}
                                       >
@@ -1471,9 +1946,10 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                  </section>
 
                  <section className="bg-slate-800 p-6 rounded-xl border border-slate-700">
-                    <h3 className="text-sm font-bold text-slate-300 mb-6 flex items-center gap-2"><Package size={16} className="text-amber-500" />Panels Calculator</h3>
-                    <div className="space-y-6">
-                      {/* Input: Total Power */}
+                    <h3 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2"><Package size={16} className="text-amber-500" />Panels Calculator</h3>
+                    
+                    {/* Total Power Input */}
+                    <div className="space-y-4">
                       <div>
                         <label className="text-xs font-bold text-slate-500 uppercase mb-2 block">Total Power Required (kW)</label>
                         <input 
@@ -1486,96 +1962,174 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                         />
                       </div>
 
-                      {/* Panel Suggestions */}
-                      {editingClient.needs?.panelKw && editingClient.needs.panelKw > 0 && (
-                        <div className="border-t border-slate-700 pt-4">
-                          <p className="text-xs text-slate-400 font-bold mb-3">💡 Panel Combinations Available:</p>
-                          <div className="space-y-2">
-                            {inventory
-                              .filter(i => i.category === Category.PANELS && i.powerW && i.powerW > 0)
-                              .map(panel => {
-                                const targetWatts = editingClient.needs!.panelKw! * 1000; // Convert kW to W
-                                const piecesNeeded = Math.ceil(targetWatts / panel.powerW!);
-                                const actualPower = (piecesNeeded * panel.powerW!) / 1000; // Convert back to kW
-                                const isSelected = selectedPanelId === panel.id;
-                                const stockQuantity = panel.quantity || 0;
-                                const isOutOfStock = stockQuantity === 0;
-                                const isLowStock = !isOutOfStock && stockQuantity < piecesNeeded;
-                                
-                                return (
-                                  <div 
-                                    key={panel.id} 
-                                    className={`p-3 rounded border transition-all cursor-pointer ${
-                                      isSelected 
-                                        ? 'bg-emerald-500/10 border-emerald-500/50' 
-                                        : isOutOfStock
-                                        ? 'bg-slate-900 border-red-500/30 hover:border-red-500/50'
-                                        : isLowStock
-                                        ? 'bg-slate-900 border-yellow-500/30 hover:border-yellow-500/50'
-                                        : 'bg-slate-900 border-slate-700 hover:border-amber-500/50'
-                                    }`}
-                                    onClick={() => {
-                                      setSelectedPanelId(panel.id);
-                                      setSelectedPanelQty(piecesNeeded);
-                                      handleNeedsChange('panelStockItemId', panel.id);
-                                      handleNeedsChange('panelCount', piecesNeeded);
-                                    }}
-                                  >
-                                    <div className="flex-1 space-y-2">
-                                      <div className="flex items-center justify-between">
-                                        <div>
-                                          {isSelected && (
-                                            <span className="text-emerald-400 font-bold text-xs flex items-center gap-1 mb-1">
-                                              <CheckCircle size={14} /> SELECTED PANELS
-                                            </span>
-                                          )}
-                                          <p className={`font-bold text-sm ${isSelected ? 'text-emerald-400' : 'text-white'}`}>{panel.name}</p>
-                                          <p className="text-xs text-slate-400">{panel.powerW}W • {piecesNeeded} pieces needed • {actualPower.toFixed(2)}kW total</p>
-                                        </div>
-                                        <div className="text-right">
-                                          <p className={`text-xs font-bold ${
-                                            isOutOfStock ? 'text-red-400' : isLowStock ? 'text-yellow-400' : 'text-emerald-400'
-                                          }`}>
-                                            {stockQuantity} in stock
-                                          </p>
-                                          <p className="text-xs text-slate-400">{panel.sellPrice} RON</p>
-                                        </div>
-                                      </div>
-                                      
-                                      {isOutOfStock && (
-                                        <div className="p-2 bg-red-500/10 border border-red-500/50 rounded">
-                                          <div className="flex items-start gap-2">
-                                            <AlertCircle size={12} className="text-red-400 flex-shrink-0 mt-0.5" />
-                                            <p className="text-xs text-red-300 font-bold">Out of stock! Cannot fulfill order.</p>
-                                          </div>
-                                        </div>
-                                      )}
-                                      
-                                      {isLowStock && (
-                                        <div className="p-2 bg-yellow-500/10 border border-yellow-500/50 rounded">
-                                          <div className="flex items-start gap-2">
-                                            <AlertCircle size={12} className="text-yellow-400 flex-shrink-0 mt-0.5" />
-                                            <p className="text-xs text-yellow-300 font-bold">
-                                              Low stock! Need {piecesNeeded} but only {stockQuantity} available. Short by {piecesNeeded - stockQuantity} panels.
-                                            </p>
-                                          </div>
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
-                                );
-                              })
-                            }
-                            {inventory.filter(i => i.category === Category.PANELS && i.powerW && i.powerW > 0).length === 0 && (
-                              <div className="text-center py-4 text-slate-500 text-sm italic">No solar panels in inventory</div>
-                            )}
-                          </div>
-                        </div>
+                      {/* Browse button - always available */}
+                      {!selectedPanelId && !editingClient.needs?.panelStockItemId && (!editingClient.needs?.panelKw || editingClient.needs.panelKw === 0) && (
+                        <button 
+                          type="button"
+                          onClick={() => setShowPanelAlternatives(true)}
+                          className="w-full px-4 py-3 bg-slate-900 border border-amber-500/50 hover:border-amber-500 text-amber-400 hover:text-amber-300 font-bold rounded-lg transition-colors"
+                        >
+                          Browse All Available Panels
+                        </button>
                       )}
 
-                      {/* Manual Pieces Input */}
+                      {/* Suggestions or browse button when power is entered */}
+                      {editingClient.needs?.panelKw && editingClient.needs.panelKw > 0 && (() => {
+                        const targetWatts = editingClient.needs.panelKw * 1000;
+                        const availablePanels = inventory.filter(i => i.category === Category.PANELS && i.powerW && i.powerW > 0);
+                        
+                        // Find best match
+                        const suggestions = availablePanels
+                          .map(panel => {
+                            const piecesNeeded = Math.ceil(targetWatts / panel.powerW!);
+                            const actualPower = (piecesNeeded * panel.powerW!) / 1000;
+                            const stockQuantity = panel.quantity || 0;
+                            const isInStock = stockQuantity >= piecesNeeded;
+                            return { panel, piecesNeeded, actualPower, stockQuantity, isInStock };
+                          })
+                          .filter(s => s.isInStock)
+                          .sort((a, b) => Math.abs(a.actualPower - editingClient.needs!.panelKw!) - Math.abs(b.actualPower - editingClient.needs!.panelKw!))
+                          .slice(0, 3);
+
+                        // Show selected panel if exists
+                        if (!selectedPanelId && !editingClient.needs?.panelStockItemId && availablePanels.length === 0) {
+                          return (
+                            <div className="p-4 bg-slate-900 border border-slate-700 rounded-lg text-center text-slate-500">
+                              <p className="text-sm">No panels available in inventory</p>
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <div className="space-y-3">
+                            {/* Show suggestions if no selection */}
+                            {!selectedPanelId && !editingClient.needs?.panelStockItemId && suggestions.length > 0 && (
+                              <div className="p-4 bg-emerald-500/5 border border-emerald-500/30 rounded-lg">
+                                <p className="text-xs text-emerald-400 font-bold mb-3 flex items-center gap-1">
+                                  💡 Recommended Panel Combinations:
+                                </p>
+                                <div className="space-y-2">
+                                  {suggestions.map(({ panel, piecesNeeded, actualPower }) => (
+                                    <div key={panel.id} className="text-xs text-emerald-300">
+                                      • <span className="font-bold">{panel.name}</span> - {piecesNeeded} pieces = {actualPower.toFixed(2)}kW
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Show browse button */}
+                            <button 
+                              type="button"
+                              onClick={() => setShowPanelAlternatives(true)}
+                              className={`w-full px-4 py-3 border font-bold rounded-lg transition-colors ${
+                                selectedPanelId || editingClient.needs?.panelStockItemId
+                                  ? 'bg-slate-900 border-slate-600 hover:border-amber-500 text-slate-400 hover:text-amber-400'
+                                  : 'bg-slate-900 border-amber-500/50 hover:border-amber-500 text-amber-400 hover:text-amber-300'
+                              }`}
+                            >
+                              {selectedPanelId || editingClient.needs?.panelStockItemId ? 'Choose Different Panels' : 'Browse All Available Panels'}
+                            </button>
+                          </div>
+                        );
+                      })()}
+
+                      {/* Selected Panel Display - Always show if panel is selected */}
+                      {(selectedPanelId || editingClient.needs?.panelStockItemId) && (() => {
+                        const panelId = selectedPanelId || editingClient.needs?.panelStockItemId;
+                        const selected = inventory.find(i => i.id === panelId && i.category === Category.PANELS);
+                        if (!selected) return null;
+                        
+                        // Use saved panelCount if available, otherwise calculate from panelKw
+                        let piecesNeeded = editingClient.needs?.panelCount || 0;
+                        let actualPower = 0;
+                        
+                        if (editingClient.needs?.panelKw && editingClient.needs.panelKw > 0 && selected.powerW) {
+                          const targetWatts = editingClient.needs.panelKw * 1000;
+                          piecesNeeded = Math.ceil(targetWatts / selected.powerW);
+                          actualPower = (piecesNeeded * selected.powerW) / 1000;
+                        } else if (piecesNeeded > 0 && selected.powerW) {
+                          actualPower = (piecesNeeded * selected.powerW) / 1000;
+                        }
+                        
+                        const stockQuantity = selected.quantity || 0;
+                        const isOutOfStock = stockQuantity === 0;
+                        const isLowStock = !isOutOfStock && piecesNeeded > 0 && stockQuantity < piecesNeeded;
+                        
+                        return (
+                          <div className="space-y-3">
+                            <div className="p-4 rounded-lg border-2 bg-emerald-500/5 border-emerald-500/50">
+                              <div className="flex items-center gap-2 mb-3">
+                                <span className="text-emerald-400 font-bold text-sm flex items-center gap-2">
+                                  <CheckCircle size={16} /> SELECTED PANELS
+                                </span>
+                              </div>
+                              <div className="flex justify-between items-start">
+                                <div className="flex-1">
+                                  <p className="text-white font-bold">{selected.name}</p>
+                                  <p className="text-xs text-slate-400 mt-1">
+                                    {selected.powerW}W
+                                    {piecesNeeded > 0 && ` • ${piecesNeeded} pieces needed`}
+                                    {actualPower > 0 && ` • ${actualPower.toFixed(2)}kW total`}
+                                  </p>
+                                  <p className="text-sm text-emerald-400 font-bold mt-2">{selected.sellPrice} RON/piece</p>
+                                </div>
+                                <button 
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedPanelId(null);
+                                    setSelectedPanelQty(0);
+                                    handleNeedsChange('panelStockItemId', undefined);
+                                    handleNeedsChange('panelCount', undefined);
+                                    const updated = { ...editingClient, needs: { ...editingClient.needs, panelStockItemId: undefined, panelCount: undefined } };
+                                    onUpdateClient(updated);
+                                  }}
+                                  className="text-slate-400 hover:text-white transition-colors"
+                                >
+                                  <X size={18} />
+                                </button>
+                              </div>
+                              
+                              {isOutOfStock && (
+                                <div className="mt-3 p-3 bg-red-500/10 border border-red-500/50 rounded-lg">
+                                  <div className="flex items-start gap-2">
+                                    <AlertCircle size={14} className="text-red-400 flex-shrink-0 mt-0.5" />
+                                    <div className="text-xs text-red-300">
+                                      <p className="font-bold">Out of stock!</p>
+                                      <p className="mt-1">These panels are currently not available in inventory</p>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                              
+                              {isLowStock && (
+                                <div className="mt-3 p-3 bg-yellow-500/10 border border-yellow-500/50 rounded-lg">
+                                  <div className="flex items-start gap-2">
+                                    <AlertCircle size={14} className="text-yellow-400 flex-shrink-0 mt-0.5" />
+                                    <p className="text-xs text-yellow-300 font-bold">
+                                      Low stock! Need {piecesNeeded} but only {stockQuantity} available. Short by {piecesNeeded - stockQuantity} panels.
+                                    </p>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                            
+                            {editingClient.needs?.panelKw && editingClient.needs.panelKw > 0 && (
+                              <button 
+                                type="button"
+                                onClick={() => setShowPanelAlternatives(true)}
+                                className="w-full px-4 py-2 border border-slate-600 hover:border-amber-500 text-slate-400 hover:text-amber-400 font-bold rounded-lg text-sm transition-colors"
+                              >
+                                Choose Different Panels
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      {/* Manual Pieces Override */}
                       <div>
-                        <label className="text-xs font-bold text-slate-500 uppercase mb-2 block">Or Enter Pieces Manually</label>
+                        <label className="text-xs font-bold text-slate-500 uppercase mb-2 block">Manual Quantity Override</label>
                         <input 
                           type="number"
                           min="0"
@@ -1586,9 +2140,113 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                             setSelectedPanelQty(newQty);
                           }} 
                           className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500" 
-                          placeholder="Number of pieces" 
+                          placeholder="Override calculated quantity" 
                         />
                       </div>
+
+                      {/* Panel Selection Modal */}
+                      {showPanelAlternatives && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+                          <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-2xl max-h-[80vh] flex flex-col">
+                            <div className="p-4 border-b border-slate-700 flex justify-between items-center">
+                              <h3 className="text-white font-bold">All Available Panels</h3>
+                              <button 
+                                type="button"
+                                onClick={() => setShowPanelAlternatives(false)}
+                                className="text-slate-400 hover:text-white transition-colors"
+                              >
+                                <X size={20} />
+                              </button>
+                            </div>
+                            <div className="p-4 overflow-y-auto custom-scrollbar space-y-2">
+                              {inventory
+                                .filter(i => i.category === Category.PANELS && i.powerW && i.powerW > 0)
+                                .map(panel => {
+                                  const hasPowerRequirement = editingClient.needs?.panelKw && editingClient.needs.panelKw > 0;
+                                  const targetWatts = hasPowerRequirement ? editingClient.needs!.panelKw! * 1000 : 0;
+                                  const piecesNeeded = hasPowerRequirement ? Math.ceil(targetWatts / panel.powerW!) : 0;
+                                  const actualPower = hasPowerRequirement ? (piecesNeeded * panel.powerW!) / 1000 : 0;
+                                  const isCurrentSelection = panel.id === selectedPanelId || editingClient.needs?.panelStockItemId === panel.id;
+                                  const stockQuantity = panel.quantity || 0;
+                                  const isInStock = hasPowerRequirement ? stockQuantity >= piecesNeeded : stockQuantity > 0;
+                                  const isOutOfStock = stockQuantity === 0;
+                                  
+                                  return (
+                                    <div 
+                                      key={panel.id}
+                                      className={`flex items-center justify-between bg-slate-900 p-4 rounded-lg border cursor-pointer transition-all ${
+                                        isCurrentSelection 
+                                          ? 'border-emerald-500 ring-2 ring-emerald-500/20' 
+                                          : isInStock
+                                          ? 'border-emerald-500/30 hover:border-emerald-500/50' 
+                                          : isOutOfStock
+                                          ? 'border-red-500/30 hover:border-red-500/50'
+                                          : 'border-yellow-500/30 hover:border-yellow-500/50'
+                                      }`}
+                                      onClick={() => {
+                                        const hasPowerRequirement = editingClient.needs?.panelKw && editingClient.needs.panelKw > 0;
+                                        const finalPiecesNeeded = hasPowerRequirement 
+                                          ? Math.ceil((editingClient.needs!.panelKw! * 1000) / panel.powerW!) 
+                                          : 1; // Default to 1 if no power requirement
+                                        
+                                        console.log('Panel selected in modal:', panel.name, panel.id);
+                                        console.log('Setting panelStockItemId:', panel.id, 'panelCount:', finalPiecesNeeded);
+                                        setSelectedPanelId(panel.id);
+                                        setSelectedPanelQty(finalPiecesNeeded);
+                                        handleNeedsChange('panelStockItemId', panel.id);
+                                        handleNeedsChange('panelCount', finalPiecesNeeded);
+                                        const updated = { ...editingClient, needs: { ...editingClient.needs, panelStockItemId: panel.id, panelCount: finalPiecesNeeded } };
+                                        console.log('Updating client with needs:', updated.needs);
+                                        onUpdateClient(updated);
+                                        setShowPanelAlternatives(false);
+                                      }}
+                                    >
+                                      <div className="flex-1">
+                                        <div className="flex items-center gap-2">
+                                          <p className="text-white font-bold">{panel.name}</p>
+                                          {isInStock && !isCurrentSelection && (
+                                            <span className="text-xs bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded font-bold">IN STOCK</span>
+                                          )}
+                                          {isCurrentSelection && (
+                                            <span className="text-xs bg-emerald-500 text-slate-900 px-2 py-0.5 rounded font-bold">SELECTED</span>
+                                          )}
+                                          {isOutOfStock && (
+                                            <span className="text-xs bg-red-500/20 text-red-400 px-2 py-0.5 rounded font-bold">OUT OF STOCK</span>
+                                          )}
+                                          {!isInStock && !isOutOfStock && (
+                                            <span className="text-xs bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded font-bold">LOW STOCK</span>
+                                          )}
+                                        </div>
+                                        <p className="text-xs text-slate-400 mt-1">
+                                          {panel.powerW}W
+                                          {piecesNeeded > 0 && ` • ${piecesNeeded} pcs = ${actualPower.toFixed(2)}kW`}
+                                        </p>
+                                        {!isInStock && !isOutOfStock && (
+                                          <p className="text-xs text-yellow-400 mt-1 flex items-center gap-1">
+                                            <AlertCircle size={10} /> Only {stockQuantity} available, need {piecesNeeded}
+                                          </p>
+                                        )}
+                                      </div>
+                                      <div className="text-right ml-4">
+                                        <p className={`text-xs font-bold ${
+                                          isOutOfStock ? 'text-red-400' : !isInStock ? 'text-yellow-400' : 'text-emerald-400'
+                                        }`}>{stockQuantity} in stock</p>
+                                        <p className="text-sm font-bold text-emerald-400 mt-1">{panel.sellPrice} RON</p>
+                                      </div>
+                                    </div>
+                                  );
+                                })
+                              }
+                              {inventory.filter(i => i.category === Category.PANELS && i.powerW && i.powerW > 0).length === 0 && (
+                                <div className="text-center py-8 text-slate-500">
+                                  <p className="font-bold mb-1">No panels in inventory</p>
+                                  <p className="text-sm">Please add panel items to inventory first</p>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
 
                       {/* Row Configuration & Structure Calculator */}
                       {editingClient.needs?.panelCount && editingClient.needs.panelCount > 0 && (
@@ -1836,14 +2494,314 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                       )}
                     </div>
                  </section>
+
+                 {/* On-site Pictures Gallery */}
+                 <section className="bg-slate-800 p-6 rounded-xl border border-slate-700">
+                   <h3 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2">
+                     <ImageIcon size={16} className="text-amber-500" />
+                     On-site Pictures
+                   </h3>
+                   
+                   <div className="flex gap-4 mb-6">
+                     <label className="cursor-pointer bg-amber-500 hover:bg-amber-400 text-slate-900 px-4 py-2 rounded-lg font-bold text-sm flex items-center gap-2 transition-colors">
+                       <Upload size={16} /> Upload Photos
+                       <input 
+                         type="file" 
+                         accept="image/*" 
+                         multiple
+                         onChange={handleImageUpload} 
+                         className="hidden" 
+                       />
+                     </label>
+                     <button 
+                       onClick={startCamera} 
+                       className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg font-medium text-sm flex items-center gap-2 transition-colors"
+                     >
+                       <Camera size={16} /> Take Photo
+                     </button>
+                   </div>
+
+                   {(!editingClient.needs?.siteImages || editingClient.needs.siteImages.length === 0) ? (
+                     <div className="text-center py-12 text-slate-500 italic border border-slate-700 border-dashed rounded-xl">
+                       <ImageIcon size={40} className="mx-auto mb-3 text-slate-600" />
+                       <p>No pictures uploaded yet</p>
+                       <p className="text-xs mt-1">Upload photos of the installation site for installers</p>
+                     </div>
+                   ) : (
+                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                       {editingClient.needs.siteImages.map((img, idx) => (
+                         <div 
+                           key={img.id} 
+                           className="bg-slate-900 rounded-lg border border-slate-700 overflow-hidden hover:border-amber-500/50 transition-all"
+                         >
+                           {/* Image */}
+                           <div 
+                             className="relative aspect-video group cursor-pointer" 
+                             onClick={(e) => {
+                               console.log('Image clicked, URL:', img.url);
+                               setPreviewImageIndex(idx);
+                               setPreviewImageUrl(img.url);
+                             }}
+                           >
+                             <img 
+                               src={img.url} 
+                               alt={img.label || "Site photo"}
+                               className="w-full h-full object-cover" 
+                             />
+                             {/* Category Badge */}
+                             {img.category && (
+                               <span className="absolute top-2 left-2 bg-amber-500 text-slate-900 text-xs px-2 py-1 rounded font-bold shadow-lg">
+                                 {img.category}
+                               </span>
+                             )}
+                             {/* Delete Button */}
+                             <button 
+                               type="button"
+                               onClick={(e) => { 
+                                 e.stopPropagation();
+                                 console.log('Delete clicked for image:', img.id);
+                                 handleDeleteImage(img.id); 
+                               }} 
+                               className="absolute top-2 right-2 bg-red-500 hover:bg-red-600 text-white p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity shadow-lg z-10"
+                               title="Delete photo"
+                             >
+                               <Trash2 size={16} />
+                             </button>
+                             {/* Click to view hint */}
+                             <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-all flex items-center justify-center">
+                               <span className="text-white font-bold text-sm opacity-0 group-hover:opacity-100 transition-opacity">
+                                 Click to enlarge
+                               </span>
+                             </div>
+                           </div>
+                           
+                           {/* Info Section */}
+                           <div className="p-4 space-y-3">
+                             {/* Label Input */}
+                             <div>
+                               <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Description</label>
+                               <input
+                                 type="text"
+                                 value={img.label || ''}
+                                 onChange={(e) => {
+                                   const updatedImages = editingClient.needs?.siteImages?.map(i => 
+                                     i.id === img.id ? { ...i, label: e.target.value } : i
+                                   ) || [];
+                                   handleNeedsChange('siteImages', updatedImages);
+                                 }}
+                                 onBlur={() => {
+                                   const updated = { ...editingClient, needs: { ...editingClient.needs, siteImages: editingClient.needs?.siteImages } };
+                                   onUpdateClient(updated);
+                                 }}
+                                 placeholder="e.g., Main roof view, Meter location..."
+                                 className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 outline-none focus:ring-2 focus:ring-amber-500"
+                               />
+                             </div>
+                             
+                             {/* Category and Timestamp */}
+                             <div className="flex items-center gap-3">
+                               <div className="flex-1">
+                                 <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Category</label>
+                                 <select
+                                   value={img.category || ''}
+                                   onChange={(e) => {
+                                     const updatedImages = editingClient.needs?.siteImages?.map(i => 
+                                       i.id === img.id ? { ...i, category: (e.target.value || undefined) as any } : i
+                                     ) || [];
+                                     handleNeedsChange('siteImages', updatedImages);
+                                     const updated = { ...editingClient, needs: { ...editingClient.needs, siteImages: updatedImages } };
+                                     onUpdateClient(updated);
+                                   }}
+                                   className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                 >
+                                   <option value="">Select...</option>
+                                   <option value="Roof">Roof</option>
+                                   <option value="Electrical">Electrical</option>
+                                   <option value="Access">Access</option>
+                                   <option value="Obstacles">Obstacles</option>
+                                   <option value="Meter">Meter</option>
+                                   <option value="Other">Other</option>
+                                 </select>
+                               </div>
+                               <div>
+                                 <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Date</label>
+                                 <div className="text-xs text-slate-400 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2">
+                                   {new Date(img.timestamp).toLocaleDateString()}
+                                 </div>
+                               </div>
+                             </div>
+                           </div>
+                         </div>
+                       ))}
+                     </div>
+                   )}
+                 </section>
               </div>
             )}
 
             {activeTab === 'DOCUMENTS' && (
               <div className="max-w-5xl animate-in fade-in duration-300 h-full flex flex-col pb-12">
-                <div className="flex items-center justify-between mb-6"><h3 className="text-lg font-bold text-white flex items-center gap-2"><FolderOpen size={20} className="text-amber-500" />File Manager</h3></div>
-                <div className="bg-slate-800 rounded-xl border border-slate-700 p-6 mb-8"><h4 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2"><Upload size={16} /> Upload Document</h4><div className="flex flex-col md:flex-row gap-4 items-end"><div className="w-full md:w-1/4"><label className="text-xs font-bold text-slate-500 uppercase block mb-1">Type</label><select value={docType} onChange={(e) => setDocType(e.target.value)} className="w-full bg-slate-900 border border-slate-600 rounded-lg p-2.5 text-white outline-none focus:ring-1 focus:ring-amber-500">{editingClient.type === ClientType.PRIVATE ? (<><option value="CI">CI</option><option value="CF">CF</option><option value="Factura">Factura</option><option value="Other">Other</option></>) : (<><option value="CI">CI</option><option value="CUI">CUI</option><option value="Other">Other</option></>)}</select></div>{(docType === 'Factura' || docType === 'Other') && (<div className="w-full md:w-1/3"><label className="text-xs font-bold text-slate-500 uppercase block mb-1">{docType === 'Factura' ? 'POD / Description' : 'Name'}</label><input type="text" value={docInput} onChange={(e) => setDocInput(e.target.value)} placeholder="..." className="w-full bg-slate-900 border border-slate-600 rounded-lg p-2.5 text-white outline-none focus:ring-1 focus:ring-amber-500" /></div>)}<div className="flex-1 w-full"><label className="text-xs font-bold text-slate-500 uppercase block mb-1">Select File</label><input type="file" onChange={handleFileSelection} className="w-full text-sm text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-slate-700 file:text-amber-400 hover:file:bg-slate-600 transition-all" /></div><button onClick={handleUploadDocument} disabled={!uploadFile} className="bg-amber-500 hover:bg-amber-400 disabled:bg-slate-700 disabled:text-slate-500 text-slate-900 font-bold px-6 py-2.5 rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap"><Upload size={18} /> Upload</button></div></div>
-                <div className="space-y-4"><h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Attached Documents</h4><div className="grid grid-cols-1 gap-3">{editingClient.documents && editingClient.documents.length > 0 ? (editingClient.documents.slice().sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map(doc => (<div key={doc.id} className="bg-slate-800 hover:bg-slate-750 border border-slate-700 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between group transition-all gap-4"><div className="flex items-center gap-4"><div className="w-10 h-10 rounded-lg bg-slate-900 flex items-center justify-center border border-slate-600 text-blue-400 flex-shrink-0"><FileText size={20} /></div><div><h5 className="font-bold text-white text-sm">{doc.name}</h5>{doc.description && (<p className="text-xs text-amber-500 mt-0.5 font-medium">{doc.description}</p>)}<p className="text-xs text-slate-500 mt-0.5">{new Date(doc.date).toLocaleDateString()} • {doc.type}</p></div></div><div className="flex gap-2"><button onClick={() => openDocument(doc.url)} title="Preview" className="p-2 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg"><ExternalLink size={16} /></button><button onClick={() => printDocument(doc.url)} title="Print" className="p-2 text-slate-400 hover:text-blue-400 hover:bg-blue-500/10 rounded-lg"><Printer size={16} /></button><button onClick={() => handleDeleteDocument(doc.id)} title="Delete" className="p-2 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg"><Trash2 size={16} /></button></div></div>))) : (<div className="text-center py-12 text-slate-500 italic border border-slate-700 border-dashed rounded-xl">No files.</div>)}</div></div>
+                <div className="flex items-center justify-between mb-6">
+                  <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                    <FolderOpen size={20} className="text-amber-500" />
+                    File Manager
+                  </h3>
+                </div>
+
+                {/* Upload Section */}
+                <div className="bg-slate-800 rounded-xl border border-slate-700 p-6 mb-8">
+                  <h4 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2">
+                    <Upload size={16} /> Upload Document
+                  </h4>
+                  <div className="flex flex-col gap-4">
+                    <div className="flex flex-col md:flex-row gap-4 items-end">
+                      <div className="w-full md:w-1/4">
+                        <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Type</label>
+                        <select 
+                          value={docType} 
+                          onChange={(e) => setDocType(e.target.value)} 
+                          className="w-full bg-slate-900 border border-slate-600 rounded-lg p-2.5 text-white outline-none focus:ring-1 focus:ring-amber-500"
+                        >
+                          {editingClient.type === ClientType.PRIVATE ? (
+                            <>
+                              <option value="CI">CI</option>
+                              <option value="CF">CF</option>
+                              <option value="Factura">Factura</option>
+                              <option value="Other">Other</option>
+                            </>
+                          ) : (
+                            <>
+                              <option value="CI">CI</option>
+                              <option value="CUI">CUI</option>
+                              <option value="Other">Other</option>
+                            </>
+                          )}
+                        </select>
+                      </div>
+
+                      {(docType === 'Factura' || docType === 'Other') && (
+                        <div className="w-full md:w-1/3">
+                          <label className="text-xs font-bold text-slate-500 uppercase block mb-1">
+                            {docType === 'Factura' ? 'POD / Number' : 'Name'}
+                          </label>
+                          <input 
+                            type="text" 
+                            value={docInput} 
+                            onChange={(e) => setDocInput(e.target.value)} 
+                            placeholder="..." 
+                            className="w-full bg-slate-900 border border-slate-600 rounded-lg p-2.5 text-white outline-none focus:ring-1 focus:ring-amber-500" 
+                          />
+                        </div>
+                      )}
+
+                      <div className="flex-1 w-full">
+                        <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Select File</label>
+                        <input 
+                          type="file" 
+                          onChange={handleFileSelection} 
+                          className="w-full text-sm text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-slate-700 file:text-amber-400 hover:file:bg-slate-600 transition-all" 
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col md:flex-row gap-4 items-end">
+                      <div className="flex-1">
+                        <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Description (Optional)</label>
+                        <input 
+                          type="text" 
+                          value={docDescription} 
+                          onChange={(e) => setDocDescription(e.target.value)} 
+                          placeholder="Additional notes or description..." 
+                          className="w-full bg-slate-900 border border-slate-600 rounded-lg p-2.5 text-white outline-none focus:ring-1 focus:ring-amber-500" 
+                        />
+                      </div>
+
+                      <button 
+                        onClick={handleUploadDocument} 
+                        disabled={!uploadFile} 
+                        className="bg-amber-500 hover:bg-amber-400 disabled:bg-slate-700 disabled:text-slate-500 text-slate-900 font-bold px-6 py-2.5 rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap"
+                      >
+                        <Upload size={18} /> Upload
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Documents List */}
+                <div className="space-y-4">
+                  <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Attached Documents</h4>
+                  <div className="grid grid-cols-1 gap-3">
+                    {editingClient.documents && editingClient.documents.length > 0 ? (
+                      editingClient.documents.slice().sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map(doc => (
+                        <div key={doc.id} className="bg-slate-800 hover:bg-slate-750 border border-slate-700 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between group transition-all gap-4">
+                          <div className="flex items-center gap-4">
+                            <div className="w-10 h-10 rounded-lg bg-slate-900 flex items-center justify-center border border-slate-600 text-blue-400 flex-shrink-0">
+                              <FileText size={20} />
+                            </div>
+                            <div>
+                              <h5 className="font-bold text-white text-sm">{doc.name}</h5>
+                              {doc.description && (
+                                <p className="text-xs text-amber-500 mt-0.5 font-medium">{doc.description}</p>
+                              )}
+                              <p className="text-xs text-slate-500 mt-0.5">
+                                {new Date(doc.date).toLocaleDateString()} • {doc.type}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                            <button 
+                              type="button" 
+                              onClick={() => setPreviewDoc(doc)} 
+                              title="Preview" 
+                              className="p-2 text-slate-400 hover:text-amber-400 hover:bg-amber-500/10 rounded-lg"
+                            >
+                              <Eye size={16} />
+                            </button>
+                            <button 
+                              type="button" 
+                              onClick={() => setEditingDoc({...doc})} 
+                              title="Edit" 
+                              className="p-2 text-slate-400 hover:text-purple-400 hover:bg-purple-500/10 rounded-lg"
+                            >
+                              <Edit2 size={16} />
+                            </button>
+                            <button 
+                              type="button" 
+                              onClick={() => downloadDocument(doc.url, doc.name)} 
+                              title="Download" 
+                              className="p-2 text-slate-400 hover:text-green-400 hover:bg-green-500/10 rounded-lg"
+                            >
+                              <Download size={16} />
+                            </button>
+                            <button 
+                              type="button" 
+                              onClick={() => printDocument(doc.url)} 
+                              title="Print" 
+                              className="p-2 text-slate-400 hover:text-blue-400 hover:bg-blue-500/10 rounded-lg"
+                            >
+                              <Printer size={16} />
+                            </button>
+                            <button 
+                              type="button" 
+                              onClick={() => {
+                                console.log('Delete button clicked for doc:', doc);
+                                handleDeleteDocument(doc.id);
+                              }} 
+                              title="Delete" 
+                              className="p-2 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-center py-12 text-slate-500 italic border border-slate-700 border-dashed rounded-xl">
+                        No files.
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             )}
 
@@ -1858,18 +2816,148 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                           <button onClick={saveClientQuote} className="px-6 py-2 text-sm bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-lg flex items-center gap-2 transition-colors shadow-lg shadow-amber-500/10"><Save size={18} /> Save</button>
                         </div>
                       </div>
-                      <div>
-                        <label className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 block">Quote Name</label>
-                        <input type="text" placeholder="..." value={quoteProjectName || editingClient.needs?.projectName || ''} onChange={(e) => setQuoteProjectName(e.target.value)} className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-lg text-white focus:ring-2 focus:ring-amber-500 outline-none" />
+
+                      {/* Quote Name Section - Simplified */}
+                      <div className="space-y-4">
+                        <div>
+                          <label className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 block">Quote Name</label>
+                          <input 
+                            type="text" 
+                            placeholder="Enter quote name..." 
+                            value={quoteProjectName} 
+                            onChange={(e) => setQuoteProjectName(e.target.value)} 
+                            className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-lg text-white focus:ring-2 focus:ring-amber-500 outline-none" 
+                          />
+                        </div>
+
+                        <div>
+                          <label className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 block">Select from Saved Project</label>
+                          <select
+                            value={selectedProjectForQuote}
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              setSelectedProjectForQuote(value);
+                              
+                              if (value === '') {
+                                // No project selected, clear quote name
+                                setQuoteProjectName('');
+                                return;
+                              } else if (value === 'current') {
+                                // Current active project
+                                setQuoteProjectName(editingClient?.needs?.projectName || '');
+                              } else {
+                                // Saved project - load its data into current needs
+                                const idx = parseInt(value.replace('archived-', ''));
+                                const project = editingClient?.archivedProjects?.[idx];
+                                if (project && editingClient) {
+                                  setQuoteProjectName(project.projectName || `Project ${idx + 1}`);
+                                  // Load the saved project data into client needs
+                                  const loadedData = JSON.parse(JSON.stringify(project.data));
+                                  const updatedClient = {
+                                    ...editingClient,
+                                    needs: loadedData
+                                  };
+                                  setEditingClient(updatedClient);
+                                  setTempDescription(loadedData.description || '');
+                                  // Restore selection states
+                                  setSelectedInverterId(loadedData.selectedInverterId || null);
+                                  setSelectedBatteryId(loadedData.selectedBatteryId || null);
+                                  setSelectedPanelId(loadedData.panelStockItemId || null);
+                                }
+                              }
+                            }}
+                            className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-amber-500 outline-none"
+                          >
+                            <option value="">-- None (Manual Quote) --</option>
+                            {editingClient?.needs?.projectName && (
+                              <option value="current">
+                                {editingClient.needs.projectName}
+                              </option>
+                            )}
+                            {editingClient?.archivedProjects?.map((project, idx) => (
+                              <option key={idx} value={`archived-${idx}`}>
+                                {project.projectName || `Project ${idx + 1}`}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
                       </div>
                    </div>
 
-                   {/* Suggestions Section */}
+                   {/* Project Summary - Show when project is selected */}
+                   {selectedProjectForQuote && (() => {
+                     const projectData = selectedProjectForQuote === 'current' 
+                       ? editingClient?.needs 
+                       : (() => {
+                           const idx = parseInt(selectedProjectForQuote.replace('archived-', ''));
+                           return editingClient?.archivedProjects?.[idx]?.data;
+                         })();
+                     
+                     if (!projectData) return null;
+                     
+                     const connectionType = projectData.connectionType || 'not specified';
+                     const inverterKw = projectData.inverterKw || 0;
+                     const batteryKwh = projectData.batteryKwh || 0;
+                     const panelKw = projectData.panelKw || 0;
+                     const roofType = projectData.roofType || 'not specified';
+                     
+                     return (
+                       <div className="bg-gradient-to-br from-amber-500/10 via-slate-800 to-slate-800 border border-amber-500/30 rounded-xl p-6">
+                         <h4 className="text-sm font-bold text-amber-400 mb-3 flex items-center gap-2">
+                           <Info size={16} /> Project Summary
+                         </h4>
+                         <p className="text-white leading-relaxed">
+                           The client needs a system for <span className="font-bold text-amber-400">{connectionType}</span> connection{inverterKw > 0 && `, ${inverterKw}kW inverter`}{batteryKwh > 0 && `, ${batteryKwh}kWh storage`}{panelKw > 0 && `, ${panelKw}kW solar panels`}. It has to be installed on a <span className="font-bold text-amber-400">{roofType}</span> roof.
+                         </p>
+                       </div>
+                     );
+                   })()}
+
+                   {/* Suggestions Section - Only show when project is selected */}
+                   {selectedProjectForQuote && (
                    <div className="space-y-6">
-                      {/* Inverter Suggestion */}
-                      {editingClient.needs?.inverterKw && suggestedInverters.length > 0 && (
+                      {/* Selected Inverter Display */}
+                      {editingClient.needs?.selectedInverterId && (() => {
+                        const selectedInv = inventory.find(i => i.id === editingClient.needs?.selectedInverterId && i.category === Category.INVERTERS);
+                        if (!selectedInv) return null;
+                        
+                        return (
+                          <div className="bg-slate-800 border border-slate-700 rounded-xl p-6">
+                            <h4 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2">
+                              <Zap size={16} className="text-amber-500" />Selected Inverter
+                            </h4>
+                            <div className="flex items-center justify-between bg-emerald-500/10 p-4 rounded-lg border border-emerald-500/50">
+                              <div className="flex-1">
+                                <p className="text-white font-bold">{selectedInv.name}</p>
+                                <p className="text-xs text-slate-400 mt-1">{selectedInv.inverterPowerKw}kW • {selectedInv.inverterConnectionType} • {selectedInv.inverterStorageType} • {selectedInv.quantity} in stock</p>
+                                <p className="text-sm text-emerald-400 font-bold mt-2">{selectedInv.sellPrice} RON</p>
+                              </div>
+                              <button
+                                onClick={() => {
+                                  const newLine: QuoteLineItem = {
+                                    id: Date.now().toString(),
+                                    inventoryItemId: selectedInv.id,
+                                    description: `${selectedInv.name} (${selectedInv.inverterPowerKw}kW)`,
+                                    unit: 'piece',
+                                    quantity: 1,
+                                    netPrice: selectedInv.sellPrice,
+                                    selectedSerialNumbers: []
+                                  };
+                                  setQuoteItems([...quoteItems, newLine]);
+                                }}
+                                className="ml-4 px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-lg text-sm transition-colors whitespace-nowrap"
+                              >
+                                Add to Quote
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      {/* Inverter Suggestion - Only if not selected */}
+                      {!editingClient.needs?.selectedInverterId && editingClient.needs?.inverterKw && suggestedInverters.length > 0 && (
                         <div className="bg-slate-800 border border-slate-700 rounded-xl p-6">
-                          <h4 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2"><Zap size={16} className="text-amber-500" />Inverter Suggestion</h4>
+                          <h4 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2"><Zap size={16} className="text-amber-500" />Inverter Suggestions</h4>
                           <div className="space-y-3">
                             {suggestedInverters.map(inv => (
                               <div key={inv.id} className="flex items-center justify-between bg-slate-900 p-4 rounded-lg border border-slate-700 hover:border-amber-500/50 transition-all">
@@ -1886,7 +2974,8 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                                       description: `${inv.name} (${inv.inverterPowerKw}kW)`,
                                       unit: 'piece',
                                       quantity: 1,
-                                      netPrice: inv.sellPrice
+                                      netPrice: inv.sellPrice,
+                                      selectedSerialNumbers: []
                                     };
                                     setQuoteItems([...quoteItems, newLine]);
                                   }}
@@ -1900,10 +2989,64 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                         </div>
                       )}
 
-                      {/* Panels Suggestion */}
-                      {editingClient.needs?.panelKw && inventory.filter(i => i.category === Category.PANELS).length > 0 && (
+                      {/* Selected Panel Display */}
+                      {editingClient.needs?.panelStockItemId && (() => {
+                        const selectedPanel = inventory.find(i => i.id === editingClient.needs?.panelStockItemId && i.category === Category.PANELS);
+                        if (!selectedPanel) return null;
+                        
+                        const panelPowerW = selectedPanel.powerW || 0;
+                        const piecesNeeded = editingClient.needs?.panelCount || 0;
+                        const totalPower = (piecesNeeded * panelPowerW) / 1000;
+                        
+                        return (
+                          <div className="bg-slate-800 border border-slate-700 rounded-xl p-6">
+                            <h4 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2">
+                              <Package size={16} className="text-amber-500" />Selected Solar Panels
+                            </h4>
+                            <div className="flex items-center justify-between bg-emerald-500/10 p-4 rounded-lg border border-emerald-500/50">
+                              <div className="flex-1">
+                                <p className="text-white font-bold">{selectedPanel.name}</p>
+                                <p className="text-xs text-slate-400 mt-1">{selectedPanel.powerW}W • {piecesNeeded} pieces = {totalPower.toFixed(2)}kW • {selectedPanel.quantity} available</p>
+                                <div className="mt-3 flex items-center gap-2">
+                                  <label className="text-xs font-bold text-slate-400">Qty:</label>
+                                  <input 
+                                    type="number" 
+                                    min="1"
+                                    defaultValue={piecesNeeded}
+                                    id={`selected-panel-qty-${selectedPanel.id}`}
+                                    className="w-16 bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white text-xs text-center"
+                                  />
+                                </div>
+                                <p className="text-sm text-emerald-400 font-bold mt-2">{selectedPanel.sellPrice} RON/piece</p>
+                              </div>
+                              <button
+                                onClick={() => {
+                                  const qtyInput = document.getElementById(`selected-panel-qty-${selectedPanel.id}`) as HTMLInputElement;
+                                  const qty = qtyInput ? parseInt(qtyInput.value) || piecesNeeded : piecesNeeded;
+                                  const newLine: QuoteLineItem = {
+                                    id: Date.now().toString(),
+                                    inventoryItemId: selectedPanel.id,
+                                    description: `${selectedPanel.name} - ${selectedPanel.powerW}W (${qty} pieces)`,
+                                    unit: 'piece',
+                                    quantity: qty,
+                                    netPrice: selectedPanel.sellPrice,
+                                    selectedSerialNumbers: []
+                                  };
+                                  setQuoteItems([...quoteItems, newLine]);
+                                }}
+                                className="ml-4 px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-lg text-sm transition-colors whitespace-nowrap"
+                              >
+                                Add to Quote
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      {/* Panels Suggestion - Only if not selected */}
+                      {!editingClient.needs?.panelStockItemId && editingClient.needs?.panelKw && inventory.filter(i => i.category === Category.PANELS).length > 0 && (
                         <div className="bg-slate-800 border border-slate-700 rounded-xl p-6">
-                          <h4 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2"><Package size={16} className="text-amber-500" />Solar Panels Suggestion</h4>
+                          <h4 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2"><Package size={16} className="text-amber-500" />Solar Panels Suggestions</h4>
                           <div className="space-y-3">
                             {inventory.filter(i => i.category === Category.PANELS && i.powerW && i.quantity > 0).map(panel => {
                               const panelPowerW = panel.powerW || 0;
@@ -1939,7 +3082,8 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                                         description: `${panel.name} - ${panel.powerW}W (${qty} pieces)`,
                                         unit: 'piece',
                                         quantity: qty,
-                                        netPrice: panel.sellPrice
+                                        netPrice: panel.sellPrice,
+                                        selectedSerialNumbers: []
                                       };
                                       setQuoteItems([...quoteItems, newLine]);
                                     }}
@@ -1954,10 +3098,48 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                         </div>
                       )}
 
-                      {/* Battery Suggestion */}
-                      {editingClient.needs?.inverterKw && suggestedBatteries.length > 0 && (
+                      {/* Selected Battery Display */}
+                      {editingClient.needs?.selectedBatteryId && (() => {
+                        const selectedBat = inventory.find(i => i.id === editingClient.needs?.selectedBatteryId && i.category === Category.BATTERIES);
+                        if (!selectedBat) return null;
+                        
+                        return (
+                          <div className="bg-slate-800 border border-slate-700 rounded-xl p-6">
+                            <h4 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2">
+                              <Package size={16} className="text-amber-500" />Selected Battery
+                            </h4>
+                            <div className="flex items-center justify-between bg-emerald-500/10 p-4 rounded-lg border border-emerald-500/50">
+                              <div className="flex-1">
+                                <p className="text-white font-bold">{selectedBat.name}</p>
+                                <p className="text-xs text-slate-400 mt-1">{selectedBat.batteryPowerKwh}kWh • {selectedBat.batteryType} • {selectedBat.quantity} in stock</p>
+                                <p className="text-sm text-emerald-400 font-bold mt-2">{selectedBat.sellPrice} RON</p>
+                              </div>
+                              <button
+                                onClick={() => {
+                                  const newLine: QuoteLineItem = {
+                                    id: Date.now().toString(),
+                                    inventoryItemId: selectedBat.id,
+                                    description: `${selectedBat.name} (${selectedBat.batteryPowerKwh}kWh ${selectedBat.batteryType})`,
+                                    unit: 'piece',
+                                    quantity: 1,
+                                    netPrice: selectedBat.sellPrice,
+                                    selectedSerialNumbers: []
+                                  };
+                                  setQuoteItems([...quoteItems, newLine]);
+                                }}
+                                className="ml-4 px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-lg text-sm transition-colors whitespace-nowrap"
+                              >
+                                Add to Quote
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      {/* Battery Suggestion - Only if not selected */}
+                      {!editingClient.needs?.selectedBatteryId && editingClient.needs?.selectedInverterId && suggestedBatteries.length > 0 && (
                         <div className="bg-slate-800 border border-slate-700 rounded-xl p-6">
-                          <h4 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2"><Package size={16} className="text-amber-500" />Battery Suggestion</h4>
+                          <h4 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2"><Package size={16} className="text-amber-500" />Battery Suggestions</h4>
                           <div className="space-y-3">
                             {suggestedBatteries.map(bat => (
                               <div key={bat.id} className="flex items-center justify-between bg-slate-900 p-4 rounded-lg border border-slate-700 hover:border-amber-500/50 transition-all">
@@ -1974,7 +3156,8 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                                       description: `${bat.name} (${bat.batteryPowerKwh}kWh ${bat.batteryType})`,
                                       unit: 'piece',
                                       quantity: 1,
-                                      netPrice: bat.sellPrice
+                                      netPrice: bat.sellPrice,
+                                      selectedSerialNumbers: []
                                     };
                                     setQuoteItems([...quoteItems, newLine]);
                                   }}
@@ -1987,46 +3170,337 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                           </div>
                         </div>
                       )}
+
+                      {/* Mounting Structure Suggestion */}
+                      {editingClient.needs?.panelCount && editingClient.needs.panelCount > 0 && (() => {
+                        const totalPanels = editingClient.needs.panelCount;
+                        const roofType = editingClient.needs.roofType;
+                        
+                        // Check if row distribution is configured
+                        let rowConfigs: number[] = [];
+                        if (rowCount === 1) {
+                          rowConfigs = [totalPanels];
+                        } else {
+                          const totalDistributed = Object.values(rowDistribution).reduce((sum, val) => sum + val, 0);
+                          if (totalDistributed === totalPanels) {
+                            rowConfigs = Array.from({length: rowCount}, (_, i) => rowDistribution[i + 1] || 0);
+                          }
+                        }
+
+                        const isConfigured = rowConfigs.length > 0 && !rowConfigs.some(c => c === 0);
+
+                        if (!isConfigured) {
+                          return (
+                            <div className="bg-slate-800 border border-slate-700 rounded-xl p-6">
+                              <h4 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2">
+                                <Package size={16} className="text-amber-500" />
+                                Mounting Structure
+                              </h4>
+                              <div className="bg-yellow-500/10 border border-yellow-500/30 p-4 rounded-lg">
+                                <p className="text-sm text-yellow-300">
+                                  ⚠ Complete row distribution in Client Needs tab to calculate mounting structures
+                                </p>
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        // Calculate components
+                        const numRows = rowConfigs.length;
+                        const endClamps = numRows * 4;
+                        const midClamps = rowConfigs.reduce((sum, panelsInRow) => sum + (panelsInRow - 1) * 2, 0);
+                        
+                        const selectedPanel = editingClient.needs.panelStockItemId 
+                          ? inventory.find(i => i.id === editingClient.needs.panelStockItemId) 
+                          : null;
+                        const panelWidth = selectedPanel?.panelWidth || 1.134;
+                        const maxPanelsInRow = Math.max(...rowConfigs);
+                        const railLengthPerRow = maxPanelsInRow * panelWidth;
+                        const railLengthWithWaste = railLengthPerRow * 1.1;
+                        const railsPerRow = 2;
+                        const sectionsPerRail = Math.ceil(railLengthWithWaste / 6);
+                        const railsOf6m = sectionsPerRail * numRows * railsPerRow;
+                        const combinersPerRail = sectionsPerRail > 1 ? sectionsPerRail - 1 : 0;
+                        const totalCombiners = combinersPerRail * numRows * railsPerRow;
+                        
+                        let attachmentType = 'Roof Attachments';
+                        let attachmentsPerPanel = 4;
+                        
+                        if (roofType === 'Tigla ceramica' || roofType === 'Tigla metalica') {
+                          attachmentType = 'Tile Hooks';
+                          attachmentsPerPanel = 5;
+                        } else if (roofType === 'Tabla' || roofType === 'Tabla ondulata' || roofType === 'Tabla cutata') {
+                          attachmentType = 'Hanger Bolts';
+                          attachmentsPerPanel = 4;
+                        } else if (roofType === 'Panou sandwich') {
+                          attachmentType = 'Sandwich Panel Bolts';
+                          attachmentsPerPanel = 4;
+                        }
+                        
+                        const totalAttachments = totalPanels * attachmentsPerPanel;
+
+                        return (
+                          <div className="bg-slate-800 border border-slate-700 rounded-xl p-6">
+                            <div className="flex items-center justify-between mb-4">
+                              <h4 className="text-sm font-bold text-slate-300 flex items-center gap-2">
+                                <Package size={16} className="text-amber-500" />
+                                Mounting Structure
+                              </h4>
+                              <button
+                                onClick={addMountingStructuresToQuote}
+                                className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-bold rounded-lg text-sm transition-colors flex items-center gap-2 shadow-lg"
+                              >
+                                <Plus size={16} /> Add All to Quote
+                              </button>
+                            </div>
+                            
+                            {/* Text Summary */}
+                            <div className="mb-4 p-4 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+                              <p className="text-white leading-relaxed">
+                                For <span className="font-bold text-blue-400">{totalPanels} panels</span> in <span className="font-bold text-blue-400">{numRows} rows</span>, you need:
+                              </p>
+                              <ul className="mt-2 space-y-1 text-sm text-white ml-4">
+                                <li>• <span className="font-bold text-blue-400">{endClamps}</span> end clamps (4 per row)</li>
+                                <li>• <span className="font-bold text-blue-400">{midClamps}</span> mid clamps (2 per panel connection)</li>
+                                <li>• <span className="font-bold text-blue-400">{railsOf6m}</span> rails of 6m (2 per row)</li>
+                                {totalCombiners > 0 && <li>• <span className="font-bold text-blue-400">{totalCombiners}</span> rail combiners/connectors</li>}
+                                <li>• <span className="font-bold text-blue-400">{totalAttachments}</span> {attachmentType.toLowerCase()} ({attachmentsPerPanel} per panel)</li>
+                              </ul>
+                            </div>
+
+                            {!roofType && (
+                              <div className="mt-3 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+                                <p className="text-xs text-yellow-300">
+                                  ⚠ Roof type not specified. Using default calculation (4 bolts/panel)
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                    </div>
+                   )}
 
                    {/* Quote Items Table */}
                    <div className="bg-slate-800 border border-slate-700 rounded-xl overflow-hidden flex flex-col min-h-[500px]">
-                      <div className="overflow-visible p-4 flex-1">
+                      <div className="overflow-visible p-6 flex-1">
                         <table className="w-full text-left border-collapse">
                           <thead>
-                            <tr className="text-xs text-slate-500 border-b border-slate-700 uppercase">
-                              <th className="py-2 px-1 text-center w-10">#</th>
-                              <th className="py-2 px-1">Description</th>
-                              <th className="py-2 px-1 w-24 text-center">Qty</th>
-                              <th className="py-2 px-1 w-32 text-right">Total</th>
-                              <th className="py-2 px-1 w-10"></th>
+                            <tr className="bg-slate-900/50 text-slate-400 border-b border-slate-700 text-xs uppercase tracking-wider">
+                              <th className="p-3 font-semibold w-12 text-center">#</th>
+                              <th className="p-3 font-semibold min-w-[300px]">Description</th>
+                              <th className="p-3 font-semibold w-24 text-center">Unit</th>
+                              <th className="p-3 font-semibold w-24 text-center">Qty</th>
+                              <th className="p-3 font-semibold w-32 text-right">Net Price</th>
+                              <th className="p-3 font-semibold w-32 text-right">Net Total</th>
+                              <th className="p-3 font-semibold w-12"></th>
                             </tr>
                           </thead>
                           <tbody>
                             {quoteItems.length === 0 ? (
-                              <tr><td colSpan={5} className="text-center py-8 text-slate-500 italic">No items.</td></tr>
+                              <tr>
+                                <td colSpan={7} className="p-12 text-center text-slate-500 italic">
+                                  No items. Click &quot;Add Line&quot; to start.
+                                </td>
+                              </tr>
                             ) : (
-                              quoteItems.map((item, idx) => (
-                                <tr key={item.id} className="border-b border-slate-800">
-                                  <td className="py-3 text-center text-slate-500 text-sm align-top">{idx + 1}</td>
-                                  <td className="py-3 align-top"><textarea value={item.description} onChange={(e) => updateQuoteLine(item.id, 'description', e.target.value)} rows={1} className="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1.5 text-sm text-white" /></td>
-                                  <td className="py-3 align-top"><input type="number" value={item.quantity} onChange={(e) => updateQuoteLine(item.id, 'quantity', Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-center text-sm text-white" /></td>
-                                  <td className="py-3 align-top text-right text-sm font-bold text-emerald-400">{(item.quantity * item.netPrice).toLocaleString('ro-RO', {style:'currency', currency:'RON'})}</td>
-                                  <td className="py-3 align-top text-center"><button onClick={() => removeQuoteLine(item.id)} className="text-slate-600 hover:text-red-400"><Trash2 size={14}/></button></td>
-                                </tr>
-                              ))
+                              quoteItems.map((item, idx) => {
+                                const lineNet = item.quantity * item.netPrice;
+                                const inventoryItem = inventory.find(i => i.id === item.inventoryItemId);
+                                const hasTrackedSerials = inventoryItem?.serialNumbers && inventoryItem.serialNumbers.length > 0;
+                                const showSuggestions = openSerialPickerId === `quote-${item.id}` && item.description.trim().length > 0;
+                                const suggestions = showSuggestions 
+                                  ? inventory.filter(p => 
+                                      p.name.toLowerCase().includes(item.description.toLowerCase()) || 
+                                      p.sku.toLowerCase().includes(item.description.toLowerCase())
+                                    ).slice(0, 5) 
+                                  : [];
+                                
+                                const serialsUsedElsewhere = quoteItems
+                                  .filter(i => i.id !== item.id)
+                                  .flatMap(i => i.selectedSerialNumbers || []);
+                                
+                                const availableSerials = inventoryItem?.serialNumbers?.filter(
+                                  sn => !serialsUsedElsewhere.includes(sn)
+                                ) || [];
+                                
+                                const selectedCount = item.selectedSerialNumbers?.length || 0;
+                                const isSerialPickerOpen = openSerialPickerId === `serial-${item.id}`;
+                                
+                                return (
+                                  <tr key={item.id} className="hover:bg-slate-700/30 group border-b border-slate-700/50 last:border-0">
+                                    <td className="p-3 text-center text-slate-500 text-sm align-top pt-4">
+                                      {idx + 1}
+                                    </td>
+                                    <td className="p-3 align-top relative">
+                                      <div className="relative">
+                                        <textarea 
+                                          value={item.description}
+                                          onChange={(e) => updateQuoteLine(item.id, 'description', e.target.value)}
+                                          onFocus={() => setOpenSerialPickerId(`quote-${item.id}`)}
+                                          onBlur={() => setTimeout(() => setOpenSerialPickerId(null), 200)}
+                                          placeholder="Description or search..."
+                                          rows={1}
+                                          className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm text-white focus:ring-1 focus:ring-amber-500 outline-none resize-none overflow-hidden placeholder-slate-600"
+                                          onInput={(e) => {
+                                            e.currentTarget.style.height = 'auto';
+                                            e.currentTarget.style.height = e.currentTarget.scrollHeight + 'px';
+                                          }}
+                                        />
+
+                                        {/* Autocomplete Dropdown */}
+                                        {suggestions.length > 0 && (
+                                          <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-slate-800 border border-slate-600 rounded-lg shadow-xl overflow-hidden w-full max-w-md">
+                                            {suggestions.map(suggestion => (
+                                              <div 
+                                                key={suggestion.id}
+                                                onClick={() => {
+                                                  setQuoteItems(quoteItems.map(qi => 
+                                                    qi.id === item.id ? {
+                                                      ...qi,
+                                                      inventoryItemId: suggestion.id,
+                                                      description: suggestion.name,
+                                                      unit: 'pcs',
+                                                      netPrice: suggestion.sellPrice,
+                                                      selectedSerialNumbers: []
+                                                    } : qi
+                                                  ));
+                                                  setOpenSerialPickerId(null);
+                                                }}
+                                                className="p-2.5 hover:bg-slate-700 cursor-pointer flex justify-between items-center border-b border-slate-700/50 last:border-0"
+                                              >
+                                                <div>
+                                                  <div className="text-sm text-white font-medium">{suggestion.name}</div>
+                                                  <div className="text-xs text-slate-400">{suggestion.sku}</div>
+                                                </div>
+                                                <div className="text-xs font-bold text-emerald-400">
+                                                  {new Intl.NumberFormat('ro-RO', { style: 'currency', currency: 'RON' }).format(suggestion.sellPrice)}
+                                                </div>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+
+                                      {/* Serial Number Section */}
+                                      {hasTrackedSerials && (
+                                        <div className="mt-2 relative serial-picker-container">
+                                          <div className="flex flex-wrap gap-1 items-center">
+                                            <button
+                                              onClick={() => setOpenSerialPickerId(isSerialPickerOpen ? null : `serial-${item.id}`)}
+                                              className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider border transition-colors flex items-center gap-1 ${
+                                                selectedCount > 0 
+                                                  ? 'bg-amber-500/10 text-amber-500 border-amber-500/50' 
+                                                  : 'bg-slate-900 text-slate-400 border-slate-600 hover:border-slate-500 hover:text-slate-300'
+                                              }`}
+                                            >
+                                              <Package size={10} />
+                                              {selectedCount > 0 ? `${selectedCount} SNs` : 'Select SNs'}
+                                              <ChevronDown size={10} />
+                                            </button>
+                                            {(item.selectedSerialNumbers || []).map(sn => (
+                                              <span key={sn} className="text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded border border-slate-700 font-mono">
+                                                {sn}
+                                              </span>
+                                            ))}
+                                          </div>
+
+                                          {isSerialPickerOpen && (
+                                            <div className="absolute top-full left-0 mt-2 w-64 bg-slate-800 border border-slate-600 rounded-lg shadow-2xl z-50 p-2 flex flex-col">
+                                              <div className="max-h-32 overflow-y-auto space-y-1">
+                                                {availableSerials.map(sn => {
+                                                  const isSelected = (item.selectedSerialNumbers || []).includes(sn);
+                                                  return (
+                                                    <div 
+                                                      key={sn}
+                                                      onClick={() => {
+                                                        setQuoteItems(prevItems => prevItems.map(qi => {
+                                                          if (qi.id !== item.id) return qi;
+                                                          const currentSerials = qi.selectedSerialNumbers || [];
+                                                          const newSerials = currentSerials.includes(sn)
+                                                            ? currentSerials.filter(s => s !== sn)
+                                                            : [...currentSerials, sn];
+                                                          return {
+                                                            ...qi,
+                                                            selectedSerialNumbers: newSerials,
+                                                            quantity: newSerials.length > 0 ? newSerials.length : qi.quantity
+                                                          };
+                                                        }));
+                                                      }}
+                                                      className={`flex items-center gap-2 p-1.5 rounded cursor-pointer text-xs ${isSelected ? 'bg-amber-500/20 text-amber-300' : 'hover:bg-slate-700 text-slate-300'}`}
+                                                    >
+                                                      {isSelected ? <CheckSquare size={12} /> : <Square size={12} />}
+                                                      <span className="font-mono">{sn}</span>
+                                                    </div>
+                                                  );
+                                                })}
+                                                {availableSerials.length === 0 && <div className="text-center text-[10px] text-slate-500 py-2">No serials available</div>}
+                                              </div>
+                                            </div>
+                                          )}
+                                        </div>
+                                      )}
+                                    </td>
+                                    <td className="p-3 align-top">
+                                      <input 
+                                        type="text" 
+                                        value={item.unit}
+                                        onChange={(e) => updateQuoteLine(item.id, 'unit', e.target.value)}
+                                        className="w-full bg-slate-900 border border-slate-600 rounded px-2 py-2 text-center text-sm text-white focus:ring-1 focus:ring-amber-500 outline-none"
+                                      />
+                                    </td>
+                                    <td className="p-3 align-top">
+                                      <input 
+                                        type="number" 
+                                        value={item.quantity} 
+                                        onChange={(e) => updateQuoteLine(item.id, 'quantity', Number(e.target.value))} 
+                                        className="w-full bg-slate-900 border border-slate-600 rounded px-2 py-2 text-center text-sm text-white focus:ring-1 focus:ring-amber-500 outline-none" 
+                                      />
+                                    </td>
+                                    <td className="p-3 align-top">
+                                      <input 
+                                        type="number" 
+                                        value={item.netPrice} 
+                                        onChange={(e) => updateQuoteLine(item.id, 'netPrice', Number(e.target.value))} 
+                                        className="w-full bg-slate-900 border border-slate-600 rounded px-2 py-2 text-right text-sm text-white focus:ring-1 focus:ring-amber-500 outline-none" 
+                                      />
+                                    </td>
+                                    <td className="p-3 align-top text-right text-sm font-bold text-emerald-400">
+                                      {lineNet.toLocaleString('ro-RO', {style:'currency', currency:'RON'})}
+                                    </td>
+                                    <td className="p-3 align-top text-center">
+                                      <button 
+                                        onClick={() => removeQuoteLine(item.id)} 
+                                        className="text-slate-600 hover:text-red-400 transition-colors"
+                                      >
+                                        <Trash2 size={14}/>
+                                      </button>
+                                    </td>
+                                  </tr>
+                                );
+                              })
                             )}
                           </tbody>
                         </table>
                       </div>
                       <div className="p-4 bg-slate-800 border-t border-slate-700">
-                        <button onClick={handleAddQuoteLine} className="w-full py-2 border-2 border-dashed border-slate-600 rounded-lg text-slate-400 hover:border-amber-500 font-bold flex justify-center items-center gap-2"><Plus size={18} /> Add Line</button>
+                        <button onClick={handleAddQuoteLine} className="w-full py-3 border-2 border-dashed border-slate-600 rounded-lg text-slate-400 hover:border-amber-500 hover:text-amber-300 font-bold flex justify-center items-center gap-2 transition-colors"><Plus size={18} /> Add Line</button>
                       </div>
-                      <div className="bg-slate-900 p-6 border-t border-slate-700 flex justify-end">
-                        <div className="w-64 space-y-2">
-                          <div className="flex justify-between text-lg font-bold border-t border-slate-700 pt-2 mt-2">
-                            <span className="text-amber-500">Total Gross:</span>
-                            <span className="text-white">{quoteTotals.totalGross.toLocaleString('ro-RO', {style: 'currency', currency: 'RON'})}</span>
+                      <div className="bg-slate-900 p-6 border-t border-slate-700">
+                        <div className="flex justify-end">
+                          <div className="w-80 space-y-2 text-sm">
+                            <div className="flex justify-between">
+                              <span className="text-slate-400">Subtotal (Net):</span>
+                              <span className="text-white font-bold">{quoteTotals.subtotalNet.toLocaleString('ro-RO', {style: 'currency', currency: 'RON'})}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-slate-400">VAT (21%):</span>
+                              <span className="text-white font-bold">{quoteTotals.vatTotal.toLocaleString('ro-RO', {style: 'currency', currency: 'RON'})}</span>
+                            </div>
+                            <div className="flex justify-between text-lg font-bold border-t border-slate-700 pt-2 mt-2">
+                              <span className="text-amber-500">Total Gross:</span>
+                              <span className="text-white">{quoteTotals.totalGross.toLocaleString('ro-RO', {style: 'currency', currency: 'RON'})}</span>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -2199,6 +3673,264 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
             )}
           </div>
         </div>
+
+        {/* Document Preview Modal */}
+        {previewDoc && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => setPreviewDoc(null)}>
+            <div className="bg-slate-800 border border-slate-700 rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-auto flex flex-col" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between p-6 border-b border-slate-700 sticky top-0 bg-slate-800 z-10">
+                <div>
+                  <h3 className="text-lg font-bold text-white">{previewDoc.name}</h3>
+                  <p className="text-xs text-slate-400 mt-1">{previewDoc.description} • {new Date(previewDoc.date).toLocaleDateString()}</p>
+                </div>
+                <button onClick={() => setPreviewDoc(null)} className="p-2 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg transition-all flex-shrink-0">
+                  <X size={24} />
+                </button>
+              </div>
+
+              <div className="flex-1 p-6 bg-slate-900 min-h-[500px] flex flex-col">
+                {previewDoc.url?.includes('data:image') || (previewDoc.url?.startsWith('http') && (previewDoc.name?.toLowerCase().endsWith('.jpg') || previewDoc.name?.toLowerCase().endsWith('.jpeg') || previewDoc.name?.toLowerCase().endsWith('.png') || previewDoc.name?.toLowerCase().endsWith('.gif') || previewDoc.name?.toLowerCase().endsWith('.webp'))) ? (
+                  <img src={previewDoc.url} alt={previewDoc.name} className="max-w-full max-h-full object-contain rounded-lg mx-auto" />
+                ) : isPdfDoc(previewDoc) || (previewDoc.url?.startsWith('http') && (previewDoc.name?.toLowerCase().endsWith('.pdf') || previewDoc.type === 'CI' || previewDoc.type === 'CF' || previewDoc.type === 'Fact')) ? (
+                  <PdfPreview url={previewDoc.url} title={previewDoc.name} />
+                ) : previewDoc.url?.includes('data:text') ? (
+                  <div className="bg-slate-800 rounded-lg p-6 max-h-full overflow-auto border border-slate-700 w-full">
+                    <pre className="text-sm text-slate-300 font-mono whitespace-pre-wrap break-words">
+                      {atob(previewDoc.url.split(',')[1])}
+                    </pre>
+                  </div>
+                ) : previewDoc.url?.startsWith('http') ? (
+                  <iframe src={previewDoc.url} title={previewDoc.name} className="w-full h-full min-h-[500px] rounded-lg border border-slate-700" />
+                ) : (
+                  <div className="text-center text-slate-400 flex flex-col items-center gap-4 justify-center h-full">
+                    <File size={64} className="text-slate-600" />
+                    <div>
+                      <p className="font-semibold text-white mb-2">{previewDoc.name}</p>
+                      <p className="text-sm">Preview not available for this file type</p>
+                      <button onClick={() => downloadDocument(previewDoc.url, previewDoc.name)} className="mt-4 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-sm font-semibold transition-all">
+                        Download File
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-2 p-4 border-t border-slate-700 bg-slate-800 justify-end">
+                <button onClick={() => downloadDocument(previewDoc.url, previewDoc.name)} className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-semibold flex items-center gap-2 transition-all">
+                  <Download size={16} /> Download
+                </button>
+                <button onClick={() => printDocument(previewDoc.url)} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold flex items-center gap-2 transition-all">
+                  <Printer size={16} /> Print
+                </button>
+                <button onClick={() => setPreviewDoc(null)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-sm font-semibold transition-all">
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Document Edit Modal */}
+        {editingDoc && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setEditingDoc(null)}>
+            <div className="bg-slate-800 border border-slate-700 rounded-xl shadow-2xl max-w-2xl w-full" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between p-6 border-b border-slate-700">
+                <h3 className="text-lg font-bold text-white">Edit Document</h3>
+                <button onClick={() => setEditingDoc(null)} className="p-2 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg transition-all">
+                  <X size={24} />
+                </button>
+              </div>
+              <div className="p-6 space-y-4">
+                <div>
+                  <label className="text-xs font-bold text-slate-500 uppercase block mb-2">Document Name</label>
+                  <input
+                    type="text"
+                    value={editingDoc.name || ''}
+                    onChange={(e) => setEditingDoc({ ...editingDoc, name: e.target.value })}
+                    className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-2 focus:ring-amber-500"
+                    placeholder="Document name..."
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-500 uppercase block mb-2">Description</label>
+                  <input
+                    type="text"
+                    value={editingDoc.description || ''}
+                    onChange={(e) => setEditingDoc({ ...editingDoc, description: e.target.value })}
+                    className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-2 focus:ring-amber-500"
+                    placeholder="Optional description..."
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-500 uppercase block mb-2">Type</label>
+                  <select
+                    value={editingDoc.type || ''}
+                    onChange={(e) => setEditingDoc({ ...editingDoc, type: e.target.value })}
+                    className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-2 focus:ring-amber-500"
+                  >
+                    <option value="CI">CI</option>
+                    <option value="CF">CF</option>
+                    <option value="CUI">CUI</option>
+                    <option value="Factura">Factura</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
+              </div>
+              <div className="flex justify-end gap-3 p-6 border-t border-slate-700">
+                <button
+                  onClick={() => setEditingDoc(null)}
+                  className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg font-medium transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleEditDocument}
+                  className="px-6 py-2 bg-amber-500 hover:bg-amber-400 text-slate-900 rounded-lg font-bold transition-colors"
+                >
+                  Save Changes
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Image Preview Modal */}
+        {previewImageUrl && editingClient.needs?.siteImages && editingClient.needs.siteImages.length > 0 && (() => {
+          const currentImage = editingClient.needs.siteImages[previewImageIndex];
+          const totalImages = editingClient.needs.siteImages.length;
+          
+          const goToNext = () => {
+            const nextIndex = (previewImageIndex + 1) % totalImages;
+            setPreviewImageIndex(nextIndex);
+            setPreviewImageUrl(editingClient.needs.siteImages[nextIndex].url);
+          };
+          
+          const goToPrevious = () => {
+            const prevIndex = (previewImageIndex - 1 + totalImages) % totalImages;
+            setPreviewImageIndex(prevIndex);
+            setPreviewImageUrl(editingClient.needs.siteImages[prevIndex].url);
+          };
+          
+          return (
+            <div 
+              className="fixed inset-0 bg-black/95 z-50 flex flex-col"
+              onClick={() => setPreviewImageUrl(null)}
+            >
+              {/* Header with details */}
+              <div className="bg-slate-900/90 backdrop-blur-sm border-b border-slate-700 p-4 flex items-center justify-between flex-shrink-0">
+                <div className="flex-1">
+                  <h3 className="text-lg font-bold text-white">{currentImage.label || 'Site Photo'}</h3>
+                  <div className="flex items-center gap-4 mt-1 text-sm text-slate-400">
+                    {currentImage.category && (
+                      <span className="flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                        {currentImage.category}
+                      </span>
+                    )}
+                    <span>Uploaded: {new Date(currentImage.timestamp).toLocaleString()}</span>
+                    {currentImage.uploadedBy && <span>By: {currentImage.uploadedBy}</span>}
+                    <span className="text-amber-500 font-medium">{previewImageIndex + 1} / {totalImages}</span>
+                  </div>
+                </div>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setPreviewImageUrl(null);
+                  }}
+                  className="text-white hover:text-amber-500 bg-slate-800/80 hover:bg-slate-700 rounded-full p-3 transition-all"
+                >
+                  <X size={24} />
+                </button>
+              </div>
+              
+              {/* Image container with fixed height */}
+              <div className="flex-1 flex items-center justify-center relative overflow-hidden">
+                <div 
+                  className="w-full h-full flex items-center justify-center p-8"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {/* Previous button */}
+                  {totalImages > 1 && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        goToPrevious();
+                      }}
+                      className="absolute left-4 top-1/2 -translate-y-1/2 bg-slate-800/90 hover:bg-slate-700 text-white p-4 rounded-full transition-all shadow-2xl z-10 hover:scale-110"
+                    >
+                      <ArrowLeft size={32} />
+                    </button>
+                  )}
+                  
+                  {/* Image with fixed container */}
+                  <div className="relative w-full h-full max-w-7xl max-h-[calc(100vh-250px)] flex items-center justify-center">
+                    <img 
+                      src={previewImageUrl} 
+                      alt={currentImage.label || 'Preview'} 
+                      className="max-w-full max-h-full w-auto h-auto object-contain rounded-lg shadow-2xl"
+                    />
+                  </div>
+                  
+                  {/* Next button */}
+                  {totalImages > 1 && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        goToNext();
+                      }}
+                      className="absolute right-4 top-1/2 -translate-y-1/2 bg-slate-800/90 hover:bg-slate-700 text-white p-4 rounded-full transition-all shadow-2xl z-10 hover:scale-110"
+                    >
+                      <ArrowRight size={32} />
+                    </button>
+                  )}
+                </div>
+              </div>
+              
+              {/* Thumbnail strip */}
+              {totalImages > 1 && (
+                <div className="bg-slate-900/90 backdrop-blur-sm border-t border-slate-700 p-4 flex-shrink-0">
+                  <div className="flex gap-2 justify-center overflow-x-auto max-w-6xl mx-auto pb-2">
+                    {editingClient.needs.siteImages.map((img, idx) => (
+                      <button
+                        key={img.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setPreviewImageIndex(idx);
+                          setPreviewImageUrl(img.url);
+                        }}
+                        className={`flex-shrink-0 w-20 h-20 rounded-lg overflow-hidden border-2 transition-all ${
+                          idx === previewImageIndex
+                            ? 'border-amber-500 scale-110 shadow-lg shadow-amber-500/50'
+                            : 'border-slate-600 hover:border-slate-400 opacity-60 hover:opacity-100'
+                        }`}
+                      >
+                        <img 
+                          src={img.url} 
+                          alt={img.label || `Photo ${idx + 1}`}
+                          className="w-full h-full object-cover"
+                        />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* Confirm Dialog for client detail actions */}
+        <ConfirmDialog
+          isOpen={confirmDialog.isOpen}
+          title={confirmDialog.title}
+          message={confirmDialog.message}
+          variant={confirmDialog.variant}
+          confirmLabel={confirmDialog.confirmLabel}
+          cancelLabel={confirmDialog.cancelLabel}
+          thirdButtonLabel={confirmDialog.thirdButtonLabel}
+          onConfirm={confirmDialog.onConfirm}
+          onCancel={confirmDialog.onCancel || (() => setConfirmDialog({ ...confirmDialog, isOpen: false }))}
+          onThirdButton={confirmDialog.onThirdButton}
+        />
       </div>
     );
   }
@@ -2281,8 +4013,12 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
         title={confirmDialog.title}
         message={confirmDialog.message}
         variant={confirmDialog.variant}
+        confirmLabel={confirmDialog.confirmLabel}
+        cancelLabel={confirmDialog.cancelLabel}
+        thirdButtonLabel={confirmDialog.thirdButtonLabel}
         onConfirm={confirmDialog.onConfirm}
-        onCancel={() => setConfirmDialog({ ...confirmDialog, isOpen: false })}
+        onCancel={confirmDialog.onCancel || (() => setConfirmDialog({ ...confirmDialog, isOpen: false }))}
+        onThirdButton={confirmDialog.onThirdButton}
       />
 
       {/* Image Preview Modal */}

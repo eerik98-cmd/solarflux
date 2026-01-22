@@ -9,8 +9,10 @@ interface ConfirmDialogProps {
   message: string;
   confirmLabel?: string;
   cancelLabel?: string;
+  thirdButtonLabel?: string;
   onConfirm: () => void;
   onCancel: () => void;
+  onThirdButton?: () => void;
   variant?: 'danger' | 'warning' | 'info';
 }
 
@@ -20,8 +22,10 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   message,
   confirmLabel = 'Confirm',
   cancelLabel = 'Cancel',
+  thirdButtonLabel,
   onConfirm,
   onCancel,
+  onThirdButton,
   variant = 'danger'
 }) => {
   if (!isOpen) return null;
@@ -67,6 +71,14 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
           >
             {cancelLabel}
           </button>
+          {thirdButtonLabel && onThirdButton && (
+            <button
+              onClick={onThirdButton}
+              className="px-4 py-2 rounded bg-slate-600 hover:bg-slate-500 text-slate-100 transition-colors font-medium"
+            >
+              {thirdButtonLabel}
+            </button>
+          )}
           <button
             onClick={onConfirm}
             className={`px-4 py-2 rounded text-white transition-colors font-medium ${variantStyles[variant]}`}

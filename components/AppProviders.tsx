@@ -22,6 +22,7 @@ const FileManager = React.lazy(() => import('@/components/FileManager').then(mod
 export function AppProviders() {
   // Auth State
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
   const [dbConnectionError, setDbConnectionError] = useState(false);
 
   // Data State
@@ -51,6 +52,33 @@ export function AppProviders() {
     message: '',
     onConfirm: () => {},
   });
+
+  // Check session on mount
+  useEffect(() => {
+    const checkSession = async () => {
+      try {
+        const response = await fetch('/api/auth/session');
+        const data = await response.json();
+        
+        if (data.isAuthenticated && data.user) {
+          setCurrentUser({
+            id: data.user.id,
+            username: data.user.username,
+            nickname: data.user.nickname,
+            role: data.user.role,
+            password: '', // Never exposed to client
+          });
+          setIsAuthenticated(true);
+        }
+      } catch (error) {
+        console.error('Session check failed:', error);
+      } finally {
+        setAuthLoading(false);
+      }
+    };
+    
+    checkSession();
+  }, []);
 
   // Firestore Subscriptions
   useEffect(() => {
@@ -209,18 +237,28 @@ export function AppProviders() {
     }
   };
 
-  const handleLogin = (u: string, p: string) => {
-    let user = users.find(user => user.username === u && user.password === p);
-    
-    if (!user) {
-       user = MOCK_USERS.find(user => user.username === u && user.password === p);
-    }
-
-    if (user) {
-      setCurrentUser(user);
-      setIsAuthenticated(true);
-    } else {
-      throw new Error("Invalid credentials");
+  const handleLogin = async (u: string, p: string) => {
+    // Authentication is now handled by the Login component's API call
+    // This callback just updates local state after successful API authentication
+    try {
+      const response = await fetch('/api/auth/session');
+      const data = await response.json();
+      
+      if (data.isAuthenticated && data.user) {
+        setCurrentUser({
+          id: data.user.id,
+          username: data.user.username,
+          nickname: data.user.nickname,
+          role: data.user.role,
+          password: '', // Never exposed to client
+        });
+        setIsAuthenticated(true);
+      } else {
+        throw new Error("Session not found");
+      }
+    } catch (error) {
+      console.error('Login state update failed:', error);
+      throw new Error("Failed to verify session");
     }
   };
 
@@ -241,6 +279,18 @@ export function AppProviders() {
     </div>
   );
 
+  // Show loading while checking session
+  if (authLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-slate-900">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 size={48} className="animate-spin text-amber-500" />
+          <p className="text-slate-400">Checking authentication...</p>
+        </div>
+      </div>
+    );
+  }
+
   if (!isAuthenticated) {
     return (
       <>
@@ -260,7 +310,16 @@ export function AppProviders() {
       <Sidebar 
         currentView={currentView} 
         onChangeView={setCurrentView} 
-        onLogout={() => setIsAuthenticated(false)}
+        onLogout={async () => {
+          try {
+            await fetch('/api/auth/logout', { method: 'POST' });
+          } catch (error) {
+            console.error('Logout failed:', error);
+          } finally {
+            setIsAuthenticated(false);
+            setCurrentUser(null);
+          }
+        }}
       />
       
       <main className="flex-1 overflow-hidden relative flex flex-col">
@@ -296,6 +355,8 @@ export function AppProviders() {
               inventory={inventory} 
               savedQuotes={savedQuotes}
               onSaveQuote={handleSaveQuote}
+              onDeleteQuote={handleDeleteQuote}
+              docTemplates={docTemplates}
             />
           )}
 
