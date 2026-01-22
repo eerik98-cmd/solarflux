@@ -183,7 +183,7 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [openSerialPickerId]);
 
-  const filteredClients = clients.filter(client => {
+  const filteredClients = (clients || []).filter(client => {
     const matchesType = filterType === 'ALL' || client.type === filterType;
     const searchLower = searchTerm.toLowerCase();
     const matchesSearch = 
@@ -287,7 +287,7 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
         needs: {
             ...editingClient.needs,
             description: tempDescription,
-            descriptionUpdatedBy: currentUser.nickname,
+            descriptionUpdatedBy: currentUser?.nickname || 'Unknown',
             descriptionUpdatedAt: new Date()
         }
     });
@@ -300,7 +300,7 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
     const finalNeeds = { ...editingClient.needs };
     if (tempDescription !== editingClient.needs?.description) {
         finalNeeds.description = tempDescription;
-        finalNeeds.descriptionUpdatedBy = currentUser.nickname;
+        finalNeeds.descriptionUpdatedBy = currentUser?.nickname || 'Unknown';
         finalNeeds.descriptionUpdatedAt = new Date();
     }
     let updatedName = editingClient.name;
@@ -395,7 +395,7 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
 
   const handleAddNote = () => {
     if (!editingClient || !newNote.trim()) return;
-    const newNoteObj: ClientNote = { id: Date.now().toString(), content: newNote, date: new Date(), author: currentUser.nickname };
+    const newNoteObj: ClientNote = { id: Date.now().toString(), content: newNote, date: new Date(), author: currentUser?.nickname || 'Unknown' };
     const updatedClient = { ...editingClient, notes: [newNoteObj, ...(editingClient.notes || [])] };
     onUpdateClient(updatedClient);
     setSelectedClient(updatedClient);
@@ -405,7 +405,7 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
 
   const handleDeleteNote = (noteId: string) => {
     if (!editingClient) return;
-    if (currentUser.role !== 'SUPER_ADMIN' && !editingClient.notes?.find(n => n.id === noteId && n.author === currentUser.nickname)) {
+    if (currentUser?.role !== 'SUPER_ADMIN' && !editingClient.notes?.find(n => n.id === noteId && n.author === currentUser?.nickname)) {
          alert("You can only delete your own notes."); return;
     }
     setConfirmDialog({
@@ -1028,8 +1028,8 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                     <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
                          <div className="flex flex-col">
                              <label className="text-xs font-medium text-slate-500 uppercase tracking-wider block mb-1">Registration ID (SI_XXXX)</label>
-                             <input name="internalId" value={editingClient.internalId || ''} onChange={handleEditChange} disabled={currentUser.role !== 'SUPER_ADMIN'} className={`w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none font-mono ${currentUser.role !== 'SUPER_ADMIN' ? 'opacity-50 cursor-not-allowed' : ''}`} placeholder="Auto-generated" />
-                             {currentUser.role !== 'SUPER_ADMIN' && <span className="text-[10px] text-slate-500 mt-1">Only Super Admins can manually edit the Internal ID.</span>}
+                             <input name="internalId" value={editingClient.internalId || ''} onChange={handleEditChange} disabled={currentUser?.role !== 'SUPER_ADMIN'} className={`w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none font-mono ${currentUser?.role !== 'SUPER_ADMIN' ? 'opacity-50 cursor-not-allowed' : ''}`} placeholder="Auto-generated" />
+                             {currentUser?.role !== 'SUPER_ADMIN' && <span className="text-[10px] text-slate-500 mt-1">Only Super Admins can manually edit the Internal ID.</span>}
                          </div>
                     </div>
                 </section>
@@ -3940,7 +3940,7 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
     <div className="h-full flex flex-col bg-slate-900 p-8 overflow-hidden">
       <header className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div><h1 className="text-3xl font-bold text-white mb-2">Client Registry</h1><p className="text-slate-400">Manage your customer base</p></div>
-        {currentUser.role !== 'INSTALLER' && <button onClick={handleOpenModal} className="bg-amber-500 hover:bg-amber-400 text-slate-900 px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-amber-500/20"><Plus size={20} /> New Client</button>}
+        {currentUser?.role !== 'INSTALLER' && <button onClick={handleOpenModal} className="bg-amber-500 hover:bg-amber-400 text-slate-900 px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-amber-500/20"><Plus size={20} /> New Client</button>}
       </header>
       <div className="bg-slate-800 rounded-2xl border border-slate-700 overflow-hidden flex flex-col flex-1">
         <div className="p-4 border-b border-slate-700 bg-slate-800/50 flex flex-col md:flex-row gap-4">
@@ -3961,7 +3961,7 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
                     {client.phone && <div className="flex items-center gap-1"><Phone size={14}/> {client.phone}</div>}
                   </div>
                 </div>
-                <div className="flex gap-2 opacity-100 md:opacity-0 group-hover:opacity-100 transition-opacity"><button onClick={() => setSelectedClient(client)} className="bg-amber-500 hover:bg-amber-400 text-slate-900 px-4 py-2 rounded-lg font-bold flex items-center gap-2 shadow-lg shadow-amber-500/10">Open</button>{currentUser.role === 'SUPER_ADMIN' && <button onClick={() => onDeleteClient(client.id)} className="bg-slate-800 hover:bg-red-500/10 text-slate-400 hover:text-red-500 p-2 rounded-lg border border-slate-700"><Trash2 size={20} /></button>}</div>
+                <div className="flex gap-2 opacity-100 md:opacity-0 group-hover:opacity-100 transition-opacity"><button onClick={() => setSelectedClient(client)} className="bg-amber-500 hover:bg-amber-400 text-slate-900 px-4 py-2 rounded-lg font-bold flex items-center gap-2 shadow-lg shadow-amber-500/10">Open</button>{currentUser?.role === 'SUPER_ADMIN' && <button onClick={() => onDeleteClient(client.id)} className="bg-slate-800 hover:bg-red-500/10 text-slate-400 hover:text-red-500 p-2 rounded-lg border border-slate-700"><Trash2 size={20} /></button>}</div>
              </div>
            ))}
         </div>

@@ -19,7 +19,7 @@ export const InventoryList: React.FC<InventoryListProps> = ({
   const [filterCategory, setFilterCategory] = useState<Category | 'All'>('All');
   const [viewingSerials, setViewingSerials] = useState<InventoryItem | null>(null);
 
-  const filteredItems = inventory.filter(item => {
+  const filteredItems = (inventory || []).filter(item => {
     const matchesSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
                           item.sku.toLowerCase().includes(searchTerm.toLowerCase()) ||
                           item.barcode.includes(searchTerm);

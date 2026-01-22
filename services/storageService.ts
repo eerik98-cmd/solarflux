@@ -191,6 +191,28 @@ export const StorageService = {
     }
   },
 
+  // Batch Save (Save entire collection)
+  batchSave: async (collectionName: string, items: any[]) => {
+    if (!db) return;
+    
+    try {
+      const batch = writeBatch(db);
+      for (const item of items) {
+        const cleanItem = await prepareDataForFirestore(collectionName, item);
+        const sanitized = sanitizeForFirestore(cleanItem);
+        const ref = doc(db, collectionName, sanitized.id);
+        batch.set(ref, sanitized);
+      }
+      await batch.commit();
+    } catch (error: any) {
+      console.error(`Error batch saving to ${collectionName}:`, error);
+      if (error.code === 'permission-denied') {
+        alert('PERMISSION DENIED: Check your Firestore Security Rules.');
+      }
+      throw error;
+    }
+  },
+
   // Bulk Load (Used for initializing Mock Data if DB is empty)
   initializeDataIfEmpty: async (collectionName: string, mockData: any[]) => {
     if (!db) return;

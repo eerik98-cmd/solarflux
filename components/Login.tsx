@@ -2,16 +2,16 @@
 
 import React, { useState } from 'react';
 import { Sun, Lock, User, ArrowRight } from 'lucide-react';
+import { useAuth } from '@/contexts/AuthContext';
+import { useRouter } from 'next/navigation';
 
-interface LoginProps {
-  onLogin: (u: string, p: string) => void;
-}
-
-export const Login: React.FC<LoginProps> = ({ onLogin }) => {
+export const Login: React.FC = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const { login } = useAuth();
+  const router = useRouter();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -19,27 +19,10 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
     setLoading(true);
 
     try {
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ username, password }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok || !data.success) {
-        setError(data.error || 'Authentication failed');
-        setLoading(false);
-        return;
-      }
-
-      // Call onLogin with username and password for backward compatibility
-      // The actual authentication is now handled by the API
-      onLogin(username, password);
-    } catch (err) {
-      setError('Network error. Please try again.');
+      await login(username, password);
+      router.push('/clients');
+    } catch (err: any) {
+      setError(err.message || 'Authentication failed');
       setLoading(false);
     }
   };

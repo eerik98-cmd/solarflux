@@ -54,7 +54,7 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
   // Filter clients for autocomplete
   const filteredClients = useMemo(() => {
      if (!customerName) return [];
-     return clients.filter(c => c.name.toLowerCase().includes(customerName.toLowerCase())).slice(0, 5);
+     return (clients || []).filter(c => c.name.toLowerCase().includes(customerName.toLowerCase())).slice(0, 5);
   }, [customerName, clients]);
 
   // Reset serial search when opening a new picker
