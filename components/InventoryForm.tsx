@@ -432,7 +432,7 @@ const InventoryForm: React.FC<InventoryFormProps> = ({ initialData, onSubmit, on
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-1">
-                      <label className="text-sm font-medium text-amber-500">Width (m)</label>
+                      <label className="text-sm font-medium text-amber-500">Width (mm)</label>
                       <input
                         name="panelWidth"
                         type="number"
@@ -445,7 +445,7 @@ const InventoryForm: React.FC<InventoryFormProps> = ({ initialData, onSubmit, on
                       />
                     </div>
                     <div className="space-y-1">
-                      <label className="text-sm font-medium text-amber-500">Height (m)</label>
+                      <label className="text-sm font-medium text-amber-500">Height (mm)</label>
                       <input
                         name="panelHeight"
                         type="number"
