@@ -26,7 +26,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const response = await fetch('/api/auth/session');
         const data = await response.json();
         
-        if (data.isAuthenticated && data.user) {
+        if (response.ok && data.isAuthenticated && data.user) {
           setCurrentUser({
             id: data.user.id,
             username: data.user.username,
@@ -35,9 +35,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             password: '', // Never exposed to client
           });
           setIsAuthenticated(true);
+        } else {
+          setIsAuthenticated(false);
         }
       } catch (error) {
         console.error('Session check failed:', error);
+        setIsAuthenticated(false);
       } finally {
         setAuthLoading(false);
       }
