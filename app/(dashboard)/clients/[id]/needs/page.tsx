@@ -987,7 +987,9 @@ export default function ClientNeedsPage() {
                   const selectedPanel = client.needs?.panelStockItemId 
                     ? inventory.find(i => i.id === client.needs.panelStockItemId) 
                     : null;
-                  const panelWidth = selectedPanel?.panelWidth || 1.134;
+                  // Convert panel width from MM to meters (default 1134mm if not specified)
+                  const panelWidthMm = selectedPanel?.panelWidth || 1134;
+                  const panelWidth = panelWidthMm / 1000; // Convert to meters
                   const maxPanelsInRow = Math.max(...rowConfigs);
                   const railLengthPerRow = maxPanelsInRow * panelWidth;
                   const railLengthWithWaste = railLengthPerRow * 1.1;
