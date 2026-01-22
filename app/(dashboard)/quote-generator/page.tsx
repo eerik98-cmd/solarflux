@@ -1,19 +1,11 @@
 'use client';
 
 import React, { Suspense } from 'react';
-import { Loader2 } from 'lucide-react';
 import { QuoteGenerator as QuoteGeneratorComponent } from '@/components/QuoteGenerator';
 import { useData } from '@/contexts/DataContext';
 import { StorageService } from '@/services/storageService';
 import { Quote } from '@/types';
-
-function LoadingSpinner() {
-  return (
-    <div className="flex items-center justify-center h-screen">
-      <Loader2 className="w-8 h-8 animate-spin text-amber-500" />
-    </div>
-  );
-}
+import Loading from '@/components/Loading';
 
 function QuoteGeneratorWrapper() {
   const { inventory, clients, savedQuotes, docTemplates } = useData();
@@ -40,7 +32,7 @@ function QuoteGeneratorWrapper() {
 
 export default function QuoteGeneratorPage() {
   return (
-    <Suspense fallback={<LoadingSpinner />}>
+    <Suspense fallback={<Loading />}>
       <QuoteGeneratorWrapper />
     </Suspense>
   );

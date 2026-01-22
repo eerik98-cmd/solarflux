@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Client, ClientType, ClientNote, ClientSiteImage, InventoryItem, Quote, QuoteLineItem, DocTemplate, Category, ArchivedProject } from '../types';
-// Added Loader2 to the lucide-react imports
 import { Search, Building2, User, Phone, Mail, MapPin, Plus, ArrowLeft, ArrowRight, X, CheckCircle, FileText, Zap, FolderOpen, Upload, Trash2, ExternalLink, Printer, Save, ClipboardList, Camera, Image as ImageIcon, History, RefreshCcw, ChevronDown, Package, FileCog, FileOutput, Hash, Briefcase, Info, Code, Loader2, AlertCircle, Eye, Edit2, Download, File, CheckSquare, Square } from 'lucide-react';
 import { FileSystem, getFolderForDocType } from '../services/fileSystemService';
 import { ConfirmDialog } from './ConfirmDialog';

@@ -1,18 +1,10 @@
 'use client';
 
 import React, { Suspense } from 'react';
-import { Loader2 } from 'lucide-react';
 import { FileManager as FileManagerComponent } from '@/components/FileManager';
 import { useData } from '@/contexts/DataContext';
 import { StorageService } from '@/services/storageService';
-
-function LoadingSpinner() {
-  return (
-    <div className="flex items-center justify-center h-screen">
-      <Loader2 className="w-8 h-8 animate-spin text-amber-500" />
-    </div>
-  );
-}
+import Loading from '@/components/Loading';
 
 function FileManagerWrapper() {
   const { companyDocuments } = useData();
@@ -45,7 +37,7 @@ function FileManagerWrapper() {
 
 export default function FileManagerPage() {
   return (
-    <Suspense fallback={<LoadingSpinner />}>
+    <Suspense fallback={<Loading />}>
       <FileManagerWrapper />
     </Suspense>
   );

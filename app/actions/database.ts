@@ -8,7 +8,6 @@ import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '@/services/firebase';
 
 export async function saveItemAction(collection: string, item: Record<string, unknown>) {
-  'use server';
   try {
     // Hash password if saving a user with a new password
     if (collection === 'users' && item.password && typeof item.password === 'string') {
@@ -28,7 +27,6 @@ export async function saveItemAction(collection: string, item: Record<string, un
 }
 
 export async function deleteItemAction(collection: string, id: string) {
-  'use server';
   try {
     await StorageService.deleteItem(collection, id);
     revalidatePath('/');
@@ -40,7 +38,6 @@ export async function deleteItemAction(collection: string, id: string) {
 }
 
 export async function initializeDataAction(collection: string, data: Record<string, unknown>[]) {
-  'use server';
   try {
     await StorageService.initializeDataIfEmpty(collection, data);
     return { success: true };
@@ -54,7 +51,6 @@ export async function initializeDataAction(collection: string, data: Record<stri
  * Get user by username
  */
 export async function getUserByUsername(username: string): Promise<User | null> {
-  'use server';
   try {
     if (!db) {
       throw new Error('Database not initialized');
@@ -87,7 +83,6 @@ export async function validateCredentials(
   username: string,
   password: string
 ): Promise<{ success: boolean; user?: SafeUser; error?: string }> {
-  'use server';
   try {
     const user = await getUserByUsername(username);
     

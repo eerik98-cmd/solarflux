@@ -2,11 +2,11 @@
 
 import React, { useEffect } from 'react';
 import { Sidebar } from '@/components/Sidebar';
-import { LoadingSpinner } from '@/components/LoadingSpinner';
 import { useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { View } from '@/types';
 import { AuthRequired } from '@/components/AuthRequired';
+import Loading from '@/components/Loading';
 
 export default function DashboardLayout({
   children,
@@ -26,7 +26,7 @@ export default function DashboardLayout({
   
   // Show loading state while checking authentication
   if (authLoading) {
-    return <LoadingSpinner fullScreen message="Loading your dashboard..." />;
+    return <Loading />;
   }
   
   // Don't render dashboard content if not authenticated

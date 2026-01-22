@@ -1,22 +1,14 @@
 'use client';
 
 import React, { Suspense, useState } from 'react';
-import { Loader2 } from 'lucide-react';
 import { InventoryItem } from '@/types';
 import { InventoryList as InventoryListComponent } from '@/components/InventoryList';
 import { useData } from '@/contexts/DataContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { StorageService } from '@/services/storageService';
+import Loading from '@/components/Loading';
 
 const InventoryForm = React.lazy(() => import('@/components/InventoryForm'));
-
-function LoadingSpinner() {
-  return (
-    <div className="flex items-center justify-center h-screen">
-      <Loader2 className="w-8 h-8 animate-spin text-amber-500" />
-    </div>
-  );
-}
 
 function InventoryWrapper() {
   const { inventory } = useData();
@@ -48,7 +40,7 @@ function InventoryWrapper() {
         onDeleteItem={handleDeleteItem}
       />
       {isFormOpen && (
-        <Suspense fallback={<LoadingSpinner />}>
+        <Suspense fallback={<Loading />}>
           <InventoryForm
             initialData={editingItem}
             onSubmit={async (item) => {
@@ -68,7 +60,7 @@ function InventoryWrapper() {
 
 export default function InventoryPage() {
   return (
-    <Suspense fallback={<LoadingSpinner />}>
+    <Suspense fallback={<Loading />}>
       <InventoryWrapper />
     </Suspense>
   );

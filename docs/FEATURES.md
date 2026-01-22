@@ -436,7 +436,7 @@ All editable fields with real-time updates:
 - High contrast colors (slate-900 background, amber accent)
 
 ### 8.4 Loading States
-- Loading spinner (Loader2 icon) for async operations
+- Loading spinner (Loader icon) for async operations
 - Disabled button states during processing
 - Progress indication for document generation
 

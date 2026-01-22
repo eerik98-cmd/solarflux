@@ -1,20 +1,12 @@
 'use client';
 
 import React, { Suspense } from 'react';
-import { Loader2 } from 'lucide-react';
 import { Settings as SettingsComponent } from '@/components/Settings';
 import { useData } from '@/contexts/DataContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { StorageService } from '@/services/storageService';
 import { User, DocTemplate } from '@/types';
-
-function LoadingSpinner() {
-  return (
-    <div className="flex items-center justify-center h-screen">
-      <Loader2 className="w-8 h-8 animate-spin text-amber-500" />
-    </div>
-  );
-}
+import Loading from '@/components/Loading';
 
 function SettingsWrapper() {
   const { users, docTemplates } = useData();
@@ -39,7 +31,7 @@ function SettingsWrapper() {
   };
 
   if (!currentUser) {
-    return <LoadingSpinner />;
+    return <Loading />;
   }
 
   return (
@@ -57,7 +49,7 @@ function SettingsWrapper() {
 
 export default function SettingsPage() {
   return (
-    <Suspense fallback={<LoadingSpinner />}>
+    <Suspense fallback={<Loading />}>
       <SettingsWrapper />
     </Suspense>
   );

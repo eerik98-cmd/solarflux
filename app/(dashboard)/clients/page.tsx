@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Search, Building2, User, Plus, Trash2 } from 'lucide-react';
+import { Search, Building2, User, Plus, Trash2, Loader } from 'lucide-react';
 import { Client, ClientType } from '@/types';
 import { useData } from '@/contexts/DataContext';
 import { useAuth } from '@/contexts/AuthContext';
@@ -17,6 +17,7 @@ export default function ClientsListPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedType, setSelectedType] = useState<ClientType>(ClientType.PRIVATE);
   const [newClientFormData, setNewClientFormData] = useState<Partial<Client>>({ country: 'Romania' });
+  const [loadingClientId, setLoadingClientId] = useState<string | null>(null);
 
   const filteredClients = (clients || []).filter(client => {
     const searchLower = searchTerm.toLowerCase();
@@ -126,9 +127,17 @@ export default function ClientsListPage() {
           {filteredClients.map(client => (
             <div
               key={client.id}
-              className="bg-slate-900 border border-slate-700 rounded-xl p-4 hover:border-amber-500/50 transition-all cursor-pointer group"
-              onClick={() => router.push(`/clients/${client.id}`)}
+              className="bg-slate-900 border border-slate-700 rounded-xl p-4 hover:border-amber-500/50 transition-all cursor-pointer group relative"
+              onClick={() => {
+                setLoadingClientId(client.id);
+                router.push(`/clients/${client.id}`);
+              }}
             >
+              {loadingClientId === client.id && (
+                <div className="absolute inset-0 bg-black/40 rounded-xl flex items-center justify-center z-10">
+                  <Loader className="text-amber-500 animate-spin" size={32} />
+                </div>
+              )}
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-4 flex-1">
                   <div className="p-3 bg-slate-800 rounded-lg">
@@ -157,9 +166,11 @@ export default function ClientsListPage() {
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
+                      setLoadingClientId(client.id);
                       router.push(`/clients/${client.id}`);
                     }}
-                    className="bg-amber-500 hover:bg-amber-400 text-slate-900 px-4 py-2 rounded-lg font-bold"
+                    disabled={loadingClientId === client.id}
+                    className="bg-amber-500 hover:bg-amber-400 text-slate-900 px-4 py-2 rounded-lg font-bold disabled:opacity-50"
                   >
                     Open
                   </button>
