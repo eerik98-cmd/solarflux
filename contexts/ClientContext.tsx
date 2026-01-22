@@ -11,7 +11,7 @@ interface ClientContextType {
   setClient: (client: Client | null) => void;
   hasChanges: boolean;
   setHasChanges: (hasChanges: boolean) => void;
-  updateClient: (updates: Partial<Client>) => void;
+  updateClient: (updates: Partial<Client>) => Promise<void>;
   saveClient: () => Promise<void>;
   addNote: (content: string) => Promise<void>;
   deleteNote: (noteId: string) => Promise<void>;
@@ -29,10 +29,11 @@ export function ClientProvider({ children, clientId }: { children: ReactNode; cl
   );
   const [hasChanges, setHasChanges] = useState(false);
 
-  const updateClient = (updates: Partial<Client>) => {
+  const updateClient = async (updates: Partial<Client>) => {
     if (!client) return;
-    setClient({ ...client, ...updates });
-    setHasChanges(true);
+    const updatedClient = { ...client, ...updates };
+    setClient(updatedClient);
+    await StorageService.saveItem('clients', updatedClient);
   };
 
   const saveClient = async () => {

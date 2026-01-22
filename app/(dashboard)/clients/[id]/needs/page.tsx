@@ -468,6 +468,16 @@ export default function ClientNeedsPage() {
                 </div>
               )}
 
+              {suggestedInverters.length > 0 && !selectedInverterId && (
+                <button 
+                  type="button"
+                  onClick={() => setShowAlternatives(true)}
+                  className="w-full px-4 py-2 border border-slate-600 hover:border-amber-500 text-slate-400 hover:text-amber-400 font-bold rounded-lg text-sm transition-colors mt-2"
+                >
+                  Show All {suggestedInverters.length} Inverters
+                </button>
+              )}
+
               {selectedInverterId && (() => {
                 const selected = inventory.find(i => i.id === selectedInverterId && i.category === Category.INVERTERS);
                 if (!selected) return null;
@@ -504,6 +514,62 @@ export default function ClientNeedsPage() {
             </div>
           )}
         </section>
+
+        {/* Inverter Selection Modal */}
+        {showAlternatives && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+            <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-2xl max-h-[80vh] flex flex-col">
+              <div className="p-4 border-b border-slate-700 flex justify-between items-center">
+                <h3 className="text-white font-bold">All Available Inverters</h3>
+                <button 
+                  type="button"
+                  onClick={() => setShowAlternatives(false)}
+                  className="text-slate-400 hover:text-white transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+              <div className="p-4 overflow-y-auto custom-scrollbar space-y-2">
+                {inventory
+                  .filter(i => i.category === Category.INVERTERS && (i.quantity || 0) > 0)
+                  .map((inv) => (
+                    <div 
+                      key={inv.id}
+                      className={`flex items-center justify-between bg-slate-900 p-4 rounded-lg border cursor-pointer transition-all ${
+                        inv.id === selectedInverterId
+                          ? 'border-emerald-500 ring-2 ring-emerald-500/20' 
+                          : 'border-slate-700 hover:border-slate-600'
+                      }`}
+                      onClick={async () => {
+                        setSelectedInverterId(inv.id);
+                        await updateClient({ 
+                          needs: { 
+                            ...client.needs, 
+                            selectedInverterId: inv.id,
+                            selectedBatteryId: undefined 
+                          } 
+                        });
+                        setShowAlternatives(false);
+                      }}
+                    >
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <p className="text-white font-bold">{inv.name}</p>
+                          {inv.id === selectedInverterId && (
+                            <span className="text-xs bg-emerald-500 text-slate-900 px-2 py-0.5 rounded font-bold">SELECTED</span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-400 mt-1">
+                          {inv.inverterPowerKw}kW • {inv.inverterConnectionType} • {inv.inverterStorageType} • {inv.quantity} in stock
+                        </p>
+                        <p className="text-sm text-emerald-400 font-bold mt-1">{inv.sellPrice} RON</p>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Battery Section */}
         <section className="bg-slate-800 p-6 rounded-xl border border-slate-700">
@@ -553,6 +619,15 @@ export default function ClientNeedsPage() {
                       </div>
                     </div>
                   ))}
+                  {suggestedBatteries.length > 0 && (
+                    <button 
+                      type="button"
+                      onClick={() => setShowBatteryAlternatives(true)}
+                      className="w-full px-4 py-2 border border-slate-600 hover:border-amber-500 text-slate-400 hover:text-amber-400 font-bold rounded-lg text-sm transition-colors"
+                    >
+                      Show All {suggestedBatteries.length} Batteries
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -590,6 +665,61 @@ export default function ClientNeedsPage() {
             </div>
           )}
         </section>
+
+        {/* Battery Selection Modal */}
+        {showBatteryAlternatives && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+            <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-2xl max-h-[80vh] flex flex-col">
+              <div className="p-4 border-b border-slate-700 flex justify-between items-center">
+                <h3 className="text-white font-bold">All Available Batteries</h3>
+                <button 
+                  type="button"
+                  onClick={() => setShowBatteryAlternatives(false)}
+                  className="text-slate-400 hover:text-white transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+              <div className="p-4 overflow-y-auto custom-scrollbar space-y-2">
+                {inventory
+                  .filter(i => i.category === Category.BATTERIES && (i.quantity || 0) > 0)
+                  .map((bat) => (
+                    <div 
+                      key={bat.id}
+                      className={`flex items-center justify-between bg-slate-900 p-4 rounded-lg border cursor-pointer transition-all ${
+                        bat.id === selectedBatteryId
+                          ? 'border-emerald-500 ring-2 ring-emerald-500/20' 
+                          : 'border-slate-700 hover:border-slate-600'
+                      }`}
+                      onClick={async () => {
+                        setSelectedBatteryId(bat.id);
+                        await updateClient({ 
+                          needs: { 
+                            ...client.needs, 
+                            selectedBatteryId: bat.id
+                          } 
+                        });
+                        setShowBatteryAlternatives(false);
+                      }}
+                    >
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <p className="text-white font-bold">{bat.name}</p>
+                          {bat.id === selectedBatteryId && (
+                            <span className="text-xs bg-emerald-500 text-slate-900 px-2 py-0.5 rounded font-bold">SELECTED</span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-400 mt-1">
+                          {bat.batteryPowerKwh}kWh • {bat.batteryType} • {bat.quantity} in stock
+                        </p>
+                        <p className="text-sm text-emerald-400 font-bold mt-1">{bat.sellPrice} RON</p>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Panels Section */}
         <section className="bg-slate-800 p-6 rounded-xl border border-slate-700">
