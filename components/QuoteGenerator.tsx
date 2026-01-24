@@ -415,6 +415,10 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
         subtotal_net: formatCurrency(calculateTotals.subtotalNet),
         vat_total: formatCurrency(calculateTotals.vatTotal),
         total_gross: formatCurrency(calculateTotals.totalGross),
+        // Aliases for common placeholder names
+        net_price: formatCurrency(calculateTotals.subtotalNet),
+        tva: formatCurrency(calculateTotals.vatTotal),
+        total_price: formatCurrency(calculateTotals.totalGross),
         items: items.map(item => ({
           description: item.description || '',
           qty: item.quantity || 0,
