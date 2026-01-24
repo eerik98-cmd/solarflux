@@ -98,6 +98,16 @@ const prepareDataForFirestore = async (collectionName: string, data: any) => {
     );
   }
 
+  // 4. Handle Company Documents (generated files like quotes, docs)
+  if (collectionName === 'companyDocuments' && processed.url && isBase64(processed.url)) {
+    const isPdf = typeof processed.name === 'string' && processed.name.toLowerCase().endsWith('.pdf');
+    const ext = isPdf ? 'pdf' : 'docx';
+    processed.url = await uploadBase64ToStorage(
+      processed.url,
+      `companyDocuments/${processed.id}_${timestamp}.${ext}`
+    );
+  }
+
   return processed;
 };
 

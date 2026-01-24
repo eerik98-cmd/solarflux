@@ -8,7 +8,7 @@ import { Quote } from '@/types';
 import Loading from '@/components/Loading';
 
 function QuoteGeneratorWrapper() {
-  const { inventory, clients, savedQuotes, docTemplates } = useData();
+  const { inventory, clients, savedQuotes, docTemplates, companyDocuments } = useData();
 
   const handleSaveQuote = async (quote: Quote) => {
     await StorageService.saveItem('quotes', quote);
@@ -16,6 +16,14 @@ function QuoteGeneratorWrapper() {
 
   const handleDeleteQuote = async (id: string) => {
     await StorageService.deleteItem('quotes', id);
+  };
+
+  const handleSaveDocument = async (doc: { id: string; name: string; url: string; date: Date; description?: string }) => {
+    await StorageService.saveItem('companyDocuments', doc);
+  };
+
+  const handleDeleteDocument = async (id: string) => {
+    await StorageService.deleteItem('companyDocuments', id);
   };
 
   return (
@@ -26,6 +34,9 @@ function QuoteGeneratorWrapper() {
       onSaveQuote={handleSaveQuote}
       onDeleteQuote={handleDeleteQuote}
       docTemplates={docTemplates}
+      companyDocuments={companyDocuments as any}
+      onSaveDocument={handleSaveDocument}
+      onDeleteDocument={handleDeleteDocument}
     />
   );
 }

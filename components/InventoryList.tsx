@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { InventoryItem, Category, User } from '../types';
 import { Search, Plus, Filter, AlertCircle, Edit2, Trash2, ScanBarcode, FileText, CheckCircle2, ShieldCheck, Hash, X, Zap } from 'lucide-react';
+import { DocumentPreview } from './DocumentPreview';
 
 interface InventoryListProps {
   inventory: InventoryItem[];
@@ -18,6 +19,7 @@ export const InventoryList: React.FC<InventoryListProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [filterCategory, setFilterCategory] = useState<Category | 'All'>('All');
   const [viewingSerials, setViewingSerials] = useState<InventoryItem | null>(null);
+  const [previewDoc, setPreviewDoc] = useState<{ name: string; url: string; description?: string; uploadedAt?: Date } | null>(null);
 
   const filteredItems = (inventory || []).filter(item => {
     const matchesSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
@@ -31,14 +33,13 @@ export const InventoryList: React.FC<InventoryListProps> = ({
     return new Intl.NumberFormat('ro-RO', { style: 'currency', currency: 'RON' }).format(val);
   };
 
-  const openDocument = (url?: string) => {
-    if (url) {
-      // For base64 data URLs, this opens in a new tab
-      const win = window.open();
-      if (win) {
-        win.document.write(`<iframe src="${url}" frameborder="0" style="border:0; top:0px; left:0px; bottom:0px; right:0px; width:100%; height:100%;" allowfullscreen></iframe>`);
-      }
-    }
+  const openDocument = (name: string, url: string) => {
+    setPreviewDoc({
+      name,
+      url,
+      description: 'Inventory Document',
+      uploadedAt: new Date()
+    });
   };
 
   return (
@@ -151,9 +152,9 @@ export const InventoryList: React.FC<InventoryListProps> = ({
                         <div className="flex justify-center gap-2">
                           {item.documents?.dataSheet ? (
                             <button 
-                              onClick={() => openDocument(item.documents?.dataSheet)}
+                              onClick={() => openDocument(item.documents?.dataSheetName || 'Data Sheet', item.documents?.dataSheet || '')}
                               title={`View Data Sheet (${item.documents.dataSheetName})`}
-                              className="text-amber-500 hover:text-amber-400"
+                              className="text-amber-500 hover:text-amber-400 transition-colors"
                             >
                               <FileText size={18} />
                             </button>
@@ -162,9 +163,9 @@ export const InventoryList: React.FC<InventoryListProps> = ({
                           )}
                            {item.documents?.certificate ? (
                             <button 
-                              onClick={() => openDocument(item.documents?.certificate)}
+                              onClick={() => openDocument(item.documents?.certificateName || 'Certificate', item.documents?.certificate || '')}
                               title={`View Certificate (${item.documents.certificateName})`}
-                              className="text-blue-500 hover:text-blue-400"
+                              className="text-blue-500 hover:text-blue-400 transition-colors"
                             >
                               <ShieldCheck size={18} />
                             </button>
@@ -214,6 +215,14 @@ export const InventoryList: React.FC<InventoryListProps> = ({
           </table>
         </div>
       </div>
+
+      {/* Document Preview Modal */}
+      {previewDoc && (
+        <DocumentPreview 
+          document={previewDoc}
+          onClose={() => setPreviewDoc(null)}
+        />
+      )}
 
       {/* Serial Number Viewer Modal */}
       {viewingSerials && (

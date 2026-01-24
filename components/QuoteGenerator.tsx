@@ -4,6 +4,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { InventoryItem, Quote, QuoteLineItem, Client, DocTemplate } from '../types';
 import { Plus, Trash2, Save, History, RefreshCcw, CheckSquare, Square, Search, ChevronDown, Package, Printer, Edit3, FileText, Download, X } from 'lucide-react';
 import { ConfirmDialog } from './ConfirmDialog';
+import { DocumentPreview } from './DocumentPreview';
 
 interface QuoteGeneratorProps {
   inventory: InventoryItem[];
@@ -12,14 +13,18 @@ interface QuoteGeneratorProps {
   onSaveQuote: (quote: Quote) => void;
   onDeleteQuote?: (id: string) => void;
   docTemplates: DocTemplate[];
+  companyDocuments?: Array<{ id: string; name: string; url: string; date?: Date; description?: string; quoteId?: string }>;
+  onSaveDocument?: (doc: { id: string; name: string; url: string; date: Date; description?: string; quoteId?: string; clientId?: string }) => Promise<void>;
+  onDeleteDocument?: (id: string) => Promise<void>;
 }
 
-export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clients, savedQuotes, onSaveQuote, onDeleteQuote, docTemplates }) => {
+export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clients, savedQuotes, onSaveQuote, onDeleteQuote, docTemplates, companyDocuments = [], onSaveDocument, onDeleteDocument }) => {
   const [projectTitle, setProjectTitle] = useState('');
   const [customerName, setCustomerName] = useState('');
   const [selectedClientId, setSelectedClientId] = useState<string | undefined>(undefined);
   const [description, setDescription] = useState('');
   const [items, setItems] = useState<QuoteLineItem[]>([]);
+  const [currentQuoteId, setCurrentQuoteId] = useState<string | null>(null);
   
   // UI State
   const [focusedRowId, setFocusedRowId] = useState<string | null>(null);
@@ -32,8 +37,8 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
   // Document Generation State
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
   const [isGenerating, setIsGenerating] = useState(false);
-  const [generatedDocuments, setGeneratedDocuments] = useState<Array<{id: string, name: string, blob: Blob, date: Date}>>([]);
-  const [previewDoc, setPreviewDoc] = useState<{name: string, url: string} | null>(null);
+  const [generatedDocuments, setGeneratedDocuments] = useState<Array<{id: string, name: string, blob: Blob, date: Date, quoteId?: string}>>([]);
+  const [previewDoc, setPreviewDoc] = useState<{name: string, url: string, description?: string, date?: Date} | null>(null);
   
   // Confirm Dialog State
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -158,6 +163,7 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
     };
 
     onSaveQuote(newQuote);
+    setCurrentQuoteId(newQuote.id);
     setConfirmDialog({
       isOpen: true,
       title: 'Quote Saved',
@@ -176,6 +182,7 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
     setSelectedClientId(undefined);
     setDescription('');
     setItems([]);
+    setCurrentQuoteId(null);
   };
 
   const loadQuote = (quote: Quote) => {
@@ -201,6 +208,7 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
     setSelectedClientId(quote.clientId);
     setDescription(quote.description || '');
     setItems(quote.items.map(i => ({...i, selectedSerialNumbers: i.selectedSerialNumbers || []})));
+    setCurrentQuoteId(quote.id);
     
     // Scroll to top
     const container = document.querySelector('.quote-gen-scroll');
@@ -356,6 +364,46 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
       // Get client data if available
       const client = selectedClientId ? clients.find(c => c.id === selectedClientId) : undefined;
 
+      // Prepare filtered equipment table (Inverter, Battery, Solar Panels only)
+      const equipmentItems = items
+        .map((item, index) => {
+          const invItem = inventory.find(i => i.id === item.inventoryItemId);
+          if (!invItem) return null;
+
+          // Filter: only inverters, batteries, and solar panels
+          const isInverter = invItem.category === 'Inverters';
+          const isBattery = invItem.category === 'Batteries';
+          const isPanel = invItem.category === 'Solar Panels';
+
+          if (!isInverter && !isBattery && !isPanel) return null;
+
+          // Determine power rating multiplied by quantity
+          let putere = '';
+          if (isInverter && invItem.inverterPowerKw) {
+            const totalKw = invItem.inverterPowerKw * item.quantity;
+            putere = `${totalKw} kW`;
+          } else if (isBattery && invItem.batteryPowerKwh) {
+            const totalKwh = invItem.batteryPowerKwh * item.quantity;
+            putere = `${totalKwh} kWh`;
+          } else if (isPanel && invItem.powerW) {
+            const totalW = invItem.powerW * item.quantity;
+            // Convert to kW if >= 1000W
+            if (totalW >= 1000) {
+              putere = `${(totalW / 1000).toFixed(2)} kW`;
+            } else {
+              putere = `${totalW} W`;
+            }
+          }
+
+          return {
+            nr_crt: index + 1,
+            denumire: item.description || invItem.name,
+            cantitate: item.quantity || 0,
+            putere: putere
+          };
+        })
+        .filter(item => item !== null);
+
       const data = {
         customer_name: customerName,
         customer_email: client?.email || '',
@@ -374,7 +422,8 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
           net_price: formatCurrency(item.netPrice || 0),
           total_price: formatCurrency((item.quantity || 0) * (item.netPrice || 0)),
           serials: item.selectedSerialNumbers?.join(', ') || ''
-        }))
+        })),
+        equipment: equipmentItems
       };
 
       doc.render(data);
@@ -386,16 +435,43 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
 
       const fileName = `Quote - ${projectTitle || customerName} - ${new Date().toLocaleDateString('ro-RO').replace(/\//g, '-')}.docx`;
       
-      // Add to generated documents list
+      // Add to generated documents list with quote association
       setGeneratedDocuments(prev => [{
         id: Date.now().toString(),
         name: fileName,
         blob: out,
-        date: new Date()
+        date: new Date(),
+        quoteId: currentQuoteId || undefined
       }, ...prev]);
 
+      // Convert blob to base64 data URL for preview + persistence
+      const toDataUrl = (blob: Blob) => new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+
+      const dataUrl = await toDataUrl(out);
+
+      // Preview with DocumentPreview component
+      setPreviewDoc({ name: fileName, url: dataUrl, description: `Generated from Quote for ${customerName}`, date: new Date() });
+
+      // Persist to storage if handler provided
+      if (onSaveDocument) {
+        await onSaveDocument({
+          id: Date.now().toString(),
+          name: fileName,
+          url: dataUrl,
+          date: new Date(),
+          description: `Quote document for ${customerName}`,
+          quoteId: currentQuoteId || undefined,
+          clientId: selectedClientId || undefined
+        });
+      }
+
       setIsGenerating(false);
-      alert('Document generated successfully!');
+      alert('Document generated and saved successfully!');
       
     } catch (err) {
       console.error('Document generation error:', err);
@@ -553,15 +629,19 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
                 </div>
             )}
 
-            {/* GENERATED DOCUMENTS LIST */}
-            {generatedDocuments.length > 0 && (
+            {/* DOCUMENTS FOR CURRENT QUOTE */}
+            {currentQuoteId && (
+              generatedDocuments.some(d => d.quoteId === currentQuoteId) ||
+              companyDocuments.some((d: any) => d.quoteId === currentQuoteId)
+            ) && (
                 <div className="bg-slate-800 rounded-xl border border-slate-700 p-6 shadow-lg">
                     <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
                         <FileText size={20} className="text-green-500" />
-                        Generated Documents ({generatedDocuments.length})
+                        Documents for this Quote
                     </h3>
                     <div className="space-y-2">
-                        {generatedDocuments.map(doc => (
+                        {/* Session documents linked to this quote */}
+                        {generatedDocuments.filter(doc => doc.quoteId === currentQuoteId).map(doc => (
                             <div key={doc.id} className="flex items-center justify-between p-3 bg-slate-700/30 border border-slate-600 rounded-lg hover:bg-slate-700/50 transition-colors">
                                 <div className="flex-1 min-w-0">
                                     <p className="text-white font-semibold text-sm truncate">{doc.name}</p>
@@ -571,13 +651,17 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
                                 </div>
                                 <div className="flex items-center gap-2 ml-4">
                                     <button
-                                        onClick={() => {
-                                            setPreviewDoc({ name: doc.name, url: URL.createObjectURL(doc.blob) });
+                                        onClick={async () => {
+                                            const reader = new FileReader();
+                                            reader.onloadend = () => {
+                                              setPreviewDoc({ name: doc.name, url: reader.result as string, date: doc.date });
+                                            };
+                                            reader.readAsDataURL(doc.blob);
                                         }}
                                         className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
                                     >
                                         <FileText size={14} />
-                                        Open
+                                        Preview
                                     </button>
                                     <button
                                         onClick={async () => {
@@ -600,6 +684,47 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
                                     >
                                         <Trash2 size={16} />
                                     </button>
+                                </div>
+                            </div>
+                        ))}
+
+                        {/* Persisted documents for this quote */}
+                        {companyDocuments.filter((doc: any) => doc.quoteId === currentQuoteId).map((doc: any) => (
+                            <div key={doc.id} className="flex items-center justify-between p-3 bg-slate-700/30 border border-slate-600 rounded-lg hover:bg-slate-700/50 transition-colors">
+                                <div className="flex-1 min-w-0">
+                                    <p className="text-white font-semibold text-sm truncate">{doc.name}</p>
+                                    <p className="text-xs text-slate-400 mt-1">
+                                        {doc.date ? new Date(doc.date).toLocaleString('ro-RO') : ''}
+                                    </p>
+                                </div>
+                                <div className="flex items-center gap-2 ml-4">
+                                    <button
+                                        onClick={() => setPreviewDoc({ name: doc.name, url: doc.url, description: doc.description, date: doc.date })}
+                                        className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
+                                    >
+                                        <FileText size={14} />
+                                        Preview
+                                    </button>
+                                    <a
+                                        href={doc.url}
+                                        download={doc.name}
+                                        className="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
+                                    >
+                                        <Download size={14} />
+                                        Download
+                                    </a>
+                                    {onDeleteDocument && (
+                                      <button
+                                        onClick={() => {
+                                          if (confirm(`Delete "${doc.name}"?`)) {
+                                            onDeleteDocument(doc.id);
+                                          }
+                                        }}
+                                        className="p-2 text-red-500 hover:text-red-400 hover:bg-slate-600 rounded transition-colors"
+                                      >
+                                        <Trash2 size={16} />
+                                      </button>
+                                    )}
                                 </div>
                             </div>
                         ))}
@@ -960,60 +1085,12 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
         onCancel={() => setConfirmDialog({ ...confirmDialog, isOpen: false })}
       />
 
-      {/* Document Preview Modal */}
+      {/* Document Preview Modal using DocumentPreview */}
       {previewDoc && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => {
-          URL.revokeObjectURL(previewDoc.url);
-          setPreviewDoc(null);
-        }}>
-          <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-2xl flex flex-col shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between p-4 border-b border-slate-700">
-              <div className="flex items-center gap-3">
-                <FileText className="text-blue-500" size={24} />
-                <h3 className="text-lg font-bold text-white truncate">{previewDoc.name}</h3>
-              </div>
-              <button
-                onClick={() => {
-                  URL.revokeObjectURL(previewDoc.url);
-                  setPreviewDoc(null);
-                }}
-                className="p-2 hover:bg-slate-700 rounded-lg transition-colors text-slate-400 hover:text-white"
-              >
-                <X size={20} />
-              </button>
-            </div>
-            <div className="p-8 text-center">
-              <div className="mb-6">
-                <div className="w-20 h-20 mx-auto mb-4 bg-blue-500/20 rounded-full flex items-center justify-center">
-                  <FileText className="text-blue-500" size={40} />
-                </div>
-                <p className="text-slate-300 text-lg mb-2">Word Document (.docx)</p>
-                <p className="text-slate-500 text-sm">
-                  This file needs to be opened in Microsoft Word, LibreOffice, or Google Docs.
-                </p>
-              </div>
-              <div className="flex gap-3 justify-center">
-                <a
-                  href={previewDoc.url}
-                  download={previewDoc.name}
-                  className="px-6 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-semibold transition-colors flex items-center gap-2 shadow-lg"
-                >
-                  <Download size={18} />
-                  Download & Open
-                </a>
-                <button
-                  onClick={() => {
-                    window.open(previewDoc.url, '_blank');
-                  }}
-                  className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition-colors flex items-center gap-2 shadow-lg"
-                >
-                  <FileText size={18} />
-                  Open in New Tab
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <DocumentPreview
+          document={{ name: previewDoc.name, url: previewDoc.url, description: previewDoc.description, date: previewDoc.date }}
+          onClose={() => setPreviewDoc(null)}
+        />
       )}
     </div>
   );

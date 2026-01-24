@@ -5,24 +5,7 @@ import { FolderOpen, Upload, Eye, Edit2, Download, Printer, Trash2, FileText, X,
 import { useClient } from '@/contexts/ClientContext';
 import { ClientType } from '@/types';
 import { FileSystem, getFolderForDocType } from '@/services/fileSystemService';
-
-const isPdfDoc = (doc: any) =>
-  !!doc.url && (doc.url.startsWith('data:application/pdf') || doc.name?.toLowerCase().endsWith('.pdf'));
-
-const PdfPreview: React.FC<{ url: string; title: string }> = ({ url, title }) => {
-  return (
-    <div className="w-full h-full flex flex-col">
-      <div className="flex-1 overflow-auto rounded-lg border border-slate-700 bg-slate-950">
-        <iframe
-          src={url}
-          title={title}
-          className="w-full h-full min-h-[600px]"
-          style={{ border: 'none' }}
-        />
-      </div>
-    </div>
-  );
-};
+import { DocumentPreview } from '@/components/DocumentPreview';
 
 export default function ClientDocumentsPage() {
   const { client, updateClient } = useClient();
@@ -327,68 +310,10 @@ export default function ClientDocumentsPage() {
 
       {/* Preview Modal */}
       {previewDoc && previewDoc.url && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => setPreviewDoc(null)}>
-          <div className="bg-slate-800 border border-slate-700 rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-auto flex flex-col" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between p-6 border-b border-slate-700 sticky top-0 bg-slate-800 z-10">
-              <div>
-                <h3 className="text-lg font-bold text-white">{previewDoc.name}</h3>
-                <p className="text-xs text-slate-400 mt-1">{previewDoc.description} • {new Date(previewDoc.date).toLocaleDateString()}</p>
-              </div>
-              <button onClick={() => setPreviewDoc(null)} className="p-2 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg transition-all flex-shrink-0">
-                <X size={24} />
-              </button>
-            </div>
-
-            <div className="flex-1 p-6 bg-slate-900 min-h-[500px] flex flex-col">
-              {previewDoc.url.includes('data:image') || previewDoc.name?.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? (
-                <img src={previewDoc.url} alt={previewDoc.name} className="max-w-full max-h-full object-contain rounded-lg mx-auto" />
-              ) : isPdfDoc(previewDoc) ? (
-                <PdfPreview url={previewDoc.url} title={previewDoc.name} />
-              ) : previewDoc.url.includes('data:text') ? (
-                <div className="bg-slate-800 rounded-lg p-6 max-h-full overflow-auto border border-slate-700 w-full">
-                  <pre className="text-sm text-slate-300 font-mono whitespace-pre-wrap break-words">
-                    {atob(previewDoc.url.split(',')[1])}
-                  </pre>
-                </div>
-              ) : (
-                <div className="text-center text-slate-400 flex flex-col items-center gap-4 justify-center h-full">
-                  <FileText size={64} className="text-slate-600" />
-                  <div>
-                    <p className="font-semibold text-white mb-2">{previewDoc.name}</p>
-                    <p className="text-sm">Preview not available for this file type</p>
-                    <button 
-                      onClick={() => downloadDocument(previewDoc.url, previewDoc.name)} 
-                      className="mt-4 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-sm font-semibold transition-all"
-                    >
-                      Download File
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="flex gap-2 p-4 border-t border-slate-700 bg-slate-800 justify-end">
-              <button 
-                onClick={() => downloadDocument(previewDoc.url, previewDoc.name)} 
-                className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-semibold flex items-center gap-2 transition-all"
-              >
-                <Download size={16} /> Download
-              </button>
-              <button 
-                onClick={() => printDocument(previewDoc.url)} 
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold flex items-center gap-2 transition-all"
-              >
-                <Printer size={16} /> Print
-              </button>
-              <button 
-                onClick={() => setPreviewDoc(null)} 
-                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-sm font-semibold transition-all"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
+        <DocumentPreview 
+          document={previewDoc}
+          onClose={() => setPreviewDoc(null)}
+        />
       )}
 
       {/* Edit Modal */}

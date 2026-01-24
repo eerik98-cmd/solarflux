@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   FileText, Zap, Package, FolderOpen, Save, Briefcase, CheckCircle, 
-  AlertCircle, X, ImageIcon, Upload, Camera, Trash2
+  AlertCircle, X, ImageIcon, Upload, Camera, Trash2, ChevronLeft, ChevronRight
 } from 'lucide-react';
 import { useClient } from '@/contexts/ClientContext';
 import { useData } from '@/contexts/DataContext';
@@ -23,7 +23,7 @@ export default function ClientNeedsPage() {
   const [rowCount, setRowCount] = useState<number>(1);
   const [rowDistribution, setRowDistribution] = useState<{[key: number]: number}>({1: 0});
   const [archivedProjects, setArchivedProjects] = useState<ArchivedProject[]>([]);
-  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const [previewImageIndex, setPreviewImageIndex] = useState<number | null>(null);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [showAlternatives, setShowAlternatives] = useState(false);
   const [showBatteryAlternatives, setShowBatteryAlternatives] = useState(false);
@@ -49,6 +49,24 @@ export default function ClientNeedsPage() {
       }
     };
   }, []);
+
+  // Keyboard navigation for image preview
+  useEffect(() => {
+    if (previewImageIndex === null || !client?.needs?.siteImages) return;
+    
+    const handleKeyPress = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft' && previewImageIndex > 0) {
+        setPreviewImageIndex(previewImageIndex - 1);
+      } else if (e.key === 'ArrowRight' && previewImageIndex < client.needs.siteImages.length - 1) {
+        setPreviewImageIndex(previewImageIndex + 1);
+      } else if (e.key === 'Escape') {
+        setPreviewImageIndex(null);
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyPress);
+    return () => window.removeEventListener('keydown', handleKeyPress);
+  }, [previewImageIndex, client?.needs?.siteImages]);
 
   if (!client) return null;
 
@@ -1169,7 +1187,7 @@ export default function ClientNeedsPage() {
                 >
                   <div 
                     className="relative aspect-video group cursor-pointer" 
-                    onClick={() => setPreviewImageUrl(img.url)}
+                    onClick={() => setPreviewImageIndex(idx)}
                   >
                     <img 
                       src={img.url} 
@@ -1215,24 +1233,103 @@ export default function ClientNeedsPage() {
         </section>
 
         {/* Image Preview Modal */}
-        {previewImageUrl && (
-          <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4" onClick={() => setPreviewImageUrl(null)}>
-            <div className="relative max-w-7xl max-h-full">
-              <button 
-                onClick={() => setPreviewImageUrl(null)}
-                className="absolute -top-12 right-0 text-white hover:text-amber-400 transition-colors"
-              >
-                <X size={32} />
-              </button>
-              <img 
-                src={previewImageUrl} 
-                alt="Preview" 
-                className="max-w-full max-h-[90vh] object-contain"
-                onClick={(e) => e.stopPropagation()}
-              />
+        {previewImageIndex !== null && client?.needs?.siteImages && client.needs.siteImages.length > 0 && (() => {
+          const currentImage = client.needs.siteImages[previewImageIndex];
+          const hasPrevious = previewImageIndex > 0;
+          const hasNext = previewImageIndex < client.needs.siteImages.length - 1;
+          
+          const goToPrevious = () => {
+            if (hasPrevious) setPreviewImageIndex(previewImageIndex - 1);
+          };
+          
+          const goToNext = () => {
+            if (hasNext) setPreviewImageIndex(previewImageIndex + 1);
+          };
+          
+          return (
+            <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={() => setPreviewImageIndex(null)}>
+              {/* Modal Frame */}
+              <div className="bg-slate-800 border-2 border-slate-600 rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                {/* Header with Title and Close Button */}
+                <div className="flex items-center justify-between px-6 py-4 border-b border-slate-600 bg-slate-750">
+                  <div className="flex items-center gap-3 flex-1 min-w-0">
+                    {currentImage.category && (
+                      <span className="bg-amber-500 text-slate-900 text-xs font-bold px-3 py-1.5 rounded-md shadow flex-shrink-0">
+                        {currentImage.category}
+                      </span>
+                    )}
+                    <span className="text-slate-300 text-sm font-medium bg-slate-700/50 px-3 py-1 rounded flex-shrink-0">
+                      {previewImageIndex + 1} / {client.needs.siteImages.length}
+                    </span>
+                    <h3 className="text-white font-semibold truncate flex-1">
+                      {currentImage.label || 'Photo'}
+                    </h3>
+                  </div>
+                  <button
+                    onClick={() => setPreviewImageIndex(null)}
+                    className="ml-4 flex-shrink-0 text-slate-400 hover:text-white transition-colors p-1 hover:bg-slate-700 rounded"
+                    aria-label="Close"
+                  >
+                    <X size={24} />
+                  </button>
+                </div>
+                
+                {/* Image Content Area */}
+                <div className="flex-1 flex items-center justify-center overflow-hidden relative px-6 py-4 bg-slate-900/30">
+                  {/* Left Arrow */}
+                  {hasPrevious && (
+                    <button
+                      onClick={goToPrevious}
+                      className="absolute left-2 z-10 text-white hover:text-amber-400 hover:scale-110 transition-all bg-slate-800/90 hover:bg-slate-700 rounded-full p-2 shadow-lg"
+                      aria-label="Previous image"
+                    >
+                      <ChevronLeft size={32} />
+                    </button>
+                  )}
+                  
+                  {/* Image */}
+                  <img 
+                    src={currentImage.url} 
+                    alt={currentImage.label || "Site photo"}
+                    className="max-w-full max-h-full object-contain"
+                  />
+                  
+                  {/* Right Arrow */}
+                  {hasNext && (
+                    <button
+                      onClick={goToNext}
+                      className="absolute right-2 z-10 text-white hover:text-amber-400 hover:scale-110 transition-all bg-slate-800/90 hover:bg-slate-700 rounded-full p-2 shadow-lg"
+                      aria-label="Next image"
+                    >
+                      <ChevronRight size={32} />
+                    </button>
+                  )}
+                </div>
+                
+                {/* Footer with Details */}
+                <div className="border-t border-slate-600 px-6 py-4 bg-slate-750 flex items-center justify-between text-sm">
+                  <div className="flex-1">
+                    {currentImage.timestamp && (
+                      <p className="text-slate-400 flex items-center gap-2">
+                        <span>📅</span>
+                        {new Date(currentImage.timestamp).toLocaleString('en-US', {
+                          year: 'numeric',
+                          month: 'short',
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
+                      </p>
+                    )}
+                  </div>
+                  <div className="text-slate-500 text-xs text-right">
+                    <div>Use ← → or click arrows to navigate</div>
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* Camera Modal */}
         {isCameraOpen && (
