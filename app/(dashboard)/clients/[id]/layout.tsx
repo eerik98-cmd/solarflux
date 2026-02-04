@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { useParams, usePathname, useRouter } from 'next/navigation';
-import { ArrowLeft, FileText, Zap, FolderOpen, ClipboardList, FileCog } from 'lucide-react';
+import { ArrowLeft, FileText, Zap, FolderOpen, ClipboardList, Hammer, FileCog } from 'lucide-react';
 import { ClientProvider } from '@/contexts/ClientContext';
 import { useData } from '@/contexts/DataContext';
 
@@ -36,10 +36,9 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
     { id: 'needs', label: 'Needs & Calculation', icon: Zap, path: `/clients/${clientId}/needs` },
     { id: 'documents', label: 'Documents', icon: FolderOpen, path: `/clients/${clientId}/documents` },
     { id: 'quotes', label: 'Quotes', icon: ClipboardList, path: `/clients/${clientId}/quotes` },
+    { id: 'installation', label: 'Installation', icon: Hammer, path: `/clients/${clientId}/installation` },
     { id: 'doc-gen', label: 'Doc Generator', icon: FileCog, path: `/clients/${clientId}/doc-gen` },
   ];
-
-  const activeTab = tabs.find(tab => pathname.startsWith(tab.path));
 
   return (
     <ClientProvider clientId={clientId}>

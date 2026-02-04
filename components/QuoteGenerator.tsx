@@ -53,6 +53,10 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
     message: '',
     onConfirm: () => {},
   });
+
+  // Installer Allocation State
+  const [allocatedInstallerId, setAllocatedInstallerId] = useState<string>('');
+  const [quoteStatus, setQuoteStatus] = useState<'draft' | 'sent' | 'won'>('draft');
   
   const VAT_RATE = 0.21;
 
@@ -159,7 +163,13 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
       description,
       date: new Date(),
       items: [...items],
-      ...calculateTotals
+      ...calculateTotals,
+      // Add installer allocation if status is won and installer is selected
+      ...(quoteStatus === 'won' && allocatedInstallerId ? {
+        allocatedInstallerId,
+        allocatedAt: new Date(),
+        phase: 'assigned-acknowledged' as const
+      } : {})
     };
 
     onSaveQuote(newQuote);
@@ -183,6 +193,8 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
     setDescription('');
     setItems([]);
     setCurrentQuoteId(null);
+    setAllocatedInstallerId('');
+    setQuoteStatus('draft');
   };
 
   const loadQuote = (quote: Quote) => {
@@ -209,6 +221,8 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
     setDescription(quote.description || '');
     setItems(quote.items.map(i => ({...i, selectedSerialNumbers: i.selectedSerialNumbers || []})));
     setCurrentQuoteId(quote.id);
+    setAllocatedInstallerId(quote.allocatedInstallerId || '');
+    setQuoteStatus(quote.allocatedInstallerId ? 'won' : 'draft');
     
     // Scroll to top
     const container = document.querySelector('.quote-gen-scroll');
@@ -587,6 +601,46 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
                             className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-amber-500 outline-none resize-none"
                         />
                     </div>
+                </div>
+            </div>
+
+            {/* INSTALLER ALLOCATION */}
+            <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-lg">
+                <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-4 flex items-center gap-2">
+                   <CheckSquare size={16} className="text-emerald-500" />
+                   Quote Status & Installer Allocation
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 block">Quote Status</label>
+                        <select
+                            value={quoteStatus}
+                            onChange={(e) => setQuoteStatus(e.target.value as 'draft' | 'sent' | 'won')}
+                            className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                        >
+                            <option value="draft">Draft</option>
+                            <option value="sent">Sent to Client</option>
+                            <option value="won">Won - Allocate Installer</option>
+                        </select>
+                        {quoteStatus === 'won' && (
+                          <p className="text-xs text-emerald-400 mt-2">✓ This quote will be marked as won and can be allocated to an installer</p>
+                        )}
+                    </div>
+                    {quoteStatus === 'won' && (
+                      <div>
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 block">Assign Installer</label>
+                          <input
+                              type="text"
+                              value={allocatedInstallerId}
+                              onChange={(e) => setAllocatedInstallerId(e.target.value)}
+                              placeholder="Enter installer name or ID..."
+                              className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                          />
+                          {allocatedInstallerId && (
+                            <p className="text-xs text-emerald-400 mt-2">✓ Will be allocated to: <strong>{allocatedInstallerId}</strong></p>
+                          )}
+                      </div>
+                    )}
                 </div>
             </div>
 
@@ -1045,7 +1099,14 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
                         {savedQuotes.slice().reverse().map(q => (
                             <div key={q.id} className="bg-slate-800 border border-slate-700 hover:border-amber-500/50 rounded-xl p-4 transition-all group relative">
                                 <div className="flex justify-between items-start mb-2">
-                                    <h4 className="font-bold text-white truncate pr-2 cursor-pointer" onClick={() => loadQuote(q)}>{q.title || 'Untitled'}</h4>
+                                    <div className="flex-1">
+                                      <h4 className="font-bold text-white truncate pr-2 cursor-pointer" onClick={() => loadQuote(q)}>{q.title || 'Untitled'}</h4>
+                                      {q.allocatedInstallerId && (
+                                        <div className="text-xs mt-1 flex items-center gap-1 px-2 py-1 bg-emerald-500/20 text-emerald-300 rounded-full w-fit">
+                                          👷 {q.allocatedInstallerId}
+                                        </div>
+                                      )}
+                                    </div>
                                     <button
                                       type="button"
                                       onClick={(e) => {
@@ -1069,7 +1130,7 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
                                 <div className="text-xs text-slate-400 mb-1 flex items-center gap-1 cursor-pointer" onClick={() => loadQuote(q)}>
                                     <span className="font-semibold text-slate-300">{q.customerName}</span>
                                 </div>
-                                <div className="flex justify-between items-end mt-3 cursor-pointer" onClick={() => loadQuote(q)}>
+                                <div className="flex justify-between items-end mt-3">
                                     <span className="text-[10px] text-slate-500">{new Date(q.date).toLocaleDateString()}</span>
                                     <span className="text-sm font-bold text-emerald-400">{formatCurrency(q.totalGross)}</span>
                                 </div>

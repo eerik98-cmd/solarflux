@@ -19,8 +19,13 @@ export const Login: React.FC = () => {
     setLoading(true);
 
     try {
-      await login(username, password);
-      router.push('/clients');
+      const user = await login(username, password);
+      // Redirect based on user role
+      if (user.role === 'INSTALLER') {
+        router.push('/installer');
+      } else {
+        router.push('/clients');
+      }
     } catch (err: any) {
       setError(err.message || 'Authentication failed');
       setLoading(false);

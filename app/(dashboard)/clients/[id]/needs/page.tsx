@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   FileText, Zap, Package, FolderOpen, Save, Briefcase, CheckCircle, 
-  AlertCircle, X, ImageIcon, Upload, Camera, Trash2, ChevronLeft, ChevronRight
+  AlertCircle, X, ImageIcon, Upload, Camera, Trash2, ChevronLeft, ChevronRight, MapPin, RefreshCcw
 } from 'lucide-react';
 import { useClient } from '@/contexts/ClientContext';
 import { useData } from '@/contexts/DataContext';
@@ -194,6 +194,11 @@ export default function ClientNeedsPage() {
     setIsCameraOpen(false);
   };
 
+  const cfDocs = (client.documents || []).filter(doc => doc.type === 'CF');
+  const facturaDocs = (client.documents || []).filter(doc => doc.type === 'Fact');
+  const selectedCfDoc = cfDocs.find(doc => doc.id === client.needs?.selectedCfDocId);
+  const selectedFacturaDoc = facturaDocs.find(doc => doc.id === client.needs?.selectedFacturaDocId);
+
   return (
     <div className="h-full overflow-y-auto p-8 bg-slate-900">
       <div className="max-w-4xl mx-auto space-y-8 pb-12">
@@ -226,9 +231,26 @@ export default function ClientNeedsPage() {
               setArchivedProjects(updatedArchived);
               
               const clearedNeeds = { 
-                projectName: '', description: '', connectionType: undefined, roofType: undefined, 
-                roofTypeOther: undefined, inverterKw: undefined, panelKw: 0, panelCount: 0, 
-                panelStockItemId: undefined, storage: '', technicalNotes: '', siteImages: [] 
+                projectName: '',
+                description: '',
+                siteCountry: '',
+                siteCounty: '',
+                siteCity: '',
+                siteStreet: '',
+                siteStreetNumber: '',
+                sitePostalCode: '',
+                selectedCfDocId: '',
+                selectedFacturaDocId: '',
+                connectionType: undefined,
+                roofType: undefined, 
+                roofTypeOther: undefined,
+                inverterKw: undefined,
+                panelKw: 0,
+                panelCount: 0, 
+                panelStockItemId: undefined,
+                storage: '',
+                technicalNotes: '',
+                siteImages: [] 
               };
               
               await updateClient({ needs: clearedNeeds, archivedProjects: updatedArchived });
@@ -258,10 +280,26 @@ export default function ClientNeedsPage() {
                       onClick={() => {
                         if (isCurrent) {
                           const clearedNeeds = {
-                            description: '', projectName: '', connectionType: undefined, roofType: undefined,
-                            inverterKw: undefined, selectedInverterId: undefined, batteryKwh: undefined,
-                            selectedBatteryId: undefined, panelStockItemId: undefined,
-                            panelKw: undefined, panelCount: undefined, siteImages: []
+                            description: '',
+                            projectName: '',
+                            siteCountry: '',
+                            siteCounty: '',
+                            siteCity: '',
+                            siteStreet: '',
+                            siteStreetNumber: '',
+                            sitePostalCode: '',
+                            selectedCfDocId: '',
+                            selectedFacturaDocId: '',
+                            connectionType: undefined,
+                            roofType: undefined,
+                            inverterKw: undefined,
+                            selectedInverterId: undefined,
+                            batteryKwh: undefined,
+                            selectedBatteryId: undefined,
+                            panelStockItemId: undefined,
+                            panelKw: undefined,
+                            panelCount: undefined,
+                            siteImages: []
                           };
                           updateClient({ needs: clearedNeeds });
                           setTempDescription('');
@@ -328,6 +366,128 @@ export default function ClientNeedsPage() {
             className="w-full bg-slate-900 border border-slate-600 rounded-lg p-4 text-white outline-none focus:ring-1 focus:ring-amber-500" 
             placeholder="Enter project name..." 
           />
+        </section>
+
+        {/* Site Location */}
+        <section className="bg-slate-800 p-6 rounded-xl border border-slate-700">
+          <h3 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2">
+            <MapPin size={16} className="text-amber-500" />Site Location
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Street</label>
+              <input
+                type="text"
+                value={client.needs?.siteStreet || ''}
+                onChange={(e) => handleNeedsChange('siteStreet', e.target.value)}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Street Number</label>
+              <input
+                type="text"
+                value={client.needs?.siteStreetNumber || ''}
+                onChange={(e) => handleNeedsChange('siteStreetNumber', e.target.value)}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">City</label>
+              <input
+                type="text"
+                value={client.needs?.siteCity || ''}
+                onChange={(e) => handleNeedsChange('siteCity', e.target.value)}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">County</label>
+              <input
+                type="text"
+                value={client.needs?.siteCounty || ''}
+                onChange={(e) => handleNeedsChange('siteCounty', e.target.value)}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Postal Code</label>
+              <input
+                type="text"
+                value={client.needs?.sitePostalCode || ''}
+                onChange={(e) => handleNeedsChange('sitePostalCode', e.target.value)}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Country</label>
+              <input
+                type="text"
+                value={client.needs?.siteCountry || 'Romania'}
+                onChange={(e) => handleNeedsChange('siteCountry', e.target.value)}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500"
+              />
+            </div>
+          </div>
+        </section>
+
+        {/* Document Data Selection */}
+        <section className="bg-slate-800 p-6 rounded-xl border border-slate-700">
+          <h3 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2">
+            <FileText size={16} className="text-amber-500" />Document Data Selection
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">CF Document</label>
+              <select
+                value={client.needs?.selectedCfDocId || ''}
+                onChange={(e) => handleNeedsChange('selectedCfDocId', e.target.value)}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500"
+              >
+                <option value="">-- None --</option>
+                {cfDocs.map(doc => (
+                  <option key={doc.id} value={doc.id}>
+                    {doc.name}
+                  </option>
+                ))}
+              </select>
+              {selectedCfDoc && (
+                <div className="mt-3 rounded-lg border border-slate-700 bg-slate-900 p-3 text-xs text-slate-300 space-y-1">
+                  <div className="font-semibold text-white">{selectedCfDoc.name}</div>
+                  <div><span className="text-slate-500">Address:</span> {selectedCfDoc.docAddress || '—'}</div>
+                  <div><span className="text-slate-500">Nr CF:</span> {selectedCfDoc.cfNumber || '—'}</div>
+                  <div><span className="text-slate-500">Nr CAD:</span> {selectedCfDoc.cadNumber || '—'}</div>
+                  <div><span className="text-slate-500">Description:</span> {selectedCfDoc.description || '—'}</div>
+                </div>
+              )}
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Factura Document</label>
+              <select
+                value={client.needs?.selectedFacturaDocId || ''}
+                onChange={(e) => handleNeedsChange('selectedFacturaDocId', e.target.value)}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500"
+              >
+                <option value="">-- None --</option>
+                {facturaDocs.map(doc => (
+                  <option key={doc.id} value={doc.id}>
+                    {doc.name}
+                  </option>
+                ))}
+              </select>
+              {selectedFacturaDoc && (
+                <div className="mt-3 rounded-lg border border-slate-700 bg-slate-900 p-3 text-xs text-slate-300 space-y-1">
+                  <div className="font-semibold text-white">{selectedFacturaDoc.name}</div>
+                  <div><span className="text-slate-500">Address:</span> {selectedFacturaDoc.docAddress || '—'}</div>
+                  <div><span className="text-slate-500">POD:</span> {selectedFacturaDoc.podNumber || '—'}</div>
+                  <div><span className="text-slate-500">Description:</span> {selectedFacturaDoc.description || '—'}</div>
+                </div>
+              )}
+            </div>
+          </div>
+          <p className="text-xs text-slate-500 mt-3">
+            These selections define which CF/Factura data is used in document generation.
+          </p>
         </section>
 
         {/* Scope of Work */}
@@ -999,69 +1159,272 @@ export default function ClientNeedsPage() {
                   }
 
                   const numRows = rowConfigs.length;
-                  const endClamps = numRows * 4;
-                  const midClamps = rowConfigs.reduce((sum, panelsInRow) => sum + (panelsInRow - 1) * 2, 0);
+                  const endClamps = numRows * 4; // CEND: 4 per row
+                  const midClamps = (totalPanels - numRows) * 2; // CMID: (N - R) × 2 (1 per gap per rail)
                   
                   const selectedPanel = client.needs?.panelStockItemId 
                     ? inventory.find(i => i.id === client.needs.panelStockItemId) 
                     : null;
+                  // Look for rail by checking: 1) isRail flag with railLengthM, 2) CRAIL SKU
+                  const selectedRail = 
+                    inventory.find(i => i.category === Category.MOUNTING && i.isRail && (i.railLengthM || 0) > 0) ||
+                    inventory.find(i => i.category === Category.MOUNTING && i.sku?.toUpperCase() === 'CRAIL') ||
+                    null;
+                  
+                  // Get rail length: use explicit railLengthM if set, otherwise try to extract from name pattern (e.g., "5,4 M" or "5.4m")
+                  let railLengthM = selectedRail?.railLengthM || 0;
+                  if (!railLengthM && selectedRail?.name) {
+                    // Try to extract length from name like "5,4 M" or "5.4m"
+                    const match = selectedRail.name.match(/(\d+[.,]\d+)\s*[Mm]/);
+                    if (match) {
+                      railLengthM = parseFloat(match[1].replace(',', '.'));
+                    }
+                  }
+                  railLengthM = railLengthM || 6; // Final fallback to 6m
                   // Convert panel width from MM to meters (default 1134mm if not specified)
                   const panelWidthMm = selectedPanel?.panelWidth || 1134;
                   const panelWidth = panelWidthMm / 1000; // Convert to meters
                   const maxPanelsInRow = Math.max(...rowConfigs);
                   const railLengthPerRow = maxPanelsInRow * panelWidth;
                   const railLengthWithWaste = railLengthPerRow * 1.1;
-                  const sectionsPerRail = Math.ceil(railLengthWithWaste / 6);
-                  const railsOf6m = sectionsPerRail * numRows * 2;
+                  const sectionsPerRail = Math.ceil(railLengthWithWaste / railLengthM);
+                  const railsOf6m = sectionsPerRail * numRows * 2; // 2 rails per row (top and bottom)
                   const combinersPerRail = sectionsPerRail > 1 ? sectionsPerRail - 1 : 0;
                   const totalCombiners = combinersPerRail * numRows * 2;
+                  const totalRailLength = railsOf6m * railLengthM; // Total rail length in meters
                   
-                  let attachmentType = 'Hooks/Bolts';
-                  let attachmentsPerPanel = 4;
+                  // Calculate hooks based on roof type
+                  let roofHooks = 0;
+                  let roofScrews = 0;
+                  let hookType = '';
                   
-                  if (roofType === 'Tigla ceramica' || roofType === 'Tigla metalica') {
-                    attachmentType = 'Tile Hooks';
-                    attachmentsPerPanel = 5;
+                  if (roofType === 'Tigla ceramica') {
+                    // CHOOK-Tigla: 1 hook every 40cm (0.4m)
+                    roofHooks = Math.ceil(totalRailLength / 0.4);
+                    roofScrews = roofHooks * 2; // CHOOKSurub: 2 per hook
+                    hookType = 'CHOOK-Tigla';
                   } else if (roofType === 'Tabla' || roofType === 'Tabla ondulata' || roofType === 'Tabla cutata') {
-                    attachmentType = 'Hanger Bolts';
-                    attachmentsPerPanel = 4;
+                    // CHOOK-Tabla: 1 hook every 40cm (0.4m), no screws
+                    roofHooks = Math.ceil(totalRailLength / 0.4);
+                    hookType = 'CHOOK-Tabla';
                   }
                   
-                  const totalAttachments = totalPanels * attachmentsPerPanel;
+                  // Calculate minirails (CMINI)
+                  const miniRails = totalPanels * 2 + (numRows * 2);
+                  const miniRailScrews = miniRails * 4; // CMINISurub: 4 per minirail
+                  
+                  // Helper function to find inventory item by SKU
+                  const findMountingItem = (sku: string) => {
+                    const skuLower = sku.toLowerCase();
+                    // Only exact SKU match to avoid matching wrong items
+                    const item = inventory.find(i => i.category === Category.MOUNTING && i.sku?.toLowerCase() === skuLower);
+                    return item;
+                  };
+                  
+                  // Calculate reference prices for rail system
+                  const railItem = selectedRail;
+                  const combinerItem = findMountingItem('CCOMB');
+                  const hookTablaItem = findMountingItem('CHOOK-Tabla');
+                  const midClampItem = findMountingItem('CMID');
+                  const endClampItem = findMountingItem('CEND');
+                  
+                  const railSystemPrice = 
+                    (railItem?.sellPrice || 0) * railsOf6m +
+                    (combinerItem?.sellPrice || 0) * totalCombiners +
+                    (hookTablaItem?.sellPrice || 0) * roofHooks +
+                    (midClampItem?.sellPrice || 0) * midClamps +
+                    (endClampItem?.sellPrice || 0) * endClamps;
+                  
+                  // Calculate reference prices for minirail system
+                  const miniRailItem = findMountingItem('CMINI');
+                  const miniRailScrewItem = findMountingItem('CMINISurub');
+                  
+                  const miniRailSystemPrice = 
+                    (miniRailItem?.sellPrice || 0) * miniRails +
+                    (miniRailScrewItem?.sellPrice || 0) * miniRailScrews +
+                    (midClampItem?.sellPrice || 0) * midClamps +
+                    (endClampItem?.sellPrice || 0) * endClamps;
+                  
+                  // Determine if Tigla ceramica (1 option) or other roof types (2 options)
+                  const isTiglaCeramica = roofType === 'Tigla ceramica';
+                  const showOptions = !isTiglaCeramica && (roofType === 'Tabla' || roofType === 'Tabla ondulata' || roofType === 'Tabla cutata');
 
                   return (
-                    <div className="bg-blue-500/10 border border-blue-500/30 p-4 rounded-lg space-y-3">
-                      <p className="text-sm font-bold text-blue-300 mb-3 flex items-center gap-2">
-                        <CheckCircle size={14} /> Structure Components Required
-                      </p>
-                      
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="bg-slate-900 p-3 rounded-lg border border-slate-700">
-                          <p className="text-xs text-slate-400">End Clamps</p>
-                          <p className="text-xl font-bold text-white mt-1">{endClamps} pcs</p>
-                        </div>
-                        <div className="bg-slate-900 p-3 rounded-lg border border-slate-700">
-                          <p className="text-xs text-slate-400">Mid Clamps</p>
-                          <p className="text-xl font-bold text-white mt-1">{midClamps} pcs</p>
-                        </div>
-                        <div className="bg-slate-900 p-3 rounded-lg border border-slate-700">
-                          <p className="text-xs text-slate-400">Rails (6m)</p>
-                          <p className="text-xl font-bold text-white mt-1">{railsOf6m} pcs</p>
-                        </div>
-                        {totalCombiners > 0 && (
-                          <div className="bg-slate-900 p-3 rounded-lg border border-slate-700">
-                            <p className="text-xs text-slate-400">Rail Combiners</p>
-                            <p className="text-xl font-bold text-white mt-1">{totalCombiners} pcs</p>
-                          </div>
-                        )}
-                        <div className="bg-slate-900 p-3 rounded-lg border border-slate-700 col-span-2">
-                          <p className="text-xs text-slate-400">{attachmentType}</p>
-                          <p className="text-xl font-bold text-white mt-1">{totalAttachments} pcs</p>
-                        </div>
+                    <div className="bg-blue-500/10 border border-blue-500/30 p-4 rounded-lg space-y-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <p className="text-sm font-bold text-blue-300 flex items-center gap-2">
+                          <CheckCircle size={14} /> Structure Components Required
+                        </p>
+                        <button
+                          onClick={() => {
+                            // Force a visual refresh indication
+                            const el = document.getElementById('structure-components');
+                            if (el) {
+                              el.style.opacity = '0.5';
+                              setTimeout(() => { el.style.opacity = '1'; }, 150);
+                            }
+                          }}
+                          className="p-1.5 text-blue-400 hover:text-blue-300 hover:bg-blue-500/20 rounded transition-colors"
+                          title="Refresh calculations"
+                        >
+                          <RefreshCcw size={14} />
+                        </button>
                       </div>
+                      <div id="structure-components" className="transition-opacity duration-150">
+                      
+                      {/* Tigla ceramica - Single Option (Auto-selected) */}
+                      {isTiglaCeramica && (
+                        <div className="space-y-3">
+                          <div 
+                            onClick={() => handleNeedsChange('selectedMountingSystem', 'rail')}
+                            className="bg-slate-900/50 p-3 rounded-lg border border-amber-500/30 cursor-pointer hover:bg-slate-900/70 transition-colors"
+                          >
+                            <div className="flex items-center justify-between mb-2">
+                              <div className="flex items-center gap-2">
+                                <input 
+                                  type="radio" 
+                                  checked={client.needs?.selectedMountingSystem === 'rail' || !client.needs?.selectedMountingSystem}
+                                  onChange={() => handleNeedsChange('selectedMountingSystem', 'rail')}
+                                  className="cursor-pointer"
+                                />
+                                <p className="text-xs font-bold text-amber-400">Rail System with Tigla Hooks</p>
+                              </div>
+                              {railSystemPrice > 0 && (
+                                <p className="text-xs font-bold text-emerald-400">≈ {railSystemPrice.toLocaleString('ro-RO', { style: 'currency', currency: 'RON' })}</p>
+                              )}
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div className="bg-slate-900 p-2 rounded border border-slate-700">
+                                <p className="text-[10px] text-slate-400">Rails ({railLengthM}m)</p>
+                                <p className="text-lg font-bold text-white">{railsOf6m} pcs</p>
+                              </div>
+                              {totalCombiners > 0 && (
+                                <div className="bg-slate-900 p-2 rounded border border-slate-700">
+                                  <p className="text-[10px] text-slate-400">Rail Combiners</p>
+                                  <p className="text-lg font-bold text-white">{totalCombiners} pcs</p>
+                                </div>
+                              )}
+                              <div className="bg-slate-900 p-2 rounded border border-slate-700">
+                                <p className="text-[10px] text-slate-400">CHOOK-Tigla</p>
+                                <p className="text-lg font-bold text-white">{roofHooks} pcs</p>
+                              </div>
+                              <div className="bg-slate-900 p-2 rounded border border-slate-700">
+                                <p className="text-[10px] text-slate-400">CHOOKSurub</p>
+                                <p className="text-lg font-bold text-white">{roofScrews} pcs</p>
+                              </div>
+                              <div className="bg-slate-900 p-2 rounded border border-slate-700">
+                                <p className="text-[10px] text-slate-400">CMID</p>
+                                <p className="text-lg font-bold text-white">{midClamps} pcs</p>
+                              </div>
+                              <div className="bg-slate-900 p-2 rounded border border-slate-700">
+                                <p className="text-[10px] text-slate-400">CEND</p>
+                                <p className="text-lg font-bold text-white">{endClamps} pcs</p>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* Other Roof Types - Two Options */}
+                      {showOptions && (
+                        <div className="space-y-3">
+                          {/* Option 1: Rail System */}
+                          <div 
+                            onClick={() => handleNeedsChange('selectedMountingSystem', 'rail')}
+                            className={`p-3 rounded-lg border cursor-pointer transition-colors ${
+                              client.needs?.selectedMountingSystem === 'rail'
+                                ? 'bg-green-500/20 border-green-500/50'
+                                : 'bg-slate-900/50 border-green-500/30 hover:bg-slate-900/70'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between mb-2">
+                              <div className="flex items-center gap-2">
+                                <input 
+                                  type="radio" 
+                                  checked={client.needs?.selectedMountingSystem === 'rail'}
+                                  onChange={() => handleNeedsChange('selectedMountingSystem', 'rail')}
+                                  className="cursor-pointer"
+                                />
+                                <p className="text-xs font-bold text-green-400">Option 1: Rail System</p>
+                              </div>
+                              {railSystemPrice > 0 && (
+                                <p className="text-xs font-bold text-emerald-400">≈ {railSystemPrice.toLocaleString('ro-RO', { style: 'currency', currency: 'RON' })}</p>
+                              )}
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div className="bg-slate-900 p-2 rounded border border-slate-700">
+                                <p className="text-[10px] text-slate-400">Rails ({railLengthM}m)</p>
+                                <p className="text-lg font-bold text-white">{railsOf6m} pcs</p>
+                              </div>
+                              {totalCombiners > 0 && (
+                                <div className="bg-slate-900 p-2 rounded border border-slate-700">
+                                  <p className="text-[10px] text-slate-400">Rail Combiners</p>
+                                  <p className="text-lg font-bold text-white">{totalCombiners} pcs</p>
+                                </div>
+                              )}
+                              <div className="bg-slate-900 p-2 rounded border border-slate-700">
+                                <p className="text-[10px] text-slate-400">CHOOK-Tabla</p>
+                                <p className="text-lg font-bold text-white">{roofHooks} pcs</p>
+                              </div>
+                              <div className="bg-slate-900 p-2 rounded border border-slate-700">
+                                <p className="text-[10px] text-slate-400">CMID</p>
+                                <p className="text-lg font-bold text-white">{midClamps} pcs</p>
+                              </div>
+                              <div className="bg-slate-900 p-2 rounded border border-slate-700">
+                                <p className="text-[10px] text-slate-400">CEND</p>
+                                <p className="text-lg font-bold text-white">{endClamps} pcs</p>
+                              </div>
+                            </div>
+                          </div>
+                          
+                          {/* Option 2: MiniRail System */}
+                          <div 
+                            onClick={() => handleNeedsChange('selectedMountingSystem', 'minirail')}
+                            className={`p-3 rounded-lg border cursor-pointer transition-colors ${
+                              client.needs?.selectedMountingSystem === 'minirail'
+                                ? 'bg-purple-500/20 border-purple-500/50'
+                                : 'bg-slate-900/50 border-purple-500/30 hover:bg-slate-900/70'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between mb-2">
+                              <div className="flex items-center gap-2">
+                                <input 
+                                  type="radio" 
+                                  checked={client.needs?.selectedMountingSystem === 'minirail'}
+                                  onChange={() => handleNeedsChange('selectedMountingSystem', 'minirail')}
+                                  className="cursor-pointer"
+                                />
+                                <p className="text-xs font-bold text-purple-400">Option 2: MiniRail System</p>
+                              </div>
+                              {miniRailSystemPrice > 0 && (
+                                <p className="text-xs font-bold text-emerald-400">≈ {miniRailSystemPrice.toLocaleString('ro-RO', { style: 'currency', currency: 'RON' })}</p>
+                              )}
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div className="bg-slate-900 p-2 rounded border border-slate-700">
+                                <p className="text-[10px] text-slate-400">CMINI</p>
+                                <p className="text-lg font-bold text-white">{miniRails} pcs</p>
+                              </div>
+                              <div className="bg-slate-900 p-2 rounded border border-slate-700">
+                                <p className="text-[10px] text-slate-400">CMINISurub</p>
+                                <p className="text-lg font-bold text-white">{miniRailScrews} pcs</p>
+                              </div>
+                              <div className="bg-slate-900 p-2 rounded border border-slate-700">
+                                <p className="text-[10px] text-slate-400">CMID</p>
+                                <p className="text-lg font-bold text-white">{midClamps} pcs</p>
+                              </div>
+                              <div className="bg-slate-900 p-2 rounded border border-slate-700">
+                                <p className="text-[10px] text-slate-400">CEND</p>
+                                <p className="text-lg font-bold text-white">{endClamps} pcs</p>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
 
                       <div className="text-xs text-slate-400 mt-3 p-2 bg-slate-900 rounded">
-                        <p>📐 Configuration: {numRows} row{numRows > 1 ? 's' : ''} • Max {maxPanelsInRow} panels/row • ~{railLengthPerRow.toFixed(2)}m rail length</p>
+                        <p>📐 Configuration: {numRows} row{numRows > 1 ? 's' : ''} • Max {maxPanelsInRow} panels/row • ~{railLengthPerRow.toFixed(2)}m rail length (sections of {railLengthM}m) • Total rail: {totalRailLength.toFixed(1)}m</p>
+                      </div>
                       </div>
                     </div>
                   );

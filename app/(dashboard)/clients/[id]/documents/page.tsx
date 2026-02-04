@@ -13,6 +13,10 @@ export default function ClientDocumentsPage() {
   const [docType, setDocType] = useState<string>('CI');
   const [docInput, setDocInput] = useState('');
   const [docDescription, setDocDescription] = useState('');
+  const [facturaPod, setFacturaPod] = useState('');
+  const [cfNumber, setCfNumber] = useState('');
+  const [cadNumber, setCadNumber] = useState('');
+  const [docAddress, setDocAddress] = useState('');
   const [previewDoc, setPreviewDoc] = useState<any>(null);
   const [editingDoc, setEditingDoc] = useState<any>(null);
 
@@ -35,7 +39,7 @@ export default function ClientDocumentsPage() {
     else if (docType === 'CF') fsType = 'CF';
     else if (docType === 'Factura') {
       fsType = 'Fact';
-      if (docInput.trim()) description = description ? `${description} - POD: ${docInput}` : `POD: ${docInput}`;
+      if (facturaPod.trim()) description = description ? `${description} - POD: ${facturaPod}` : `POD: ${facturaPod}`;
     } else if (docType === 'CUI') {
       fsType = 'Other';
       generatedName = `[${internalId}] CUI ${client.name}`;
@@ -46,10 +50,18 @@ export default function ClientDocumentsPage() {
     try {
       const newDoc = await FileSystem.saveFile(client, uploadFile, getFolderForDocType(docType), fsType, generatedName);
       newDoc.description = description;
+      newDoc.podNumber = facturaPod.trim() || undefined;
+      newDoc.cfNumber = cfNumber.trim() || undefined;
+      newDoc.cadNumber = cadNumber.trim() || undefined;
+      newDoc.docAddress = docAddress.trim() || undefined;
       await updateClient({ documents: [newDoc, ...(client.documents || [])] });
       setUploadFile(null);
       setDocInput('');
       setDocDescription('');
+      setFacturaPod('');
+      setCfNumber('');
+      setCadNumber('');
+      setDocAddress('');
       setDocType('CI');
     } catch (error) { 
       console.error(error); 
@@ -186,10 +198,49 @@ export default function ClientDocumentsPage() {
                 </select>
               </div>
 
-              {(docType === 'Factura' || docType === 'Other') && (
+              {docType === 'Factura' && (
+                <div className="w-full md:w-1/3">
+                  <label className="text-xs font-bold text-slate-500 uppercase block mb-1">POD Number</label>
+                  <input 
+                    type="text" 
+                    value={facturaPod} 
+                    onChange={(e) => setFacturaPod(e.target.value)} 
+                    placeholder="POD number" 
+                    className="w-full bg-slate-900 border border-slate-600 rounded-lg p-2.5 text-white outline-none focus:ring-1 focus:ring-amber-500" 
+                  />
+                </div>
+              )}
+
+              {docType === 'CF' && (
+                <div className="w-full md:w-1/3">
+                  <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Nr CF</label>
+                  <input 
+                    type="text" 
+                    value={cfNumber} 
+                    onChange={(e) => setCfNumber(e.target.value)} 
+                    placeholder="Nr CF" 
+                    className="w-full bg-slate-900 border border-slate-600 rounded-lg p-2.5 text-white outline-none focus:ring-1 focus:ring-amber-500" 
+                  />
+                </div>
+              )}
+
+              {docType === 'CF' && (
+                <div className="w-full md:w-1/3">
+                  <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Nr CAD</label>
+                  <input 
+                    type="text" 
+                    value={cadNumber} 
+                    onChange={(e) => setCadNumber(e.target.value)} 
+                    placeholder="Nr CAD" 
+                    className="w-full bg-slate-900 border border-slate-600 rounded-lg p-2.5 text-white outline-none focus:ring-1 focus:ring-amber-500" 
+                  />
+                </div>
+              )}
+
+              {docType === 'Other' && (
                 <div className="w-full md:w-1/3">
                   <label className="text-xs font-bold text-slate-500 uppercase block mb-1">
-                    {docType === 'Factura' ? 'POD / Number' : 'Name'}
+                    Name
                   </label>
                   <input 
                     type="text" 
@@ -212,6 +263,19 @@ export default function ClientDocumentsPage() {
             </div>
 
             <div className="flex flex-col md:flex-row gap-4 items-end">
+              {(docType === 'Factura' || docType === 'CF') && (
+                <div className="flex-1">
+                  <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Address</label>
+                  <input 
+                    type="text" 
+                    value={docAddress} 
+                    onChange={(e) => setDocAddress(e.target.value)} 
+                    placeholder="Address" 
+                    className="w-full bg-slate-900 border border-slate-600 rounded-lg p-2.5 text-white outline-none focus:ring-1 focus:ring-amber-500" 
+                  />
+                </div>
+              )}
+
               <div className="flex-1">
                 <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Description (Optional)</label>
                 <input 
@@ -249,6 +313,22 @@ export default function ClientDocumentsPage() {
                       <h5 className="font-bold text-white text-sm">{doc.name}</h5>
                       {doc.description && (
                         <p className="text-xs text-amber-500 mt-0.5 font-medium">{doc.description}</p>
+                      )}
+                      {doc.type === 'CF' && (doc.cfNumber || doc.cadNumber || doc.docAddress) && (
+                        <p className="text-xs text-amber-500 mt-0.5 font-medium">
+                          {doc.cfNumber && `Nr CF: ${doc.cfNumber}`}
+                          {doc.cfNumber && doc.cadNumber && ' • '}
+                          {doc.cadNumber && `Nr CAD: ${doc.cadNumber}`}
+                          {(doc.cfNumber || doc.cadNumber) && doc.docAddress && ' • '}
+                          {doc.docAddress && `Address: ${doc.docAddress}`}
+                        </p>
+                      )}
+                      {doc.type === 'Fact' && (doc.podNumber || doc.docAddress) && (
+                        <p className="text-xs text-amber-500 mt-0.5 font-medium">
+                          {doc.podNumber && `POD: ${doc.podNumber}`}
+                          {doc.podNumber && doc.docAddress && ' • '}
+                          {doc.docAddress && `Address: ${doc.docAddress}`}
+                        </p>
                       )}
                       <p className="text-xs text-slate-500 mt-0.5">
                         {new Date(doc.date).toLocaleDateString()} • {doc.type}

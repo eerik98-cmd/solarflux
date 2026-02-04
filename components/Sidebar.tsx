@@ -1,8 +1,9 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Box, Sun, Battery, Settings, FileText, Users, FolderOpen, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Box, Sun, Battery, Settings, FileText, Users, FolderOpen, ChevronLeft, ChevronRight, Briefcase, BarChart3 } from 'lucide-react';
 import { View } from '../types';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface SidebarProps {
   currentView: View;
@@ -11,18 +12,25 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, onLogout }) => {
+  const { currentUser } = useAuth();
   const [isCollapsed, setIsCollapsed] = useState(false);
   
-  const navItems = [
+  const baseNavItems = [
     { id: 'CLIENTS', label: 'Clients', icon: Users },
     { id: 'INVENTORY', label: 'Inventory', icon: Box },
-    // { id: 'INSTALLERS', label: 'Installers', icon: Wrench }, // Removed as requested
     { type: 'separator' },
-    // { id: 'DASHBOARD', label: 'Dashboard', icon: LayoutDashboard }, // Hidden
     { id: 'QUOTE_GENERATOR', label: 'Quote Generator', icon: FileText },
     { id: 'FILE_MANAGER', label: 'File Manager', icon: FolderOpen },
-    // { id: 'AI_ASSISTANT', label: 'AI Manager', icon: Bot }, // Hidden
   ];
+
+  // Add super admin items
+  const superAdminItems = currentUser?.role === 'SUPER_ADMIN' ? [
+    { type: 'separator' },
+    { id: 'SUPER_ADMIN', label: 'Admin Panel', icon: BarChart3, href: '/dashboard/installers' },
+    { id: 'PROJECTS_BY_INSTALLER', label: 'Projects Overview', icon: Briefcase, href: '/dashboard/projects-by-installer' },
+  ] : [];
+
+  const navItems = [...baseNavItems, ...superAdminItems];
 
   return (
     <div className={`bg-slate-800 h-screen flex flex-col border-r border-slate-700 transition-all duration-300 ${isCollapsed ? 'w-20' : 'w-64'}`}>
@@ -50,6 +58,30 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, onL
           
           const Icon = item.icon as React.ElementType;
           const isActive = currentView === item.id;
+          
+          // For href items (like admin pages), use anchor navigation
+          if (item.href) {
+            return (
+              <a
+                key={item.id}
+                href={item.href}
+                className={`w-full flex items-center rounded-xl transition-all duration-200 group ${
+                  isActive 
+                    ? 'bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/50' 
+                    : 'text-slate-400 hover:bg-slate-700/50 hover:text-slate-100'
+                } ${isCollapsed ? 'justify-center px-0 py-3' : 'gap-3 px-4 py-3'}`}
+                title={isCollapsed ? item.label : ''}
+              >
+                <Icon size={20} className={`${isActive ? 'text-emerald-400' : 'text-slate-500 group-hover:text-slate-300'} ${isCollapsed ? '' : 'flex-shrink-0'}`} />
+                {!isCollapsed && (
+                  <span className="font-medium">
+                    {item.label}
+                  </span>
+                )}
+              </a>
+            );
+          }
+
           return (
             <button
               key={item.id}

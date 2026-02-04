@@ -16,6 +16,7 @@ const nextConfig = {
   experimental: {
     serverActions: {
       bodySizeLimit: '10mb',
+      allowedOrigins: ['localhost', '*.github.dev', '*.app.github.dev', '*.githubpreview.dev'],
     },
   },
 };

@@ -31,6 +31,8 @@ export interface InventoryItem {
   powerW?: number; // Power in Watts (Specific to Solar Panels)
   panelWidth?: number; // Width in meters (Specific to Solar Panels)
   panelHeight?: number; // Height in meters (Specific to Solar Panels)
+  isRail?: boolean; // Mounting rail indicator
+  railLengthM?: number; // Mounting rail length in meters
   documents?: InventoryDocuments;
   serialNumbers?: string[]; // Array of unique serial numbers
   
@@ -54,6 +56,41 @@ export interface QuoteLineItem {
   selectedSerialNumbers?: string[];
 }
 
+export type ProjectPhase = 
+  | 'planning' 
+  | 'pending-assignment' 
+  | 'assigned-acknowledged' 
+  | 'in-progress' 
+  | 'pending-inspection' 
+  | 'completed' 
+  | 'archived';
+
+export interface MaterialVariance {
+  itemId: string;
+  description: string;
+  quotedQty: number;
+  consumedQty: number;
+  delta: number; // consumedQty - quotedQty
+  unit: string;
+  netPrice: number;
+  variance: number; // delta * netPrice
+}
+
+export interface ConsumptionItem {
+  id: string;
+  description: string;
+  quotedQty: number;
+  consumedQty: number;
+  actuallyUsed?: number; // For installer input
+  unit: string;
+  netPrice: number;
+  isExtra?: boolean;
+  originalLineItemId?: string;
+  inventoryItemId?: string; // Link to inventory for barcode scanning
+  barcode?: string; // For items with barcodes
+  hasBarcode?: boolean; // Whether this item supports barcode scanning
+}
+
 export interface Quote {
   id: string;
   clientId?: string; // Link to specific client
@@ -65,6 +102,48 @@ export interface Quote {
   subtotalNet: number;
   vatTotal: number;
   totalGross: number;
+
+  // Installer Allocation & Status
+  allocatedInstallerId?: string; // Installer nickname who is assigned
+  allocatedAt?: Date;
+  acknowledgedAt?: Date; // When installer acknowledged the job
+  acknowledgedBy?: string; // Installer nickname who acknowledged
+  
+  // Project Phase Tracking
+  phase?: ProjectPhase; // Current phase of the project
+  phaseHistory?: Array<{
+    phase: ProjectPhase;
+    timestamp: Date;
+    changedBy: string;
+  }>;
+  estimatedCompletionDate?: Date;
+
+  // Job Completion Data
+  completedAt?: Date;
+  completedBy?: string; // Installer nickname who completed
+  consumptionData?: ConsumptionItem[];
+  consumptionDataUpdatedAt?: Date; // When equipment list was last edited
+  consumptionDataUpdatedBy?: string; // Who last edited equipment
+  extraItems?: ConsumptionItem[];
+  completionNotes?: string;
+  installationPhotos?: InstallationPhoto[];
+  materialVariances?: MaterialVariance[];
+
+  // Admin Completion & Approval
+  adminApprovedAt?: Date; // When admin confirmed the completion
+  adminApprovedBy?: string; // Admin username who approved
+  adminApprovalNotes?: string; // Admin notes about the completion
+  
+  // Reopen Tracking (for post-completion changes)
+  reopenedAt?: Date; // When project was reopened after completion
+  reopenedBy?: string; // Who reopened it
+  reopenReason?: string; // Why it was reopened
+  reopenHistory?: Array<{
+    reopenedAt: Date;
+    reopenedBy: string;
+    reopenReason: string;
+    closedAgainAt?: Date; // When it was closed again after reopen
+  }>;
 }
 
 export interface AIResponse {
@@ -91,6 +170,16 @@ export interface ClientSiteImage {
   timestamp: Date;
   label?: string;
   category?: 'Roof' | 'Electrical' | 'Access' | 'Obstacles' | 'Meter' | 'Other';
+  uploadedBy?: string; // Name/nickname of person who uploaded
+}
+
+export interface InstallationPhoto {
+  id: string;
+  url: string; // Base64 data URL
+  timestamp: Date;
+  description?: string;
+  uploadedBy?: string; // Installer name who uploaded
+  uploadedAt?: Date; // Separate timestamp field
 }
 
 export interface ClientNeed {
@@ -102,12 +191,27 @@ export interface ClientNeed {
   // Project Info
   projectName?: string;
 
+  // Site Location
+  siteCountry?: string;
+  siteCounty?: string;
+  siteCity?: string;
+  siteStreet?: string;
+  siteStreetNumber?: string;
+  sitePostalCode?: string;
+
+  // Doc Selection for Generation
+  selectedCfDocId?: string;
+  selectedFacturaDocId?: string;
+
   // Connection
   connectionType?: 'Monofazat' | 'Trifazat';
   
   // Roof
   roofType?: 'Tigla ceramica' | 'Tabla' | 'Tigla metalica' | 'Tabla ondulata' | 'Tabla cutata' | 'Panou sandwich' | 'Other';
   roofTypeOther?: string; // Custom text when roofType is 'Other'
+  
+  // Mounting Structure Selection
+  selectedMountingSystem?: 'rail' | 'minirail'; // Selected mounting system option
   
   // Inverter Requirements
   inverterKw?: number;
@@ -155,6 +259,7 @@ export interface Client {
   city?: string;
   street?: string;
   streetNumber?: string;
+  postalCode?: string;
 
   // Private Specific
   firstName?: string;
@@ -168,7 +273,10 @@ export interface Client {
   regNumber?: string;   // Cégjegyzékszám / J
   iban?: string;        // Bankszámlaszám
   bankName?: string;
-  representative?: string; // Legal representative
+  representative?: string; // Legal representative (legacy)
+  representativeFirstName?: string;
+  representativeLastName?: string;
+  representativeRole?: string; // Calitate / Function
   website?: string;
 
   // New Fields
@@ -190,9 +298,15 @@ export interface ClientDocument {
   name: string; // The renamed file name (e.g. "CI John Doe.pdf")
   type: 'CI' | 'CF' | 'Fact' | 'CUI' | 'Other'; // Added CUI
   description?: string; // For POD or extra details
+  podNumber?: string; // Factura POD
+  cfNumber?: string; // CF number
+  cadNumber?: string; // CAD number
+  docAddress?: string; // Address for CF/Factura
   url: string; // Base64 or URL
   date: Date;
   folder?: string; // Virtual folder path
+  uploadedBy?: string; // Username of uploader (for installers)
+  uploadedByRole?: 'SUPER_ADMIN' | 'WAREHOUSEMAN' | 'INSTALLER'; // Role of uploader
 }
 
 export interface DocTemplate {
@@ -236,6 +350,19 @@ export interface Installer {
   status: 'AVAILABLE' | 'ASSIGNED' | 'OFF_DUTY';
   currentSite?: string;
   phone: string;
+}
+
+export interface InstallerNotification {
+  id: string;
+  type: 'PROJECT_ASSIGNED' | 'ADMIN_MESSAGE' | 'PROJECT_UPDATE';
+  title: string;
+  message: string;
+  createdAt: Date;
+  createdBy: string;
+  targetInstaller: string; // Installer nickname
+  projectId?: string; // Associated quote/project ID
+  isRead: boolean;
+  priority?: 'low' | 'medium' | 'high';
 }
 
 export type View = 'DASHBOARD' | 'INVENTORY' | 'AI_ASSISTANT' | 'QUOTE_GENERATOR' | 'CLIENTS' | 'SETTINGS' | 'FILE_MANAGER';

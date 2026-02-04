@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Save, User, Building2, Mail, Phone, MapPin, Hash, Briefcase, Info } from 'lucide-react';
 import { useClient } from '@/contexts/ClientContext';
 import { useAuth } from '@/contexts/AuthContext';
@@ -48,6 +48,13 @@ export default function ClientDataPage() {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
+  const isDirty = useMemo(() => {
+    if (!client || !formData) {
+      return false;
+    }
+    return JSON.stringify(client) !== JSON.stringify(formData);
+  }, [client, formData]);
+
   const handleSave = async () => {
     updateClient(formData);
     await saveClient();
@@ -57,7 +64,7 @@ export default function ClientDataPage() {
     <div className="p-8 max-w-4xl mx-auto">
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-bold text-white">Client Information</h2>
-        {hasChanges && (
+        {(hasChanges || isDirty) && (
           <button
             onClick={handleSave}
             className="bg-amber-500 hover:bg-amber-400 text-slate-900 px-4 py-2 rounded-lg font-bold flex items-center gap-2"
@@ -188,19 +195,77 @@ export default function ClientDataPage() {
                     className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white"
                   />
                 </div>
-                <div className="md:col-span-2">
-                  <label className="block text-sm font-bold text-slate-400 mb-2">Bank Account (IBAN)</label>
-                  <input
-                    name="iban"
-                    value={formData.iban || ''}
-                    onChange={handleChange}
-                    className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white"
-                  />
-                </div>
               </>
             )}
           </div>
         </div>
+
+        {formData.type === ClientType.CORPORATE && (
+          <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
+            <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+              <Briefcase size={20} className="text-amber-500" />
+              Representative Information
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-bold text-slate-400 mb-2">First Name</label>
+                <input
+                  name="representativeFirstName"
+                  value={formData.representativeFirstName || ''}
+                  onChange={handleChange}
+                  className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-slate-400 mb-2">Last Name</label>
+                <input
+                  name="representativeLastName"
+                  value={formData.representativeLastName || ''}
+                  onChange={handleChange}
+                  className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-sm font-bold text-slate-400 mb-2">Role / Function</label>
+                <input
+                  name="representativeRole"
+                  value={formData.representativeRole || ''}
+                  onChange={handleChange}
+                  className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white"
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {formData.type === ClientType.CORPORATE && (
+          <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
+            <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+              <Building2 size={20} className="text-amber-500" />
+              Banking Information
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-bold text-slate-400 mb-2">Bank Name</label>
+                <input
+                  name="bankName"
+                  value={formData.bankName || ''}
+                  onChange={handleChange}
+                  className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-slate-400 mb-2">IBAN</label>
+                <input
+                  name="iban"
+                  value={formData.iban || ''}
+                  onChange={handleChange}
+                  className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white"
+                />
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Contact Information */}
         <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
@@ -270,6 +335,15 @@ export default function ClientDataPage() {
               <input
                 name="county"
                 value={formData.county || ''}
+                onChange={handleChange}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-slate-400 mb-2">Postal Code</label>
+              <input
+                name="postalCode"
+                value={formData.postalCode || ''}
                 onChange={handleChange}
                 className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white"
               />

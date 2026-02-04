@@ -15,7 +15,7 @@ export default function DashboardLayout({
 }) {
   const router = useRouter();
   const pathname = usePathname();
-  const { logout, isAuthenticated, authLoading } = useAuth();
+  const { logout, isAuthenticated, authLoading, currentUser } = useAuth();
   
   // Protect dashboard routes - redirect to login if not authenticated
   useEffect(() => {
@@ -23,6 +23,13 @@ export default function DashboardLayout({
       router.replace(`/login?from=${encodeURIComponent(pathname)}`);
     }
   }, [authLoading, isAuthenticated, pathname, router]);
+
+  // Redirect installers to their dashboard
+  useEffect(() => {
+    if (!authLoading && currentUser && currentUser.role === 'INSTALLER' && !pathname.startsWith('/installer')) {
+      router.replace('/installer');
+    }
+  }, [authLoading, currentUser, pathname, router]);
   
   // Show loading state while checking authentication
   if (authLoading) {

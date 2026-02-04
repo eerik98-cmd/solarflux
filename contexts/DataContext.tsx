@@ -20,7 +20,9 @@ interface DataContextType {
   setDocTemplates: (templates: DocTemplate[]) => void;
   setCompanyDocuments: (docs: Record<string, unknown>[]) => void;
   saveQuote: (quote: Quote) => Promise<void>;
+  updateQuote: (quoteId: string, updates: Partial<Quote>) => Promise<void>;
   deleteQuote: (quoteId: string) => Promise<void>;
+  updateClient: (client: Client) => Promise<void>;
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
@@ -79,8 +81,19 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     await StorageService.saveItem('quotes', quote);
   };
 
+  const updateQuote = async (quoteId: string, updates: Partial<Quote>) => {
+    const existingQuote = savedQuotes.find(q => q.id === quoteId);
+    if (!existingQuote) throw new Error('Quote not found');
+    const updatedQuote = { ...existingQuote, ...updates };
+    await StorageService.saveItem('quotes', updatedQuote);
+  };
+
   const deleteQuote = async (quoteId: string) => {
     await StorageService.deleteItem('quotes', quoteId);
+  };
+
+  const updateClient = async (client: Client) => {
+    await StorageService.saveItem('clients', client);
   };
 
   return (
@@ -100,7 +113,9 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         setDocTemplates,
         setCompanyDocuments,
         saveQuote,
+        updateQuote,
         deleteQuote,
+        updateClient,
       }}
     >
       {children}

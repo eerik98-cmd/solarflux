@@ -26,6 +26,8 @@ const InventoryForm: React.FC<InventoryFormProps> = ({ initialData, onSubmit, on
     powerW: 0,
     panelWidth: 0,
     panelHeight: 0,
+    isRail: false,
+    railLengthM: 0,
     batteryPowerKwh: 0,
     batteryType: undefined,
     inverterPowerKw: 0,
@@ -70,6 +72,8 @@ const InventoryForm: React.FC<InventoryFormProps> = ({ initialData, onSubmit, on
         powerW: initialData.powerW || 0,
         panelWidth: initialData.panelWidth || 0,
         panelHeight: initialData.panelHeight || 0,
+        isRail: initialData.isRail || false,
+        railLengthM: initialData.railLengthM || 0,
         batteryPowerKwh: initialData.batteryPowerKwh || 0,
         batteryType: initialData.batteryType,
         inverterPowerKw: initialData.inverterPowerKw || 0,
@@ -104,7 +108,16 @@ const InventoryForm: React.FC<InventoryFormProps> = ({ initialData, onSubmit, on
     const { name, value } = e.target;
     setFormData(prev => ({
       ...prev,
-      [name]: (name === 'quantity' || name === 'buyPrice' || name === 'sellPrice' || name === 'minThreshold' || name === 'powerW' || name === 'panelWidth' || name === 'panelHeight') ? Number(value) : value
+      [name]: (name === 'quantity' || name === 'buyPrice' || name === 'sellPrice' || name === 'minThreshold' || name === 'powerW' || name === 'panelWidth' || name === 'panelHeight' || name === 'railLengthM') ? Number(value) : value
+    }));
+  };
+
+  const handleRailToggle = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const checked = e.target.checked;
+    setFormData(prev => ({
+      ...prev,
+      isRail: checked,
+      railLengthM: checked ? (prev.railLengthM || 6) : 0
     }));
   };
 
@@ -371,6 +384,37 @@ const InventoryForm: React.FC<InventoryFormProps> = ({ initialData, onSubmit, on
                   ))}
                 </select>
               </div>
+
+              {formData.category === Category.MOUNTING && (
+                <div className="space-y-1 md:col-span-2">
+                  <label className="text-sm font-medium text-slate-400">Mounting Rail</label>
+                  <div className="flex flex-col md:flex-row md:items-center gap-4">
+                    <label className="flex items-center gap-2 text-slate-300 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={!!formData.isRail}
+                        onChange={handleRailToggle}
+                        className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-amber-500 focus:ring-amber-500"
+                      />
+                      This item is a rail
+                    </label>
+                    {formData.isRail && (
+                      <div className="flex-1">
+                        <input
+                          name="railLengthM"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={formData.railLengthM || ''}
+                          onChange={handleChange}
+                          placeholder="Rail length (m)"
+                          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none"
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
               <div className="space-y-1">
                 <label className="text-sm font-medium text-slate-400">Location</label>

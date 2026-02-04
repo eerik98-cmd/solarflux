@@ -21,6 +21,8 @@ export default function ClientDocGenPage() {
 
   const clientQuotes = savedQuotes.filter(q => q.clientId === client.id);
   const selectedQuote = clientQuotes.find(q => q.id === selectedQuoteId);
+  const selectedCfDoc = client.documents?.find(doc => doc.id === client.needs?.selectedCfDocId);
+  const selectedFacturaDoc = client.documents?.find(doc => doc.id === client.needs?.selectedFacturaDocId);
 
   const handleTemplateUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -60,10 +62,22 @@ export default function ClientDocGenPage() {
         clientName: client.name || '',
         clientType: client.type || '',
         clientAddress: `${client.street || ''}, ${client.city || ''}, ${client.county || ''}`.trim(),
+        clientCountry: client.country || '',
+        clientCounty: client.county || '',
+        clientCity: client.city || '',
+        clientStreet: client.street || '',
+        clientStreetNumber: client.streetNumber || '',
+        clientPostalCode: client.postalCode || '',
         clientPhone: client.phone || '',
         clientEmail: client.email || '',
         clientCUI: client.taxId || '',
+        clientCNP: client.cnp || '',
         clientRegCom: client.regNumber || '',
+        clientBankName: client.bankName || '',
+        clientIban: client.iban || '',
+        clientRepresentativeFirstName: client.representativeFirstName || '',
+        clientRepresentativeLastName: client.representativeLastName || '',
+        clientRepresentativeRole: client.representativeRole || '',
         
         // Quote data
         quoteName: selectedQuote?.title || '',
@@ -88,6 +102,17 @@ export default function ClientDocGenPage() {
         batteryCapacity: client.needs?.batteryKwh || '',
         panelPower: client.needs?.panelKw || '',
         panelCount: client.needs?.panelCount || '',
+        siteCountry: client.needs?.siteCountry || '',
+        siteCounty: client.needs?.siteCounty || '',
+        siteCity: client.needs?.siteCity || '',
+        siteStreet: client.needs?.siteStreet || '',
+        siteStreetNumber: client.needs?.siteStreetNumber || '',
+        sitePostalCode: client.needs?.sitePostalCode || '',
+        podNumber: selectedFacturaDoc?.podNumber || '',
+        cfNumber: selectedCfDoc?.cfNumber || '',
+        cadNumber: selectedCfDoc?.cadNumber || '',
+        cfAddress: selectedCfDoc?.docAddress || '',
+        facturaAddress: selectedFacturaDoc?.docAddress || '',
         
         // Additional fields
         internalId: client.internalId || '',
@@ -121,7 +146,19 @@ export default function ClientDocGenPage() {
     { key: '{{clientAddress}}', desc: 'Full address' },
     { key: '{{clientPhone}}', desc: 'Phone number' },
     { key: '{{clientEmail}}', desc: 'Email address' },
-    { key: '{{clientCUI}}', desc: 'CUI/CNP' },
+    { key: '{{clientCountry}}', desc: 'Country' },
+    { key: '{{clientCounty}}', desc: 'County' },
+    { key: '{{clientCity}}', desc: 'City' },
+    { key: '{{clientStreet}}', desc: 'Street' },
+    { key: '{{clientStreetNumber}}', desc: 'Street number' },
+    { key: '{{clientPostalCode}}', desc: 'Postal code' },
+    { key: '{{clientCUI}}', desc: 'CUI (Company Tax ID)' },
+    { key: '{{clientCNP}}', desc: 'CNP (Personal ID)' },
+    { key: '{{clientBankName}}', desc: 'Bank name' },
+    { key: '{{clientIban}}', desc: 'IBAN' },
+    { key: '{{clientRepresentativeFirstName}}', desc: 'Representative first name' },
+    { key: '{{clientRepresentativeLastName}}', desc: 'Representative last name' },
+    { key: '{{clientRepresentativeRole}}', desc: 'Representative role/function' },
     { key: '{{clientRegCom}}', desc: 'Registration number' },
     { key: '{{quoteName}}', desc: 'Quote title' },
     { key: '{{quoteDate}}', desc: 'Quote date' },
@@ -135,6 +172,17 @@ export default function ClientDocGenPage() {
     { key: '{{batteryCapacity}}', desc: 'Battery capacity (kWh)' },
     { key: '{{panelPower}}', desc: 'Panel power (kW)' },
     { key: '{{panelCount}}', desc: 'Number of panels' },
+    { key: '{{siteCountry}}', desc: 'Site country' },
+    { key: '{{siteCounty}}', desc: 'Site county' },
+    { key: '{{siteCity}}', desc: 'Site city' },
+    { key: '{{siteStreet}}', desc: 'Site street' },
+    { key: '{{siteStreetNumber}}', desc: 'Site street number' },
+    { key: '{{sitePostalCode}}', desc: 'Site postal code' },
+    { key: '{{podNumber}}', desc: 'Factura POD number (selected document)' },
+    { key: '{{cfNumber}}', desc: 'CF number (selected document)' },
+    { key: '{{cadNumber}}', desc: 'CAD number (selected document)' },
+    { key: '{{cfAddress}}', desc: 'CF address (selected document)' },
+    { key: '{{facturaAddress}}', desc: 'Factura address (selected document)' },
     { key: '{{internalId}}', desc: 'Internal ID' },
     { key: '{{dateGenerated}}', desc: 'Document generation date' },
   ];

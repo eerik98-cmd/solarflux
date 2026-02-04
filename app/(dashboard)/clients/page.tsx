@@ -232,11 +232,23 @@ export default function ClientsListPage() {
                     <input name="lastName" placeholder="Last Name" onChange={(e) => setNewClientFormData({ ...newClientFormData, lastName: e.target.value })} className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white" required />
                   </>
                 ) : (
-                  <input name="companyName" placeholder="Company Name" onChange={(e) => setNewClientFormData({ ...newClientFormData, companyName: e.target.value })} className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white" required />
+                  <>
+                    <input name="companyName" placeholder="Company Name" onChange={(e) => setNewClientFormData({ ...newClientFormData, companyName: e.target.value })} className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white" required />
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <input name="representativeFirstName" placeholder="Representative First Name" onChange={(e) => setNewClientFormData({ ...newClientFormData, representativeFirstName: e.target.value })} className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white" />
+                      <input name="representativeLastName" placeholder="Representative Last Name" onChange={(e) => setNewClientFormData({ ...newClientFormData, representativeLastName: e.target.value })} className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white" />
+                    </div>
+                    <input name="representativeRole" placeholder="Representative Role / Function" onChange={(e) => setNewClientFormData({ ...newClientFormData, representativeRole: e.target.value })} className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white" />
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <input name="bankName" placeholder="Bank Name" onChange={(e) => setNewClientFormData({ ...newClientFormData, bankName: e.target.value })} className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white" />
+                      <input name="iban" placeholder="IBAN" onChange={(e) => setNewClientFormData({ ...newClientFormData, iban: e.target.value })} className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white" />
+                    </div>
+                  </>
                 )}
 
                 <input name="email" type="email" placeholder="Email" onChange={(e) => setNewClientFormData({ ...newClientFormData, email: e.target.value })} className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white" required />
                 <input name="phone" placeholder="Phone" onChange={(e) => setNewClientFormData({ ...newClientFormData, phone: e.target.value })} className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white" required />
+                <input name="postalCode" placeholder="Postal Code" onChange={(e) => setNewClientFormData({ ...newClientFormData, postalCode: e.target.value })} className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white" />
 
                 <div className="flex gap-4 mt-6">
                   <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 bg-slate-700 hover:bg-slate-600 text-white px-4 py-3 rounded-lg font-bold">

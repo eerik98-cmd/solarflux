@@ -26,19 +26,70 @@ export const Settings: React.FC<SettingsProps> = ({
   // Template Form State
   const [newTemplateName, setNewTemplateName] = useState('');
   const [templateFile, setTemplateFile] = useState<File | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleAddUser = (e: React.FormEvent) => {
+  // Fix Password State
+  const [fixingPasswordUserId, setFixingPasswordUserId] = useState<string | null>(null);
+  const [fixPasswordValue, setFixPasswordValue] = useState('');
+
+  // Check if password needs hashing (doesn't start with $2 bcrypt prefix)
+  const needsPasswordFix = (password: string) => !password.startsWith('$2');
+
+  // Handle fixing unhashed passwords
+  const handleFixPassword = async (userId: string, user: User) => {
+    if (!fixPasswordValue) {
+      alert('Please enter a new password');
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/admin/manage-users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'fix-password',
+          userId,
+          user: { ...user, password: fixPasswordValue },
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to fix password');
+      }
+
+      alert('Password hashed successfully!');
+      setFixingPasswordUserId(null);
+      setFixPasswordValue('');
+    } catch (error) {
+      console.error('Error fixing password:', error);
+      alert(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  };
+  const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newUser.username || !newUser.password || !newUser.nickname) return;
+    if (!newUser.username || !newUser.password || !newUser.nickname) {
+      alert('Please fill in all fields');
+      return;
+    }
     
-    onAddUser({
-      id: Date.now().toString(),
-      username: newUser.username,
-      password: newUser.password,
-      nickname: newUser.nickname,
-      role: newUser.role as UserRole
-    });
-    setNewUser({ role: 'INSTALLER', username: '', password: '', nickname: '' });
+    setIsSubmitting(true);
+    try {
+      await onAddUser({
+        id: Date.now().toString(),
+        username: newUser.username,
+        password: newUser.password,
+        nickname: newUser.nickname,
+        role: newUser.role as UserRole
+      });
+      setNewUser({ role: 'INSTALLER', username: '', password: '', nickname: '' });
+      alert('User created successfully!');
+    } catch (error) {
+      console.error('Error creating user:', error);
+      alert('Failed to create user');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleTemplateFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -191,8 +242,12 @@ export const Settings: React.FC<SettingsProps> = ({
                         </select>
                       </div>
                       <div className="md:col-span-2 flex justify-end mt-2">
-                        <button type="submit" className="bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-bold px-6 py-2 rounded-lg transition-colors">
-                          Create Account
+                        <button 
+                          type="submit" 
+                          disabled={isSubmitting}
+                          className={`font-bold px-6 py-2 rounded-lg transition-colors ${isSubmitting ? 'bg-slate-600 text-slate-400 cursor-not-allowed' : 'bg-emerald-500 hover:bg-emerald-400 text-slate-900'}`}
+                        >
+                          {isSubmitting ? 'Creating...' : 'Create Account'}
                         </button>
                       </div>
                     </form>
@@ -203,30 +258,74 @@ export const Settings: React.FC<SettingsProps> = ({
                     <h3 className="text-lg font-bold text-white mb-4">Active Accounts</h3>
                     <div className="space-y-2">
                       {users.map(user => (
-                        <div key={user.id} className="bg-slate-900 p-4 rounded-xl border border-slate-700 flex items-center justify-between">
-                          <div className="flex items-center gap-4">
-                             <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-slate-900 ${
-                               user.role === 'SUPER_ADMIN' ? 'bg-amber-500' :
-                               user.role === 'WAREHOUSEMAN' ? 'bg-blue-500' : 'bg-emerald-500'
-                             }`}>
-                               {user.nickname.charAt(0).toUpperCase()}
-                             </div>
-                             <div>
-                               <div className="font-bold text-white">{user.nickname}</div>
-                               <div className="text-xs text-slate-500 flex gap-2">
-                                 <span>@{user.username}</span>
-                                 <span className="text-slate-600">•</span>
-                                 <span className="uppercase">{user.role.replace('_', ' ')}</span>
+                        <div key={user.id} className="bg-slate-900 p-4 rounded-xl border border-slate-700">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-4 flex-1">
+                               <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-slate-900 ${
+                                 user.role === 'SUPER_ADMIN' ? 'bg-amber-500' :
+                                 user.role === 'WAREHOUSEMAN' ? 'bg-blue-500' : 'bg-emerald-500'
+                               }`}>
+                                 {user.nickname.charAt(0).toUpperCase()}
                                </div>
-                             </div>
+                               <div className="flex-1">
+                                 <div className="font-bold text-white">{user.nickname}</div>
+                                 <div className="text-xs text-slate-500 flex gap-2">
+                                   <span>@{user.username}</span>
+                                   <span className="text-slate-600">•</span>
+                                   <span className="uppercase">{user.role.replace('_', ' ')}</span>
+                                 </div>
+                               </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {needsPasswordFix(user.password) && (
+                                <button
+                                  onClick={() => setFixingPasswordUserId(user.id)}
+                                  className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded transition-colors"
+                                  title="Password not hashed - click to fix"
+                                >
+                                  Fix Password
+                                </button>
+                              )}
+                              {user.id !== currentUser.id && (
+                                <button 
+                                  onClick={() => onDeleteUser(user.id)}
+                                  className="p-2 text-slate-500 hover:text-red-500 transition-colors"
+                                >
+                                  <Trash2 size={18} />
+                                </button>
+                              )}
+                            </div>
                           </div>
-                          {user.id !== currentUser.id && (
-                            <button 
-                              onClick={() => onDeleteUser(user.id)}
-                              className="p-2 text-slate-500 hover:text-red-500 transition-colors"
-                            >
-                              <Trash2 size={18} />
-                            </button>
+
+                          {/* Fix Password Modal */}
+                          {fixingPasswordUserId === user.id && (
+                            <div className="mt-4 p-3 bg-slate-800 border border-red-500/50 rounded-lg">
+                              <p className="text-sm text-red-400 mb-3">⚠️ This user's password is not properly hashed. Enter a new password to fix this:</p>
+                              <input
+                                type="password"
+                                placeholder="Enter new password"
+                                value={fixPasswordValue}
+                                onChange={(e) => setFixPasswordValue(e.target.value)}
+                                className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white placeholder-slate-500 mb-3"
+                              />
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => handleFixPassword(user.id, user)}
+                                  className="flex-1 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded transition-colors"
+                                >
+                                  Hash Password
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setFixingPasswordUserId(null);
+                                    setFixPasswordValue('');
+                                  }}
+                                  className="flex-1 px-3 py-2 bg-slate-700 hover:bg-slate-600 text-white font-bold text-sm rounded transition-colors"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </div>
                           )}
                         </div>
                       ))}

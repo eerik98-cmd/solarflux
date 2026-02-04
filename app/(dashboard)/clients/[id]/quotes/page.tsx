@@ -1,20 +1,26 @@
 'use client';
 
 import React, { useState, useMemo } from 'react';
-import { FileText, RefreshCcw, Save, Zap, Package, Info, Plus, Trash2, History, ChevronDown, CheckSquare, Square } from 'lucide-react';
+import { FileText, RefreshCcw, Save, Zap, Package, Info, Plus, Trash2, History, ChevronDown, CheckSquare, Square, Download, Eye, Sparkles, Users, X } from 'lucide-react';
 import { useClient } from '@/contexts/ClientContext';
 import { useData } from '@/contexts/DataContext';
 import { Quote, QuoteLineItem, Category } from '@/types';
+import { DocumentPreview } from '@/components/DocumentPreview';
 
 export default function ClientQuotesPage() {
   const { client } = useClient();
-  const { inventory, savedQuotes, saveQuote, deleteQuote } = useData();
+  const { inventory, savedQuotes, saveQuote, deleteQuote, docTemplates } = useData();
   
   const [quoteProjectName, setQuoteProjectName] = useState('');
   const [quoteItems, setQuoteItems] = useState<QuoteLineItem[]>([]);
   const [editingQuoteId, setEditingQuoteId] = useState<string | null>(null);
   const [openSerialPickerId, setOpenSerialPickerId] = useState<string | null>(null);
   const [selectedProjectForQuote, setSelectedProjectForQuote] = useState<string>('');
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
+  const [previewDoc, setPreviewDoc] = useState<{name: string, url: string, description?: string, date?: Date} | null>(null);
+  const [offerSent, setOfferSent] = useState(false);
+  const [quoteWon, setQuoteWon] = useState(false);
+  const [allocatedInstallerId, setAllocatedInstallerId] = useState<string | null>(null);
 
   if (!client) return null;
 
@@ -50,6 +56,8 @@ export default function ClientQuotesPage() {
       const existingByName = savedQuotes.find(q => q.clientId === client.id && q.title === quoteProjectName.trim());
       targetId = existingByName ? existingByName.id : Date.now().toString();
     }
+    
+    // Prepare the quote object with installer allocation if quote is won
     const newQuote: Quote = { 
       id: targetId, 
       clientId: client.id, 
@@ -57,11 +65,18 @@ export default function ClientQuotesPage() {
       customerName: client.name, 
       date: new Date(), 
       items: [...quoteItems], 
-      ...quoteTotals 
+      ...quoteTotals,
+      // Include installer allocation if quote won and installer selected
+      ...(quoteWon && allocatedInstallerId ? {
+        allocatedInstallerId,
+        allocatedAt: new Date(),
+        phase: 'pending-assignment'
+      } : {})
     };
+    
     saveQuote(newQuote);
     setEditingQuoteId(targetId);
-    alert('Quote saved successfully.');
+    alert('Quote saved successfully.' + (allocatedInstallerId ? ` Allocated to installer: ${allocatedInstallerId}` : ''));
   };
 
   const handleAddQuoteLine = () => {
@@ -89,104 +104,313 @@ export default function ClientQuotesPage() {
 
     const totalPanels = client.needs.panelCount;
     const roofType = client.needs.roofType;
+    const selectedOption = client.needs.selectedMountingSystem;
     
-    // Simple calculation - assuming 1 row for basic implementation
-    const numRows = 1;
-    const endClamps = numRows * 4;
-    const midClamps = (totalPanels - 1) * 2;
+    // For non-Tigla roofs, check if user has selected an option
+    const isTabla = roofType === 'Tabla' || roofType === 'Tabla ondulata' || roofType === 'Tabla cutata';
+    const isTiglaCeramica = roofType === 'Tigla ceramica';
     
+    if (isTabla && !selectedOption) {
+      alert('Please select a mounting system option (Rail System or MiniRail System) in the Structure Components section on the Needs page before adding to quote.');
+      return;
+    }
+    
+    const option = selectedOption || 'rail';
+    
+    // Determine row configuration from needs
+    const rowCount = client.needs.rowCount || 1;
+    const rowDistribution = client.needs.rowDistribution || {};
+    
+    let rowConfigs: number[] = [];
+    if (rowCount === 1) {
+      rowConfigs = [totalPanels];
+    } else {
+      const totalDistributed = Object.values(rowDistribution).reduce((sum: number, val) => sum + (val as number), 0);
+      if (totalDistributed === totalPanels) {
+        rowConfigs = Array.from({length: rowCount}, (_, i) => rowDistribution[i + 1] || 0);
+      } else {
+        alert('Please complete row distribution in Client Needs before adding mounting structures');
+        return;
+      }
+    }
+
+    if (rowConfigs.length === 0 || rowConfigs.some(c => c === 0)) {
+      alert('Please configure row distribution in Client Needs');
+      return;
+    }
+
+    // Calculate components
+    const numRows = rowConfigs.length;
+    const endClamps = numRows * 4; // CEND: 4 per row
+    const midClamps = (totalPanels - numRows) * 2; // CMID: (N - R) × 2 (1 per gap per rail)
+    
+    // Rail calculations
     const selectedPanel = client.needs.panelStockItemId 
       ? inventory.find(i => i.id === client.needs.panelStockItemId) 
       : null;
-    const panelWidth = selectedPanel?.panelWidth || 1.134;
-    const railLengthPerRow = totalPanels * panelWidth;
+    const panelWidthMm = selectedPanel?.panelWidth || 1134;
+    const panelWidth = panelWidthMm / 1000;
+    const maxPanelsInRow = Math.max(...rowConfigs);
+    const railLengthPerRow = maxPanelsInRow * panelWidth;
     const railLengthWithWaste = railLengthPerRow * 1.1;
-    const sectionsPerRail = Math.ceil(railLengthWithWaste / 6);
-    const railsOf6m = sectionsPerRail * 2;
-    const totalCombiners = (sectionsPerRail > 1 ? sectionsPerRail - 1 : 0) * 2;
+    const railsPerRow = 2;
     
-    let attachmentType = 'Roof Attachments (Hooks/Bolts)';
-    let attachmentsPerPanel = 4;
+    // Look for rail by checking: 1) isRail flag with railLengthM, 2) CRAIL SKU
+    const selectedRail = 
+      inventory.find(i => i.category === Category.MOUNTING && i.isRail && (i.railLengthM || 0) > 0) ||
+      inventory.find(i => i.category === Category.MOUNTING && i.sku?.toUpperCase() === 'CRAIL') ||
+      null;
     
-    if (roofType === 'Tigla ceramica' || roofType === 'Tigla metalica') {
-      attachmentType = 'Tile Hooks';
-      attachmentsPerPanel = 5;
+    // Get rail length: use explicit railLengthM if set, otherwise try to extract from name pattern (e.g., "5,4 M" or "5.4m")
+    let railLengthM = selectedRail?.railLengthM || 0;
+    if (!railLengthM && selectedRail?.name) {
+      const match = selectedRail.name.match(/(\d+[.,]\d+)\s*[Mm]/);
+      if (match) {
+        railLengthM = parseFloat(match[1].replace(',', '.'));
+      }
+    }
+    railLengthM = railLengthM || 6; // Final fallback to 6m
+    
+    const sectionsPerRail = Math.ceil(railLengthWithWaste / railLengthM);
+    const railsOf6m = sectionsPerRail * numRows * railsPerRow;
+    const combinersPerRail = sectionsPerRail > 1 ? sectionsPerRail - 1 : 0;
+    const totalCombiners = combinersPerRail * numRows * railsPerRow;
+    const totalRailLength = railsOf6m * railLengthM; // Total rail length in meters
+    
+    // Calculate hooks based on roof type
+    let roofHooks = 0;
+    let roofScrews = 0;
+    let hookSKU = '';
+    
+    if (roofType === 'Tigla ceramica') {
+      // CHOOK-Tigla: 1 hook every 40cm (0.4m)
+      roofHooks = Math.ceil(totalRailLength / 0.4);
+      roofScrews = roofHooks * 2; // CHOOKSurub: 2 per hook
+      hookSKU = 'CHOOK-Tigla';
     } else if (roofType === 'Tabla' || roofType === 'Tabla ondulata' || roofType === 'Tabla cutata') {
-      attachmentType = 'Hanger Bolts';
-      attachmentsPerPanel = 4;
+      // CHOOK-Tabla: 1 hook every 40cm (0.4m), no screws
+      roofHooks = Math.ceil(totalRailLength / 0.4);
+      hookSKU = 'CHOOK-Tabla';
     }
     
-    const totalAttachments = totalPanels * attachmentsPerPanel;
+    // Calculate minirails (CMINI)
+    const miniRails = totalPanels * 2 + (numRows * 2);
+    const miniRailScrews = miniRails * 4; // CMINISurub: 4 per minirail
 
-    const findMountingItem = (name: string) => {
-      return inventory.find(i => 
-        i.category === Category.MOUNTING && 
-        i.name.toLowerCase().includes(name.toLowerCase())
-      );
+    // Find matching items from inventory for pricing (exact SKU match only)
+    const findMountingItem = (sku: string) => {
+      const skuLower = sku.toLowerCase();
+      return inventory.find(i => i.category === Category.MOUNTING && i.sku?.toLowerCase() === skuLower);
     };
 
+    // Create line items for mounting structures
     const mountingItems: QuoteLineItem[] = [];
     const timestamp = Date.now();
 
-    const endClampItem = findMountingItem('end clamp');
+    // Common items: End and Mid Clamps
+    const endClampItem = findMountingItem('CEND');
     mountingItems.push({
       id: `${timestamp}-end-clamps`,
       inventoryItemId: endClampItem?.id,
-      description: endClampItem ? `${endClampItem.name} (End Clamps)` : 'End Clamps',
+      description: endClampItem ? `${endClampItem.name} (CEND)` : 'End Clamps (CEND)',
       unit: 'pcs',
       quantity: endClamps,
       netPrice: endClampItem?.sellPrice || 0
     });
 
-    const midClampItem = findMountingItem('mid clamp');
+    const midClampItem = findMountingItem('CMID');
     mountingItems.push({
       id: `${timestamp}-mid-clamps`,
       inventoryItemId: midClampItem?.id,
-      description: midClampItem ? `${midClampItem.name} (Mid Clamps)` : 'Mid Clamps',
+      description: midClampItem ? `${midClampItem.name} (CMID)` : 'Mid Clamps (CMID)',
       unit: 'pcs',
       quantity: midClamps,
       netPrice: midClampItem?.sellPrice || 0
     });
 
-    const railItem = findMountingItem('rail');
-    mountingItems.push({
-      id: `${timestamp}-rails`,
-      inventoryItemId: railItem?.id,
-      description: railItem ? `${railItem.name} (6m Rails)` : 'Mounting Rails (6m)',
-      unit: 'pcs',
-      quantity: railsOf6m,
-      netPrice: railItem?.sellPrice || 0
-    });
-
-    if (totalCombiners > 0) {
-      const combinerItem = findMountingItem('combiner') || findMountingItem('connector');
+    // Add components based on system type
+    if (option === 'minirail') {
+      // MiniRail System
+      const miniRailItem = findMountingItem('CMINI');
       mountingItems.push({
-        id: `${timestamp}-combiners`,
-        inventoryItemId: combinerItem?.id,
-        description: combinerItem ? `${combinerItem.name} (Rail Combiners)` : 'Rail Combiners/Connectors',
+        id: `${timestamp}-minirails`,
+        inventoryItemId: miniRailItem?.id,
+        description: miniRailItem ? `${miniRailItem.name} (CMINI)` : 'MiniRails (CMINI)',
         unit: 'pcs',
-        quantity: totalCombiners,
-        netPrice: combinerItem?.sellPrice || 0
+        quantity: miniRails,
+        netPrice: miniRailItem?.sellPrice || 0
       });
+
+      const miniRailScrewItem = findMountingItem('CMINISurub');
+      mountingItems.push({
+        id: `${timestamp}-minirail-screws`,
+        inventoryItemId: miniRailScrewItem?.id,
+        description: miniRailScrewItem ? `${miniRailScrewItem.name} (CMINISurub)` : 'MiniRail Screws (CMINISurub)',
+        unit: 'pcs',
+        quantity: miniRailScrews,
+        netPrice: miniRailScrewItem?.sellPrice || 0
+      });
+    } else {
+      // Rail System (default for Tigla ceramica or when rail option selected)
+      const railItem = selectedRail;
+      mountingItems.push({
+        id: `${timestamp}-rails`,
+        inventoryItemId: railItem?.id,
+        description: railItem ? `${railItem.name} (${railLengthM}m Rails)` : `Mounting Rails (${railLengthM}m)`,
+        unit: 'pcs',
+        quantity: railsOf6m,
+        netPrice: railItem?.sellPrice || 0
+      });
+
+      if (totalCombiners > 0) {
+        const combinerItem = findMountingItem('CCOMB');
+        mountingItems.push({
+          id: `${timestamp}-combiners`,
+          inventoryItemId: combinerItem?.id,
+          description: combinerItem ? `${combinerItem.name} (Rail Combiners)` : 'Rail Combiners/Connectors',
+          unit: 'pcs',
+          quantity: totalCombiners,
+          netPrice: combinerItem?.sellPrice || 0
+        });
+      }
+
+      // Roof Hooks
+      if (roofHooks > 0) {
+        const hookItem = findMountingItem(hookSKU);
+        mountingItems.push({
+          id: `${timestamp}-roof-hooks`,
+          inventoryItemId: hookItem?.id,
+          description: hookItem ? `${hookItem.name} (${hookSKU})` : `Roof Hooks (${hookSKU})`,
+          unit: 'pcs',
+          quantity: roofHooks,
+          netPrice: hookItem?.sellPrice || 0
+        });
+        
+        // Hook Screws (only for Tigla ceramica)
+        if (roofScrews > 0) {
+          const screwItem = findMountingItem('CHOOKSurub');
+          mountingItems.push({
+            id: `${timestamp}-hook-screws`,
+            inventoryItemId: screwItem?.id,
+            description: screwItem ? `${screwItem.name} (CHOOKSurub)` : 'Hook Screws (CHOOKSurub)',
+            unit: 'pcs',
+            quantity: roofScrews,
+            netPrice: screwItem?.sellPrice || 0
+          });
+        }
+      }
     }
 
-    const attachmentItem = findMountingItem(attachmentType);
-    mountingItems.push({
-      id: `${timestamp}-attachments`,
-      inventoryItemId: attachmentItem?.id,
-      description: attachmentItem ? `${attachmentItem.name}` : attachmentType,
-      unit: 'pcs',
-      quantity: totalAttachments,
-      netPrice: attachmentItem?.sellPrice || 0
-    });
-
+    // Add all mounting items to quote
     setQuoteItems([...quoteItems, ...mountingItems]);
     
+    // Show confirmation
     const missingPrices = mountingItems.filter(i => i.netPrice === 0).length;
+    const systemType = option === 'minirail' ? 'MiniRail System' : 'Rail System';
     if (missingPrices > 0) {
-      alert(`Mounting structures added! Note: ${missingPrices} item(s) have no price set.`);
+      alert(`${systemType} components added! Note: ${missingPrices} item(s) have no price set. Please update prices manually or add the items to inventory.`);
     } else {
-      alert('Mounting structures added successfully!');
+      alert(`${systemType} components added successfully!`);
+    }
+  };
+
+  const generateDocumentFromTemplate = async () => {
+    if (!selectedTemplateId || !editingQuoteId) {
+      alert('Please select a template and save the quote first');
+      return;
+    }
+
+    const template = docTemplates?.find(t => t.id === selectedTemplateId);
+    if (!template) {
+      alert('Template not found');
+      return;
+    }
+
+    try {
+      const quoteData = {
+        clientName: client?.name || '',
+        projectName: quoteProjectName,
+        items: quoteItems,
+        subtotal: quoteTotals.subtotalNet,
+        vat: quoteTotals.vatTotal,
+        total: quoteTotals.totalGross,
+        date: new Date()
+      };
+
+      // Create a simple HTML representation of the quote
+      let htmlContent = `
+        <html>
+          <head>
+            <meta charset="UTF-8">
+            <style>
+              body { font-family: Arial, sans-serif; margin: 20px; }
+              .header { text-align: center; margin-bottom: 30px; }
+              .client-info { margin-bottom: 20px; }
+              table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+              th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+              th { background-color: #f5f5f5; }
+              .totals { float: right; width: 300px; }
+              .total-row { font-weight: bold; }
+            </style>
+          </head>
+          <body>
+            <div class="header">
+              <h1>${template.name}</h1>
+              <p>Quotation for ${client?.name}</p>
+            </div>
+            <div class="client-info">
+              <p><strong>Project:</strong> ${quoteProjectName}</p>
+              <p><strong>Date:</strong> ${new Date().toLocaleDateString('ro-RO')}</p>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Description</th>
+                  <th>Qty</th>
+                  <th>Unit Price</th>
+                  <th>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${quoteItems.map((item, idx) => `
+                  <tr>
+                    <td>${idx + 1}</td>
+                    <td>${item.description}</td>
+                    <td>${item.quantity}</td>
+                    <td>${item.netPrice.toLocaleString('ro-RO', { style: 'currency', currency: 'RON' })}</td>
+                    <td>${(item.quantity * item.netPrice).toLocaleString('ro-RO', { style: 'currency', currency: 'RON' })}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+            <div class="totals">
+              <table>
+                <tr>
+                  <td>Subtotal:</td>
+                  <td>${quoteTotals.subtotalNet.toLocaleString('ro-RO', { style: 'currency', currency: 'RON' })}</td>
+                </tr>
+                <tr>
+                  <td>VAT (21%):</td>
+                  <td>${quoteTotals.vatTotal.toLocaleString('ro-RO', { style: 'currency', currency: 'RON' })}</td>
+                </tr>
+                <tr class="total-row">
+                  <td>Total:</td>
+                  <td>${quoteTotals.totalGross.toLocaleString('ro-RO', { style: 'currency', currency: 'RON' })}</td>
+                </tr>
+              </table>
+            </div>
+          </body>
+        </html>
+      `;
+
+      // Create a blob and preview it
+      const blob = new Blob([htmlContent], { type: 'text/html' });
+      const url = URL.createObjectURL(blob);
+      setPreviewDoc({ name: `${quoteProjectName}.html`, url: url, date: new Date() });
+    } catch (error) {
+      alert('Failed to generate document');
+      console.error(error);
     }
   };
 
@@ -409,108 +633,7 @@ export default function ClientQuotesPage() {
                       <Package size={16} className="text-amber-500" />Mounting Structure
                     </h4>
                     <button
-                      onClick={() => {
-                        const totalPanels = projectData.panelCount!;
-                        const roofType = projectData.roofType;
-                        
-                        const numRows = 1;
-                        const endClamps = numRows * 4;
-                        const midClamps = (totalPanels - 1) * 2;
-                        
-                        const selectedPanel = projectData.panelStockItemId 
-                          ? inventory.find(i => i.id === projectData.panelStockItemId) 
-                          : null;
-                        const panelWidth = selectedPanel?.panelWidth || 1.134;
-                        const railLengthPerRow = totalPanels * panelWidth;
-                        const railLengthWithWaste = railLengthPerRow * 1.1;
-                        const sectionsPerRail = Math.ceil(railLengthWithWaste / 6);
-                        const railsOf6m = sectionsPerRail * 2;
-                        const totalCombiners = (sectionsPerRail > 1 ? sectionsPerRail - 1 : 0) * 2;
-                        
-                        let attachmentType = 'Roof Attachments (Hooks/Bolts)';
-                        let attachmentsPerPanel = 4;
-                        
-                        if (roofType === 'Tigla ceramica' || roofType === 'Tigla metalica') {
-                          attachmentType = 'Tile Hooks';
-                          attachmentsPerPanel = 5;
-                        } else if (roofType === 'Tabla' || roofType === 'Tabla ondulata' || roofType === 'Tabla cutata') {
-                          attachmentType = 'Hanger Bolts';
-                          attachmentsPerPanel = 4;
-                        }
-                        
-                        const totalAttachments = totalPanels * attachmentsPerPanel;
-
-                        const findMountingItem = (name: string) => {
-                          return inventory.find(i => 
-                            i.category === Category.MOUNTING && 
-                            i.name.toLowerCase().includes(name.toLowerCase())
-                          );
-                        };
-
-                        const mountingItems: QuoteLineItem[] = [];
-                        const timestamp = Date.now();
-
-                        const endClampItem = findMountingItem('end clamp');
-                        mountingItems.push({
-                          id: `${timestamp}-end-clamps`,
-                          inventoryItemId: endClampItem?.id,
-                          description: endClampItem ? `${endClampItem.name} (End Clamps)` : 'End Clamps',
-                          unit: 'pcs',
-                          quantity: endClamps,
-                          netPrice: endClampItem?.sellPrice || 0
-                        });
-
-                        const midClampItem = findMountingItem('mid clamp');
-                        mountingItems.push({
-                          id: `${timestamp}-mid-clamps`,
-                          inventoryItemId: midClampItem?.id,
-                          description: midClampItem ? `${midClampItem.name} (Mid Clamps)` : 'Mid Clamps',
-                          unit: 'pcs',
-                          quantity: midClamps,
-                          netPrice: midClampItem?.sellPrice || 0
-                        });
-
-                        const railItem = findMountingItem('rail');
-                        mountingItems.push({
-                          id: `${timestamp}-rails`,
-                          inventoryItemId: railItem?.id,
-                          description: railItem ? `${railItem.name} (6m Rails)` : 'Mounting Rails (6m)',
-                          unit: 'pcs',
-                          quantity: railsOf6m,
-                          netPrice: railItem?.sellPrice || 0
-                        });
-
-                        if (totalCombiners > 0) {
-                          const combinerItem = findMountingItem('combiner') || findMountingItem('connector');
-                          mountingItems.push({
-                            id: `${timestamp}-combiners`,
-                            inventoryItemId: combinerItem?.id,
-                            description: combinerItem ? `${combinerItem.name} (Rail Combiners)` : 'Rail Combiners/Connectors',
-                            unit: 'pcs',
-                            quantity: totalCombiners,
-                            netPrice: combinerItem?.sellPrice || 0
-                          });
-                        }
-
-                        const attachmentItem = findMountingItem(attachmentType);
-                        mountingItems.push({
-                          id: `${timestamp}-attachments`,
-                          inventoryItemId: attachmentItem?.id,
-                          description: attachmentItem ? `${attachmentItem.name}` : attachmentType,
-                          unit: 'pcs',
-                          quantity: totalAttachments,
-                          netPrice: attachmentItem?.sellPrice || 0
-                        });
-
-                        setQuoteItems([...quoteItems, ...mountingItems]);
-                        
-                        const missingPrices = mountingItems.filter(i => i.netPrice === 0).length;
-                        if (missingPrices > 0) {
-                          alert(`Mounting structures added! Note: ${missingPrices} item(s) have no price set.`);
-                        } else {
-                          alert('Mounting structures added successfully!');
-                        }
-                      }}
+                      onClick={addMountingStructuresToQuote}
                       className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-bold rounded-lg text-sm transition-colors flex items-center gap-2"
                     >
                       <Plus size={16} /> Add All to Quote
@@ -682,6 +805,149 @@ export default function ClientQuotesPage() {
             </div>
           </div>
         </div>
+
+        {/* Document Template Section */}
+        {docTemplates && docTemplates.length > 0 && editingQuoteId && (
+          <div className="bg-slate-800 rounded-xl border border-slate-700 p-6 shadow-lg">
+            <div className="flex items-center gap-4 mb-4">
+              <div className="flex-1">
+                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">
+                  <FileText className="inline-block mr-2" size={14} />
+                  Document Template
+                </label>
+                <select
+                  value={selectedTemplateId}
+                  onChange={(e) => setSelectedTemplateId(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-amber-500 outline-none"
+                >
+                  <option value="">Select a template...</option>
+                  {docTemplates.map(tmpl => (
+                    <option key={tmpl.id} value={tmpl.id}>{tmpl.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="pt-7">
+                <button
+                  onClick={generateDocumentFromTemplate}
+                  disabled={!selectedTemplateId}
+                  className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed font-semibold transition-all flex items-center gap-2 shadow-lg"
+                >
+                  <Eye size={18} />
+                  Preview
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Document Preview */}
+        {previewDoc && (
+          <div className="bg-slate-800 rounded-xl border border-slate-700 p-6 shadow-lg">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <FileText size={20} className="text-blue-500" />
+                Document Preview: {previewDoc.name}
+              </h3>
+              <button
+                onClick={() => setPreviewDoc(null)}
+                className="text-slate-400 hover:text-white transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <DocumentPreview docUrl={previewDoc.url} />
+            <div className="mt-4 flex gap-2">
+              <a
+                href={previewDoc.url}
+                download={previewDoc.name}
+                className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-semibold transition-colors flex items-center justify-center gap-2"
+              >
+                <Download size={18} />
+                Download
+              </a>
+            </div>
+          </div>
+        )}
+
+        {/* Quote Status Section */}
+        {editingQuoteId && (
+          <div className="bg-slate-800 rounded-xl border border-slate-700 p-6 shadow-lg space-y-4">
+            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+              <Sparkles size={20} className="text-purple-500" />
+              Quote Status
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Offer Sent */}
+              <div className="bg-slate-900/50 p-4 rounded-lg border border-slate-700">
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={offerSent}
+                    onChange={(e) => setOfferSent(e.target.checked)}
+                    className="w-5 h-5 rounded border-slate-600 bg-slate-900 text-blue-500 focus:ring-blue-500"
+                  />
+                  <div>
+                    <p className="font-semibold text-white">Offer Sent to Client</p>
+                    <p className="text-xs text-slate-400">Mark when quote has been sent</p>
+                  </div>
+                </label>
+              </div>
+
+              {/* Quote Won */}
+              <div className="bg-slate-900/50 p-4 rounded-lg border border-slate-700">
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={quoteWon}
+                    onChange={(e) => setQuoteWon(e.target.checked)}
+                    className="w-5 h-5 rounded border-slate-600 bg-slate-900 text-emerald-500 focus:ring-emerald-500"
+                  />
+                  <div>
+                    <p className="font-semibold text-white">Quote Won!</p>
+                    <p className="text-xs text-slate-400">Client accepted the offer</p>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            {/* Implementation/Installer Allocation */}
+            {quoteWon && (
+              <div className="bg-emerald-500/10 border border-emerald-500/30 p-4 rounded-lg">
+                <label className="block text-sm font-semibold text-white mb-2 flex items-center gap-2">
+                  <Users size={16} className="text-emerald-400" />
+                  Allocate to Installer
+                </label>
+                <input
+                  type="text"
+                  placeholder="Enter installer name or ID"
+                  value={allocatedInstallerId || ''}
+                  onChange={(e) => setAllocatedInstallerId(e.target.value || null)}
+                  className="w-full bg-slate-900 border border-emerald-500/50 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+                <p className="text-xs text-emerald-400 mt-2">Installer will be notified to start implementation</p>
+              </div>
+            )}
+
+            {/* Start Implementation Button */}
+            {quoteWon && allocatedInstallerId && (
+              <button
+                onClick={saveClientQuote}
+                className="w-full px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold transition-colors flex items-center justify-center gap-2 shadow-lg"
+              >
+                <Sparkles size={18} />
+                Start Implementation
+              </button>
+            )}
+
+            <button
+              onClick={saveClientQuote}
+              className="w-full px-6 py-3 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold transition-colors flex items-center justify-center gap-2"
+            >
+              <Save size={18} />
+              Save Quote Status
+            </button>
+          </div>
+        )}
 
         {/* Quote History */}
         <div className="border-t border-slate-700 pt-8">

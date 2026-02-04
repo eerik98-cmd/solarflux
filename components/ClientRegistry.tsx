@@ -691,6 +691,18 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
 
     const totalPanels = editingClient.needs.panelCount;
     const roofType = editingClient.needs.roofType;
+    const selectedOption = editingClient.needs.selectedMountingSystem;
+    
+    // For non-Tigla roofs, check if user has selected an option
+    const isTabla = roofType === 'Tabla' || roofType === 'Tabla ondulata' || roofType === 'Tabla cutata';
+    const isTiglaCeramica = roofType === 'Tigla ceramica';
+    
+    if (isTabla && !selectedOption) {
+      alert('Please select a mounting system option (Rail System or MiniRail System) in the Structure Components section before adding to quote.');
+      return;
+    }
+    
+    const option = selectedOption || 'rail';
     
     // Determine row configuration
     let rowConfigs: number[] = [];
@@ -713,118 +725,201 @@ export const ClientRegistry: React.FC<ClientRegistryProps> = ({
 
     // Calculate components
     const numRows = rowConfigs.length;
-    const endClamps = numRows * 4;
-    const midClamps = rowConfigs.reduce((sum, panelsInRow) => sum + (panelsInRow - 1) * 2, 0);
+    const endClamps = numRows * 4; // CEND: 4 per row
+    const midClamps = (totalPanels - numRows) * 2; // CMID: (N - R) × 2 (1 per gap per rail)
     
     // Rail calculations
     const selectedPanel = editingClient.needs.panelStockItemId 
       ? inventory.find(i => i.id === editingClient.needs.panelStockItemId) 
       : null;
-    const panelWidth = selectedPanel?.panelWidth || 1.134;
+    const panelWidthMm = selectedPanel?.panelWidth || 1134;
+    const panelWidth = panelWidthMm / 1000;
     const maxPanelsInRow = Math.max(...rowConfigs);
     const railLengthPerRow = maxPanelsInRow * panelWidth;
     const railLengthWithWaste = railLengthPerRow * 1.1;
     const railsPerRow = 2;
-    const sectionsPerRail = Math.ceil(railLengthWithWaste / 6);
+    // Look for rail by checking: 1) isRail flag with railLengthM, 2) CRAIL SKU
+    const selectedRail = 
+      inventory.find(i => i.category === Category.MOUNTING && i.isRail && (i.railLengthM || 0) > 0) ||
+      inventory.find(i => i.category === Category.MOUNTING && i.sku?.toUpperCase() === 'CRAIL') ||
+      null;
+    
+    // Get rail length: use explicit railLengthM if set, otherwise try to extract from name pattern (e.g., "5,4 M" or "5.4m")
+    let railLengthM = selectedRail?.railLengthM || 0;
+    if (!railLengthM && selectedRail?.name) {
+      // Try to extract length from name like "5,4 M" or "5.4m"
+      const match = selectedRail.name.match(/(\d+[.,]\d+)\s*[Mm]/);
+      if (match) {
+        railLengthM = parseFloat(match[1].replace(',', '.'));
+      }
+    }
+    railLengthM = railLengthM || 6; // Final fallback to 6m
+    const sectionsPerRail = Math.ceil(railLengthWithWaste / railLengthM);
     const railsOf6m = sectionsPerRail * numRows * railsPerRow;
     const combinersPerRail = sectionsPerRail > 1 ? sectionsPerRail - 1 : 0;
     const totalCombiners = combinersPerRail * numRows * railsPerRow;
+    const totalRailLength = railsOf6m * railLengthM; // Total rail length in meters
     
-    // Roof attachments
-    let attachmentType = 'Roof Attachments (Hooks/Bolts)';
-    let attachmentsPerPanel = 4;
+    // Calculate hooks based on roof type
+    let roofHooks = 0;
+    let roofScrews = 0;
+    let hookSKU = '';
     
-    if (roofType === 'Tigla ceramica' || roofType === 'Tigla metalica') {
-      attachmentType = 'Tile Hooks';
-      attachmentsPerPanel = 5;
+    if (roofType === 'Tigla ceramica') {
+      // CHOOK-Tigla: 1 hook every 40cm (0.4m)
+      roofHooks = Math.ceil(totalRailLength / 0.4);
+      roofScrews = roofHooks * 2; // CHOOKSurub: 2 per hook
+      hookSKU = 'CHOOK-Tigla';
     } else if (roofType === 'Tabla' || roofType === 'Tabla ondulata' || roofType === 'Tabla cutata') {
-      attachmentType = 'Hanger Bolts';
-      attachmentsPerPanel = 4;
-    } else if (roofType === 'Panou sandwich') {
-      attachmentType = 'Sandwich Panel Bolts';
-      attachmentsPerPanel = 4;
+      // CHOOK-Tabla: 1 hook every 40cm (0.4m), no screws
+      roofHooks = Math.ceil(totalRailLength / 0.4);
+      hookSKU = 'CHOOK-Tabla';
     }
     
-    const totalAttachments = totalPanels * attachmentsPerPanel;
+    // Calculate minirails (CMINI)
+    const miniRails = totalPanels * 2 + (numRows * 2);
+    const miniRailScrews = miniRails * 4; // CMINISurub: 4 per minirail
 
     // Find matching items from inventory for pricing
-    const findMountingItem = (name: string, category: Category = Category.MOUNTING) => {
-      return inventory.find(i => 
+    const findMountingItem = (sku: string, category: Category = Category.MOUNTING) => {
+      const skuLower = sku.toLowerCase();
+      
+      // First try exact SKU match
+      let item = inventory.find(i => 
         i.category === category && 
-        i.name.toLowerCase().includes(name.toLowerCase())
+        i.sku?.toLowerCase() === skuLower
       );
+      if (item) return item;
+      
+      // Then try SKU starts with (stricter - requires at least 3 chars to match)
+      if (skuLower.length >= 3) {
+        item = inventory.find(i => 
+          i.category === category && 
+          i.sku?.toLowerCase().startsWith(skuLower.substring(0, 3))
+        );
+        if (item) return item;
+      }
+      
+      // Try name contains full SKU (only for exact word matches)
+      item = inventory.find(i => 
+        i.category === category && 
+        i.name.toLowerCase().includes(skuLower) &&
+        // Ensure it's a word boundary - not just contained within another word
+        (i.name.toLowerCase().split(/[\s-(),]/).some(word => word === skuLower))
+      );
+      if (item) return item;
+      
+      return undefined;
     };
 
     // Create line items for mounting structures
     const mountingItems: QuoteLineItem[] = [];
     const timestamp = Date.now();
 
-    // End Clamps
-    const endClampItem = findMountingItem('end clamp');
+    // Common items: End and Mid Clamps
+    const endClampItem = findMountingItem('CEND');
     mountingItems.push({
       id: `${timestamp}-end-clamps`,
       inventoryItemId: endClampItem?.id,
-      description: endClampItem ? `${endClampItem.name} (End Clamps)` : 'End Clamps',
+      description: endClampItem ? `${endClampItem.name} (CEND)` : 'End Clamps (CEND)',
       unit: 'pcs',
       quantity: endClamps,
       netPrice: endClampItem?.sellPrice || 0
     });
 
-    // Mid Clamps
-    const midClampItem = findMountingItem('mid clamp');
+    const midClampItem = findMountingItem('CMID');
     mountingItems.push({
       id: `${timestamp}-mid-clamps`,
       inventoryItemId: midClampItem?.id,
-      description: midClampItem ? `${midClampItem.name} (Mid Clamps)` : 'Mid Clamps',
+      description: midClampItem ? `${midClampItem.name} (CMID)` : 'Mid Clamps (CMID)',
       unit: 'pcs',
       quantity: midClamps,
       netPrice: midClampItem?.sellPrice || 0
     });
 
-    // Rails
-    const railItem = findMountingItem('rail');
-    mountingItems.push({
-      id: `${timestamp}-rails`,
-      inventoryItemId: railItem?.id,
-      description: railItem ? `${railItem.name} (6m Rails)` : 'Mounting Rails (6m)',
-      unit: 'pcs',
-      quantity: railsOf6m,
-      netPrice: railItem?.sellPrice || 0
-    });
-
-    // Combiners
-    if (totalCombiners > 0) {
-      const combinerItem = findMountingItem('combiner') || findMountingItem('connector');
+    // Add components based on system type
+    if (option === 'minirail') {
+      // MiniRail System
+      const miniRailItem = findMountingItem('CMINI');
       mountingItems.push({
-        id: `${timestamp}-combiners`,
-        inventoryItemId: combinerItem?.id,
-        description: combinerItem ? `${combinerItem.name} (Rail Combiners)` : 'Rail Combiners/Connectors',
+        id: `${timestamp}-minirails`,
+        inventoryItemId: miniRailItem?.id,
+        description: miniRailItem ? `${miniRailItem.name} (CMINI)` : 'MiniRails (CMINI)',
         unit: 'pcs',
-        quantity: totalCombiners,
-        netPrice: combinerItem?.sellPrice || 0
+        quantity: miniRails,
+        netPrice: miniRailItem?.sellPrice || 0
       });
-    }
 
-    // Roof Attachments
-    const attachmentItem = findMountingItem(attachmentType);
-    mountingItems.push({
-      id: `${timestamp}-attachments`,
-      inventoryItemId: attachmentItem?.id,
-      description: attachmentItem ? `${attachmentItem.name}` : attachmentType,
-      unit: 'pcs',
-      quantity: totalAttachments,
-      netPrice: attachmentItem?.sellPrice || 0
-    });
+      const miniRailScrewItem = findMountingItem('CMINISurub');
+      mountingItems.push({
+        id: `${timestamp}-minirail-screws`,
+        inventoryItemId: miniRailScrewItem?.id,
+        description: miniRailScrewItem ? `${miniRailScrewItem.name} (CMINISurub)` : 'MiniRail Screws (CMINISurub)',
+        unit: 'pcs',
+        quantity: miniRailScrews,
+        netPrice: miniRailScrewItem?.sellPrice || 0
+      });
+    } else {
+      // Rail System (default for Tigla ceramica or when rail option selected)
+      const railItem = selectedRail;
+      mountingItems.push({
+        id: `${timestamp}-rails`,
+        inventoryItemId: railItem?.id,
+        description: railItem ? `${railItem.name} (${railLengthM}m Rails)` : `Mounting Rails (${railLengthM}m)`,
+        unit: 'pcs',
+        quantity: railsOf6m,
+        netPrice: railItem?.sellPrice || 0
+      });
+
+      if (totalCombiners > 0) {
+        const combinerItem = findMountingItem('CCOMB');
+        mountingItems.push({
+          id: `${timestamp}-combiners`,
+          inventoryItemId: combinerItem?.id,
+          description: combinerItem ? `${combinerItem.name} (Rail Combiners)` : 'Rail Combiners/Connectors',
+          unit: 'pcs',
+          quantity: totalCombiners,
+          netPrice: combinerItem?.sellPrice || 0
+        });
+      }
+
+      // Roof Hooks
+      if (roofHooks > 0) {
+        const hookItem = findMountingItem(hookSKU);
+        mountingItems.push({
+          id: `${timestamp}-roof-hooks`,
+          inventoryItemId: hookItem?.id,
+          description: hookItem ? `${hookItem.name} (${hookSKU})` : `Roof Hooks (${hookSKU})`,
+          unit: 'pcs',
+          quantity: roofHooks,
+          netPrice: hookItem?.sellPrice || 0
+        });
+        
+        // Hook Screws (only for Tigla ceramica)
+        if (roofScrews > 0) {
+          const screwItem = findMountingItem('CHOOKSurub');
+          mountingItems.push({
+            id: `${timestamp}-hook-screws`,
+            inventoryItemId: screwItem?.id,
+            description: screwItem ? `${screwItem.name} (CHOOKSurub)` : 'Hook Screws (CHOOKSurub)',
+            unit: 'pcs',
+            quantity: roofScrews,
+            netPrice: screwItem?.sellPrice || 0
+          });
+        }
+      }
+    }
 
     // Add all mounting items to quote
     setQuoteItems([...quoteItems, ...mountingItems]);
     
     // Show confirmation
     const missingPrices = mountingItems.filter(i => i.netPrice === 0).length;
+    const systemType = option === 'minirail' ? 'MiniRail System' : 'Rail System';
     if (missingPrices > 0) {
-      alert(`Mounting structures added! Note: ${missingPrices} item(s) have no price set. Please update prices manually or add the items to inventory.`);
+      alert(`${systemType} components added! Note: ${missingPrices} item(s) have no price set. Please update prices manually or add the items to inventory.`);
     } else {
-      alert('Mounting structures added successfully!');
+      alert(`${systemType} components added successfully!`);
     }
   };
   // const toggleQuoteSerialNumber = (itemId: string, serial: string) => {

@@ -13,12 +13,36 @@ function SettingsWrapper() {
   const { currentUser } = useAuth();
 
   const handleAddUser = async (user: User) => {
-    const newUser = { ...user, id: user.id || Date.now().toString() };
-    await StorageService.saveItem('users', newUser);
+    try {
+      const response = await fetch('/api/admin/manage-users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'add-user',
+          user: { ...user, id: user.id || Date.now().toString() },
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to add user');
+      }
+
+      alert('User created successfully!');
+    } catch (error) {
+      console.error('Error adding user:', error);
+      alert(`Error creating user: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   };
 
   const handleDeleteUser = async (id: string) => {
-    await StorageService.deleteItem('users', id);
+    try {
+      await StorageService.deleteItem('users', id);
+      alert('User deleted successfully!');
+    } catch (error) {
+      console.error('Error deleting user:', error);
+      alert('Error deleting user. Please try again.');
+    }
   };
 
   const handleAddTemplate = async (template: DocTemplate) => {

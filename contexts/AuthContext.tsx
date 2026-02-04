@@ -62,14 +62,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     const data = await response.json();
-    setCurrentUser({
+    const user = {
       id: data.user.id,
       username: data.user.username,
       nickname: data.user.nickname,
       role: data.user.role,
       password: '',
-    });
+    };
+    setCurrentUser(user);
     setIsAuthenticated(true);
+    return user;
   };
 
   const logout = async () => {
