@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   FileText, Zap, Package, FolderOpen, Save, Briefcase, CheckCircle, 
-  AlertCircle, X, ImageIcon, Upload, Camera, Trash2, ChevronLeft, ChevronRight, MapPin, RefreshCcw
+  AlertCircle, X, ImageIcon, Upload, Camera, Trash2, ChevronLeft, ChevronRight, MapPin, RefreshCcw, ChevronDown, ChevronUp, Plus, Check
 } from 'lucide-react';
 import { useClient } from '@/contexts/ClientContext';
 import { useData } from '@/contexts/DataContext';
@@ -23,6 +23,9 @@ export default function ClientNeedsPage() {
   const [rowCount, setRowCount] = useState<number>(1);
   const [rowDistribution, setRowDistribution] = useState<{[key: number]: number}>({1: 0});
   const [archivedProjects, setArchivedProjects] = useState<ArchivedProject[]>([]);
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
+  const [notification, setNotification] = useState<{message: string; type: 'success' | 'error' | 'info'} | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState<{projectId: string; projectName: string} | null>(null);
   const [previewImageIndex, setPreviewImageIndex] = useState<number | null>(null);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [showAlternatives, setShowAlternatives] = useState(false);
@@ -74,6 +77,16 @@ export default function ClientNeedsPage() {
     await updateClient({ needs: { ...client.needs, [field]: value } });
   };
 
+  const handleProjectNameChange = async (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      await updateClient({ needs: { ...client.needs, projectName: value, projectId: undefined } });
+      return;
+    }
+    const projectId = client.needs?.projectId || Date.now().toString();
+    await updateClient({ needs: { ...client.needs, projectName: value, projectId } });
+  };
+
   const saveDescription = async () => {
     if (tempDescription === client.needs?.description) return;
     await updateClient({
@@ -103,16 +116,40 @@ export default function ClientNeedsPage() {
   }, [client?.needs?.inverterKw, client?.needs?.connectionType, inventory]);
 
   const suggestedBatteries = useMemo(() => {
-    if (!client?.needs?.selectedInverterId) return [];
-    const selectedInverter = inventory.find(i => i.id === client.needs.selectedInverterId);
-    if (!selectedInverter?.inverterStorageType) return [];
+    if (!client?.needs?.batteryKwh || client.needs.batteryKwh <= 0) return [];
+    
+    const selectedInverter = client?.needs?.selectedInverterId 
+      ? inventory.find(i => i.id === client.needs.selectedInverterId) 
+      : null;
+    const requiredStorageType = selectedInverter?.inverterStorageType;
+    const targetKwh = client.needs.batteryKwh;
+    const tolerance = 5; // kWh tolerance
 
-    return inventory.filter(item => {
-      if (item.category !== Category.BATTERIES) return false;
-      if (item.batteryType === selectedInverter.inverterStorageType && (item.quantity || 0) > 0) return true;
-      return false;
-    });
-  }, [client?.needs?.selectedInverterId, inventory]);
+    return inventory
+      .filter(item => {
+        if (item.category !== Category.BATTERIES) return false;
+        if ((item.quantity || 0) === 0) return false;
+        
+        // If inverter is selected, filter by compatible storage type
+        if (requiredStorageType && item.batteryType !== requiredStorageType) return false;
+        
+        // Filter by battery capacity
+        if (item.batteryPowerKwh) {
+          return Math.abs(item.batteryPowerKwh - targetKwh) <= tolerance;
+        }
+        return false;
+      })
+      .sort((a, b) => {
+        // If inverter selected, prioritize compatible batteries
+        if (requiredStorageType) {
+          const aCompatible = a.batteryType === requiredStorageType ? 1 : 0;
+          const bCompatible = b.batteryType === requiredStorageType ? 1 : 0;
+          if (aCompatible !== bCompatible) return bCompatible - aCompatible;
+        }
+        // Sort by closest capacity match
+        return Math.abs(a.batteryPowerKwh! - targetKwh) - Math.abs(b.batteryPowerKwh! - targetKwh);
+      });
+  }, [client?.needs?.batteryKwh, client?.needs?.selectedInverterId, inventory]);
 
   const suggestedPanels = useMemo(() => {
     if (!client?.needs?.panelKw || client.needs.panelKw <= 0) return [];
@@ -194,165 +231,302 @@ export default function ClientNeedsPage() {
     setIsCameraOpen(false);
   };
 
-  const cfDocs = (client.documents || []).filter(doc => doc.type === 'CF');
-  const facturaDocs = (client.documents || []).filter(doc => doc.type === 'Fact');
+  const allDocs = client.documents || [];
+  const projectId = client.needs?.projectId;
+  const projectDocs = projectId ? allDocs.filter(doc => doc.projectId === projectId) : [];
+  const cfDocs = projectDocs.filter(doc => doc.type === 'CF');
+  const facturaDocs = projectDocs.filter(doc => doc.type === 'Fact');
   const selectedCfDoc = cfDocs.find(doc => doc.id === client.needs?.selectedCfDocId);
   const selectedFacturaDoc = facturaDocs.find(doc => doc.id === client.needs?.selectedFacturaDocId);
+  const projectDocCount = projectDocs.length;
+  const totalDocCount = allDocs.length;
+  const hasProjectName = !!client.needs?.projectName?.trim();
+
+  const showNotification = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    setNotification({ message, type });
+    setTimeout(() => setNotification(null), 4000);
+  };
+
+  const handleSaveProject = async () => {
+    if (!client.needs?.projectName?.trim()) {
+      showNotification('Please enter a project name before saving.', 'error');
+      return;
+    }
+    const projectNameToSave = client.needs.projectName;
+    const existingProjectIndex = archivedProjects.findIndex(p => p.projectName === projectNameToSave);
+    const savedProject = {
+      id: existingProjectIndex !== -1 ? archivedProjects[existingProjectIndex].id : Date.now().toString(),
+      projectName: projectNameToSave,
+      archivedAt: new Date(),
+      data: JSON.parse(JSON.stringify(client.needs))
+    };
+    let updatedProjects;
+    if (existingProjectIndex !== -1) {
+      updatedProjects = [...archivedProjects];
+      updatedProjects[existingProjectIndex] = savedProject;
+      showNotification('Project updated successfully!', 'success');
+    } else {
+      updatedProjects = [savedProject, ...archivedProjects];
+      showNotification('Project saved successfully!', 'success');
+    }
+    setArchivedProjects(updatedProjects);
+    await updateClient({ archivedProjects: updatedProjects });
+  };
+
+  const handleNewProject = async () => {
+    if (!confirm('Clear current project and start a new one?')) return;
+    
+    const clearedNeeds = { 
+      projectName: '',
+      projectId: undefined,
+      description: '',
+      siteCountry: '',
+      siteCounty: '',
+      siteCity: '',
+      siteStreet: '',
+      siteStreetNumber: '',
+      sitePostalCode: '',
+      selectedCfDocId: '',
+      selectedFacturaDocId: '',
+      connectionType: undefined,
+      roofType: undefined, 
+      roofTypeOther: undefined,
+      inverterKw: undefined,
+      panelKw: 0,
+      panelCount: 0, 
+      panelStockItemId: undefined,
+      storage: '',
+      technicalNotes: '',
+      siteImages: [] 
+    };
+    
+    await updateClient({ needs: clearedNeeds });
+    setTempDescription('');
+    setSelectedInverterId(null);
+    setSelectedBatteryId(null);
+    setSelectedPanelId(null);
+  };
+
+  const toggleProjectExpanded = (projectId: string) => {
+    const newExpanded = new Set(expandedProjects);
+    if (newExpanded.has(projectId)) {
+      newExpanded.delete(projectId);
+    } else {
+      newExpanded.add(projectId);
+    }
+    setExpandedProjects(newExpanded);
+  };
 
   return (
     <div className="h-full overflow-y-auto p-8 bg-slate-900">
+      {/* Notification Toast */}
+      {notification && (
+        <div className="fixed top-4 right-4 z-50 animate-in slide-in-from-top-2 duration-300">
+          <div className={`rounded-lg border shadow-lg p-4 min-w-[300px] max-w-md ${
+            notification.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400' :
+            notification.type === 'error' ? 'bg-red-500/10 border-red-500/50 text-red-400' :
+            'bg-blue-500/10 border-blue-500/50 text-blue-400'
+          }`}>
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                {notification.type === 'success' && <Check size={20} className="flex-shrink-0" />}
+                {notification.type === 'error' && <AlertCircle size={20} className="flex-shrink-0" />}
+                {notification.type === 'info' && <CheckCircle size={20} className="flex-shrink-0" />}
+                <p className="font-semibold">{notification.message}</p>
+              </div>
+              <button
+                onClick={() => setNotification(null)}
+                className="text-current hover:opacity-70 transition-opacity"
+              >
+                <X size={18} />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirmation && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-md shadow-2xl">
+            <div className="p-6">
+              <div className="flex items-start gap-4 mb-4">
+                <div className="p-3 bg-red-500/10 rounded-lg">
+                  <AlertCircle size={24} className="text-red-400" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-lg font-bold text-white mb-2">Delete Project</h3>
+                  <p className="text-slate-300 text-sm">
+                    Are you sure you want to delete <span className="font-bold text-white">"{deleteConfirmation.projectName}"</span>?
+                  </p>
+                  <p className="text-slate-400 text-xs mt-2">
+                    This action cannot be undone.
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-3 justify-end">
+                <button
+                  onClick={() => setDeleteConfirmation(null)}
+                  className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white font-semibold rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    const updated = archivedProjects.filter(p => p.id !== deleteConfirmation.projectId);
+                    setArchivedProjects(updated);
+                    await updateClient({ archivedProjects: updated });
+                    setDeleteConfirmation(null);
+                    showNotification('Project deleted successfully', 'success');
+                  }}
+                  className="px-4 py-2 bg-red-500 hover:bg-red-400 text-white font-semibold rounded-lg transition-colors"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="max-w-4xl mx-auto space-y-8 pb-12">
-        {/* Project Archive Section */}
-        <section className="bg-slate-800 p-6 rounded-xl border border-slate-700">
-          <h3 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2">
-            <FolderOpen size={16} className="text-amber-500" />Project Archive
-          </h3>
-          <button 
-            onClick={async () => {
-              if (!client.needs?.projectName?.trim()) {
-                alert('Please enter a project name before archiving.');
-                return;
-              }
-              const projectNameToArchive = client.needs.projectName;
-              const existingProjectIndex = archivedProjects.findIndex(p => p.projectName === projectNameToArchive);
-              const archivedProject = {
-                id: existingProjectIndex !== -1 ? archivedProjects[existingProjectIndex].id : Date.now().toString(),
-                projectName: projectNameToArchive,
-                archivedAt: new Date(),
-                data: JSON.parse(JSON.stringify(client.needs))
-              };
-              let updatedArchived;
-              if (existingProjectIndex !== -1) {
-                updatedArchived = [...archivedProjects];
-                updatedArchived[existingProjectIndex] = archivedProject;
-              } else {
-                updatedArchived = [archivedProject, ...archivedProjects];
-              }
-              setArchivedProjects(updatedArchived);
-              
-              const clearedNeeds = { 
-                projectName: '',
-                description: '',
-                siteCountry: '',
-                siteCounty: '',
-                siteCity: '',
-                siteStreet: '',
-                siteStreetNumber: '',
-                sitePostalCode: '',
-                selectedCfDocId: '',
-                selectedFacturaDocId: '',
-                connectionType: undefined,
-                roofType: undefined, 
-                roofTypeOther: undefined,
-                inverterKw: undefined,
-                panelKw: 0,
-                panelCount: 0, 
-                panelStockItemId: undefined,
-                storage: '',
-                technicalNotes: '',
-                siteImages: [] 
-              };
-              
-              await updateClient({ needs: clearedNeeds, archivedProjects: updatedArchived });
-              setTempDescription('');
-              setSelectedInverterId(null);
-              setSelectedBatteryId(null);
-              setSelectedPanelId(null);
-            }}
-            className="w-full bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold px-4 py-3 rounded-lg flex items-center justify-center gap-2 transition-colors mb-4"
-          >
-            <Save size={18} /> Save Project
-          </button>
-          {archivedProjects.length > 0 && (
-            <div className="space-y-2 border-t border-slate-700 pt-4">
-              <p className="text-xs font-bold text-slate-500 uppercase mb-3">Saved Projects</p>
-              <div className="space-y-2 max-h-64 overflow-y-auto">
-                {archivedProjects.map(project => {
-                  const isCurrent = client.needs?.projectName === project.projectName;
-                  return (
-                    <div 
-                      key={project.id}
-                      className={`p-3 rounded border transition-all cursor-pointer group ${
-                        isCurrent
-                          ? 'bg-emerald-500/10 border-emerald-500/50'
-                          : 'bg-slate-900 border-slate-700 hover:border-amber-500/50'
-                      }`}
-                      onClick={() => {
-                        if (isCurrent) {
-                          const clearedNeeds = {
-                            description: '',
-                            projectName: '',
-                            siteCountry: '',
-                            siteCounty: '',
-                            siteCity: '',
-                            siteStreet: '',
-                            siteStreetNumber: '',
-                            sitePostalCode: '',
-                            selectedCfDocId: '',
-                            selectedFacturaDocId: '',
-                            connectionType: undefined,
-                            roofType: undefined,
-                            inverterKw: undefined,
-                            selectedInverterId: undefined,
-                            batteryKwh: undefined,
-                            selectedBatteryId: undefined,
-                            panelStockItemId: undefined,
-                            panelKw: undefined,
-                            panelCount: undefined,
-                            siteImages: []
-                          };
-                          updateClient({ needs: clearedNeeds });
-                          setTempDescription('');
-                          setSelectedInverterId(null);
-                          setSelectedBatteryId(null);
-                          setSelectedPanelId(null);
-                          return;
-                        }
-                        
-                        const loadedData = JSON.parse(JSON.stringify(project.data));
-                        updateClient({ needs: loadedData });
-                        setTempDescription(loadedData.description || '');
-                        setSelectedInverterId(loadedData.selectedInverterId || null);
-                        setSelectedBatteryId(loadedData.selectedBatteryId || null);
-                        setSelectedPanelId(loadedData.panelStockItemId || null);
-                      }}
-                    >
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1 min-w-0">
-                          {isCurrent && (
-                            <span className="text-emerald-400 font-bold text-xs flex items-center gap-1 mb-1">
-                              <CheckCircle size={14} /> LOADED
-                            </span>
-                          )}
-                          <p className={`font-bold text-sm truncate ${isCurrent ? 'text-emerald-400' : 'text-white'}`}>
-                            {project.projectName}
-                          </p>
+        {/* Header with Action Buttons */}
+        <div className="flex items-center justify-between gap-4">
+          <h1 className="text-3xl font-bold text-white flex items-center gap-3">
+            <FileText size={32} className="text-amber-500" />
+            Client Needs
+          </h1>
+          <div className="flex gap-3">
+            <button 
+              onClick={handleNewProject}
+              className="bg-slate-700 hover:bg-slate-600 text-white font-bold px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
+            >
+              <Plus size={18} /> New Project
+            </button>
+            <button 
+              onClick={handleSaveProject}
+              className="bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
+            >
+              <Save size={18} /> Save Project
+            </button>
+          </div>
+        </div>
+
+        {/* Saved Projects Section */}
+        {archivedProjects.length > 0 && (
+          <section className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
+            <div className="px-6 py-4 border-b border-slate-700">
+              <h3 className="text-sm font-bold text-slate-300 flex items-center gap-2">
+                <FolderOpen size={16} className="text-amber-500" />
+                Saved Projects ({archivedProjects.length})
+              </h3>
+            </div>
+            <div className="divide-y divide-slate-700">
+              {archivedProjects.map(project => {
+                const isCurrent = client.needs?.projectName === project.projectName;
+                const isExpanded = expandedProjects.has(project.id);
+                
+                return (
+                  <div key={project.id} className="bg-slate-800">
+                    {/* Project Header */}
+                    <div className="flex items-center justify-between px-6 py-4 hover:bg-slate-750 transition-colors">
+                      <button
+                        onClick={() => toggleProjectExpanded(project.id)}
+                        className="flex items-center gap-3 flex-1 text-left"
+                      >
+                        <div className={`p-1.5 rounded ${isExpanded ? 'bg-slate-700' : 'bg-slate-700/50'}`}>
+                          {isExpanded ? <ChevronUp size={16} className="text-white" /> : <ChevronDown size={16} className="text-white" />}
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <p className={`font-bold text-sm ${isCurrent ? 'text-emerald-400' : 'text-white'}`}>
+                              {project.projectName}
+                            </p>
+                            {isCurrent && (
+                              <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 text-xs font-bold rounded flex items-center gap-1">
+                                <CheckCircle size={12} /> CURRENT
+                              </span>
+                            )}
+                          </div>
                           <p className="text-xs text-slate-400 mt-1">
                             Saved: {new Date(project.archivedAt).toLocaleDateString()}
                           </p>
                         </div>
+                      </button>
+                      <div className="flex items-center gap-2">
                         <button
-                          type="button"
-                          onClick={async (e) => {
-                            e.stopPropagation();
-                            if (confirm(`Delete saved project "${project.projectName}"?`)) {
-                              const updated = archivedProjects.filter(p => p.id !== project.id);
-                              setArchivedProjects(updated);
-                              await updateClient({ archivedProjects: updated });
-                            }
+                          onClick={() => {
+                            const loadedData = JSON.parse(JSON.stringify(project.data));
+                            updateClient({ needs: loadedData });
+                            setTempDescription(loadedData.description || '');
+                            setSelectedInverterId(loadedData.selectedInverterId || null);
+                            setSelectedBatteryId(loadedData.selectedBatteryId || null);
+                            setSelectedPanelId(loadedData.panelStockItemId || null);
                           }}
-                          className="opacity-0 group-hover:opacity-100 transition-opacity bg-red-500/10 hover:bg-red-500/20 text-red-400 p-2 rounded text-xs"
+                          className="px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 hover:border-amber-500/50 rounded font-bold text-xs transition-colors"
+                        >
+                          Load
+                        </button>
+                        <button
+                          onClick={() => {
+                            setDeleteConfirmation({ projectId: project.id, projectName: project.projectName });
+                          }}
+                          className="p-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded transition-colors"
                         >
                           <Trash2 size={14} />
                         </button>
                       </div>
                     </div>
-                  );
-                })}
-              </div>
+                    
+                    {/* Project Details - Expandable */}
+                    {isExpanded && (
+                      <div className="px-6 py-4 bg-slate-900/50 border-t border-slate-700">
+                        <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-xs">
+                          {project.data.inverterKw && (
+                            <div>
+                              <span className="text-slate-500">Inverter:</span>
+                              <span className="ml-2 text-white font-semibold">{project.data.inverterKw} kW</span>
+                            </div>
+                          )}
+                          {project.data.panelKw && (
+                            <div>
+                              <span className="text-slate-500">Panels:</span>
+                              <span className="ml-2 text-white font-semibold">{project.data.panelKw} kW ({project.data.panelCount || 0} pcs)</span>
+                            </div>
+                          )}
+                          {project.data.connectionType && (
+                            <div>
+                              <span className="text-slate-500">Connection:</span>
+                              <span className="ml-2 text-white font-semibold">{project.data.connectionType}</span>
+                            </div>
+                          )}
+                          {project.data.roofType && (
+                            <div>
+                              <span className="text-slate-500">Roof:</span>
+                              <span className="ml-2 text-white font-semibold">{project.data.roofType}</span>
+                            </div>
+                          )}
+                          {project.data.siteCity && (
+                            <div>
+                              <span className="text-slate-500">Location:</span>
+                              <span className="ml-2 text-white font-semibold">{project.data.siteCity}</span>
+                            </div>
+                          )}
+                        </div>
+                        {project.data.description && (
+                          <div className="mt-3 pt-3 border-t border-slate-700">
+                            <p className="text-xs text-slate-500 mb-1">Description:</p>
+                            <p className="text-xs text-slate-300">{project.data.description}</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
-          )}
-        </section>
+          </section>
+        )}
 
         {/* Project Name */}
         <section className="bg-slate-800 p-6 rounded-xl border border-slate-700">
@@ -362,7 +536,7 @@ export default function ClientNeedsPage() {
           <input 
             type="text" 
             value={client.needs?.projectName || ''} 
-            onChange={(e) => handleNeedsChange('projectName', e.target.value)} 
+            onChange={(e) => handleProjectNameChange(e.target.value)} 
             className="w-full bg-slate-900 border border-slate-600 rounded-lg p-4 text-white outline-none focus:ring-1 focus:ring-amber-500" 
             placeholder="Enter project name..." 
           />
@@ -436,13 +610,34 @@ export default function ClientNeedsPage() {
           <h3 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2">
             <FileText size={16} className="text-amber-500" />Document Data Selection
           </h3>
+          {!hasProjectName && (
+            <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-300">
+              Set a project name to attach documents to a specific project.
+            </div>
+          )}
+          {hasProjectName && totalDocCount === 0 && (
+            <div className="mb-4 rounded-lg border border-slate-700 bg-slate-900 p-3 text-xs text-slate-400">
+              No documents uploaded. Upload documents in the Documents tab and assign them to this project.
+            </div>
+          )}
+          {hasProjectName && totalDocCount > 0 && projectDocCount === 0 && (
+            <div className="mb-4 rounded-lg border border-slate-700 bg-slate-900 p-3 text-xs text-slate-400">
+              No documents uploaded for this project. {totalDocCount} document{totalDocCount === 1 ? '' : 's'} available in total.
+            </div>
+          )}
+          {projectDocCount > 0 && (
+            <div className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-300">
+              {projectDocCount} document{projectDocCount === 1 ? '' : 's'} uploaded for this project.
+            </div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-bold text-slate-500 uppercase mb-1">CF Document</label>
               <select
                 value={client.needs?.selectedCfDocId || ''}
                 onChange={(e) => handleNeedsChange('selectedCfDocId', e.target.value)}
-                className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500"
+                disabled={!hasProjectName}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500 disabled:opacity-60"
               >
                 <option value="">-- None --</option>
                 {cfDocs.map(doc => (
@@ -451,6 +646,9 @@ export default function ClientNeedsPage() {
                   </option>
                 ))}
               </select>
+              {hasProjectName && cfDocs.length === 0 && (
+                <p className="mt-2 text-xs text-slate-500">No CF documents for this project.</p>
+              )}
               {selectedCfDoc && (
                 <div className="mt-3 rounded-lg border border-slate-700 bg-slate-900 p-3 text-xs text-slate-300 space-y-1">
                   <div className="font-semibold text-white">{selectedCfDoc.name}</div>
@@ -466,7 +664,8 @@ export default function ClientNeedsPage() {
               <select
                 value={client.needs?.selectedFacturaDocId || ''}
                 onChange={(e) => handleNeedsChange('selectedFacturaDocId', e.target.value)}
-                className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500"
+                disabled={!hasProjectName}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500 disabled:opacity-60"
               >
                 <option value="">-- None --</option>
                 {facturaDocs.map(doc => (
@@ -475,6 +674,9 @@ export default function ClientNeedsPage() {
                   </option>
                 ))}
               </select>
+              {hasProjectName && facturaDocs.length === 0 && (
+                <p className="mt-2 text-xs text-slate-500">No Factura documents for this project.</p>
+              )}
               {selectedFacturaDoc && (
                 <div className="mt-3 rounded-lg border border-slate-700 bg-slate-900 p-3 text-xs text-slate-300 space-y-1">
                   <div className="font-semibold text-white">{selectedFacturaDoc.name}</div>
@@ -765,39 +967,58 @@ export default function ClientNeedsPage() {
             />
           </div>
 
-          {!!(client.needs?.batteryKwh && client.needs.batteryKwh > 0 && selectedInverterId) && (
+          {!!(client.needs?.batteryKwh && client.needs.batteryKwh > 0) && (
             <div className="space-y-4">
+              {!selectedInverterId && (
+                <div className="p-4 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+                  <p className="text-xs text-blue-300 font-bold">
+                    ℹ️ Select an inverter first to see compatible battery suggestions, or browse all batteries below.
+                  </p>
+                </div>
+              )}
               {suggestedBatteries.length > 0 && !selectedBatteryId && (
                 <div className="space-y-3">
                   <div className="flex items-center gap-2 text-emerald-400 font-bold text-sm bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-3 py-2">
-                    <CheckCircle size={16} /> Suitable Batteries Found
+                    <CheckCircle size={16} /> {selectedInverterId ? 'Compatible Batteries Found' : 'Suitable Batteries Found'}
                   </div>
-                  {suggestedBatteries.map(bat => (
-                    <div 
-                      key={bat.id}
-                      className="bg-slate-900 p-4 rounded-lg border border-slate-700 hover:border-emerald-500/50 cursor-pointer transition-all"
-                      onClick={async () => {
-                        setSelectedBatteryId(bat.id);
-                        await updateClient({ needs: { ...client.needs, selectedBatteryId: bat.id } });
-                      }}
-                    >
-                      <div className="flex justify-between items-start">
-                        <div className="flex-1">
-                          <p className="text-white font-bold">{bat.name}</p>
-                          <p className="text-xs text-slate-400 mt-1">{bat.batteryPowerKwh}kWh • {bat.batteryType}</p>
-                          <p className="text-xs text-slate-500 mt-1">{bat.quantity} in stock</p>
-                          <p className="text-sm text-emerald-400 font-bold mt-2">{bat.sellPrice} RON</p>
+                  {suggestedBatteries.map(bat => {
+                    const selectedInverter = selectedInverterId 
+                      ? inventory.find(i => i.id === selectedInverterId) 
+                      : null;
+                    const isCompatible = !selectedInverter || bat.batteryType === selectedInverter.inverterStorageType;
+                    
+                    return (
+                      <div 
+                        key={bat.id}
+                        className="bg-slate-900 p-4 rounded-lg border border-slate-700 hover:border-emerald-500/50 cursor-pointer transition-all"
+                        onClick={async () => {
+                          setSelectedBatteryId(bat.id);
+                          await updateClient({ needs: { ...client.needs, selectedBatteryId: bat.id } });
+                        }}
+                      >
+                        <div className="flex justify-between items-start">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <p className="text-white font-bold">{bat.name}</p>
+                              {!isCompatible && (
+                                <span className="text-xs bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded font-bold">⚠ Check Compatibility</span>
+                              )}
+                            </div>
+                            <p className="text-xs text-slate-400 mt-1">{bat.batteryPowerKwh}kWh • {bat.batteryType}</p>
+                            <p className="text-xs text-slate-500 mt-1">{bat.quantity} in stock</p>
+                            <p className="text-sm text-emerald-400 font-bold mt-2">{bat.sellPrice} RON</p>
+                          </div>
+                          <button 
+                            type="button"
+                            className="ml-4 px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-bold rounded-lg text-sm whitespace-nowrap transition-colors"
+                          >
+                            Select
+                          </button>
                         </div>
-                        <button 
-                          type="button"
-                          className="ml-4 px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-bold rounded-lg text-sm whitespace-nowrap transition-colors"
-                        >
-                          Select
-                        </button>
                       </div>
-                    </div>
-                  ))}
-                  {suggestedBatteries.length > 0 && (
+                    );
+                  })}
+                  {suggestedBatteries.length > 3 && (
                     <button 
                       type="button"
                       onClick={() => setShowBatteryAlternatives(true)}
@@ -806,6 +1027,26 @@ export default function ClientNeedsPage() {
                       Show All {suggestedBatteries.length} Batteries
                     </button>
                   )}
+                </div>
+              )}
+
+              {suggestedBatteries.length === 0 && !selectedBatteryId && (
+                <div className="space-y-3">
+                  <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg">
+                    <div className="flex items-center justify-center gap-2 text-red-400 font-bold text-lg mb-2">
+                      <AlertCircle size={20} /> No suitable batteries!
+                    </div>
+                    <p className="text-sm text-red-300 text-center">
+                      No batteries match the specifications.
+                    </p>
+                  </div>
+                  <button 
+                    type="button"
+                    onClick={() => setShowBatteryAlternatives(true)}
+                    className="w-full px-4 py-3 bg-slate-900 border border-amber-500/50 hover:border-amber-500 text-amber-400 hover:text-amber-300 font-bold rounded-lg transition-colors"
+                  >
+                    Browse All Available Batteries
+                  </button>
                 </div>
               )}
 
@@ -1199,13 +1440,13 @@ export default function ClientNeedsPage() {
                   let hookType = '';
                   
                   if (roofType === 'Tigla ceramica') {
-                    // CHOOK-Tigla: 1 hook every 40cm (0.4m)
-                    roofHooks = Math.ceil(totalRailLength / 0.4);
+                    // CHOOK-Tigla: 1 hook every 1m
+                    roofHooks = Math.ceil(totalRailLength / 1);
                     roofScrews = roofHooks * 2; // CHOOKSurub: 2 per hook
                     hookType = 'CHOOK-Tigla';
                   } else if (roofType === 'Tabla' || roofType === 'Tabla ondulata' || roofType === 'Tabla cutata') {
-                    // CHOOK-Tabla: 1 hook every 40cm (0.4m), no screws
-                    roofHooks = Math.ceil(totalRailLength / 0.4);
+                    // CHOOK-Tabla: 1 hook every 1m, no screws
+                    roofHooks = Math.ceil(totalRailLength / 1);
                     hookType = 'CHOOK-Tabla';
                   }
                   

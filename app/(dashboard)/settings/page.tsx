@@ -50,6 +50,21 @@ function SettingsWrapper() {
     await StorageService.saveItem('templates', newTemplate);
   };
 
+  const handleUpdateTemplate = async (id: string, updates: Partial<DocTemplate>) => {
+    try {
+      const template = docTemplates.find(t => t.id === id);
+      if (!template) {
+        throw new Error('Template not found');
+      }
+      const updatedTemplate = { ...template, ...updates };
+      await StorageService.saveItem('templates', updatedTemplate);
+      alert('Template updated successfully!');
+    } catch (error) {
+      console.error('Error updating template:', error);
+      alert('Error updating template. Please try again.');
+    }
+  };
+
   const handleDeleteTemplate = async (id: string) => {
     await StorageService.deleteItem('templates', id);
   };
@@ -66,6 +81,7 @@ function SettingsWrapper() {
       onDeleteUser={handleDeleteUser}
       docTemplates={docTemplates}
       onAddTemplate={handleAddTemplate}
+      onUpdateTemplate={handleUpdateTemplate}
       onDeleteTemplate={handleDeleteTemplate}
     />
   );

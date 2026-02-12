@@ -221,6 +221,7 @@ export const InventoryList: React.FC<InventoryListProps> = ({
         <DocumentPreview 
           document={previewDoc}
           onClose={() => setPreviewDoc(null)}
+          folder="inventory"
         />
       )}
 

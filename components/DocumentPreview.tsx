@@ -1,8 +1,11 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { X, Download, Printer, File, FileText } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { X, Download, Printer, File, FileText, Edit, Save, FileDown, Mail } from 'lucide-react';
 import mammoth from 'mammoth';
+import { StorageService } from '../services/storageService';
+import NovelEditor from './NovelEditor';
+import type { Editor } from '@tiptap/react';
 
 interface DocumentPreviewProps {
   document: {
@@ -11,8 +14,15 @@ interface DocumentPreviewProps {
     description?: string;
     uploadedAt?: Date;
     date?: Date;
+    id?: string;
   };
   onClose: () => void;
+  allowEdit?: boolean; // Enable editing for DOCX files
+  onSave?: (updatedUrl: string) => void; // Callback after saving
+  clientId?: string; // Client ID for PDF upload path
+  folder?: string; // Folder path for PDF upload (e.g., 'documents', 'quotes')
+  onPdfCreated?: (pdfDocument: { name: string; url: string; id: string; date: Date }) => void; // Callback when PDF is created
+  onSendEmail?: (document: { name: string; url: string; id: string; date: Date }) => void; // Callback to send document via email
 }
 
 const isPdfDoc = (doc: { url: string; name: string }) =>
@@ -39,10 +49,24 @@ const PdfPreview: React.FC<{ url: string; title: string }> = ({ url, title }) =>
   );
 };
 
-const DocxPreview: React.FC<{ url: string; name: string }> = ({ url, name }) => {
+const DocxPreview: React.FC<{ 
+  url: string; 
+  name: string; 
+  allowEdit?: boolean; 
+  onSave?: (docxBlob: Blob) => void;
+  clientId?: string;
+  folder?: string;
+  onPdfCreated?: (pdfDocument: { name: string; url: string; id: string; date: Date }) => void;
+}> = ({ url, name, allowEdit = false, onSave, clientId, folder, onPdfCreated }) => {
   const [htmlContent, setHtmlContent] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [editMode, setEditMode] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [converting, setConverting] = useState(false);
+  const [originalArrayBuffer, setOriginalArrayBuffer] = useState<ArrayBuffer | null>(null);
+  const [editorContent, setEditorContent] = useState<string>('');
+  const editorRef = useRef<Editor | null>(null);
 
   useEffect(() => {
     const loadDocx = async () => {
@@ -66,8 +90,11 @@ const DocxPreview: React.FC<{ url: string; name: string }> = ({ url, name }) => 
           arrayBuffer = await response.arrayBuffer();
         }
 
+        setOriginalArrayBuffer(arrayBuffer);
         const result = await mammoth.convertToHtml({ arrayBuffer });
-        setHtmlContent(result.value);
+        const htmlResult = result.value;
+        setHtmlContent(htmlResult);
+        setEditorContent(htmlResult);
         
         if (result.messages.length > 0) {
           console.warn('Mammoth conversion messages:', result.messages);
@@ -82,6 +109,120 @@ const DocxPreview: React.FC<{ url: string; name: string }> = ({ url, name }) => 
 
     loadDocx();
   }, [url]);
+
+  const handleEdit = () => {
+    setEditMode(true);
+  };
+
+  const handleCancelEdit = () => {
+    setEditMode(false);
+    setEditorContent(htmlContent); // Reset to original content
+  };
+
+  const handleSave = async () => {
+    if (!editorRef.current) return;
+
+    setSaving(true);
+    try {
+      const editedHtml = editorRef.current.getHTML();
+      
+      // For now, we'll alert the user that HTML to DOCX conversion requires a library
+      // In production, you'd want to use a server-side conversion service
+      alert('Note: The edited content is saved as HTML. For .docx format, please use "Convert to PDF" or download and manually convert.');
+      
+      // Create a simple HTML file as a backup
+      const htmlBlob = new Blob([`
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="UTF-8">
+          <style>
+            body { font-family: Arial, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; }
+          </style>
+        </head>
+        <body>
+          ${editedHtml}
+        </body>
+        </html>
+      `], { type: 'text/html' });
+      
+      if (onSave) {
+        // For now, we'll skip the actual save since HTML to DOCX conversion needs proper setup
+        setHtmlContent(editedHtml);
+        setEditorContent(editedHtml);
+        setEditMode(false);
+        
+        alert('Changes saved to preview. Note: Full DOCX save requires additional server-side conversion setup.');
+      }
+    } catch (err) {
+      console.error('Error saving document:', err);
+      alert('Failed to save document');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleConvertToPdf = async () => {
+    if (!originalArrayBuffer) {
+      alert('Document not loaded');
+      return;
+    }
+
+    if (!clientId || !folder) {
+      alert('Cannot save PDF: missing client or folder information');
+      return;
+    }
+
+    setConverting(true);
+    try {
+      // Convert ArrayBuffer to base64
+      const uint8Array = new Uint8Array(originalArrayBuffer);
+      const binaryString = Array.from(uint8Array, byte => String.fromCharCode(byte)).join('');
+      const docxBase64 = btoa(binaryString);
+      
+      // Call PDF conversion API
+      const response = await fetch('/api/convert-docx-to-pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ docxBase64 }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to convert to PDF');
+      }
+
+      const { pdfBase64 } = await response.json();
+      
+      // Upload PDF to Firebase Storage
+      const pdfDataUrl = `data:application/pdf;base64,${pdfBase64}`;
+      const pdfFileName = name.replace('.docx', '.pdf');
+      const timestamp = Date.now();
+      const storagePath = `clients/${clientId}/${folder}/${pdfFileName.replace(/\s+/g, '_')}_${timestamp}`;
+      
+      const pdfUrl = await StorageService.uploadFile(pdfDataUrl, storagePath);
+      
+      // Create PDF document object
+      const pdfDocument = {
+        id: `pdf_${timestamp}`,
+        name: pdfFileName,
+        url: pdfUrl,
+        date: new Date(),
+      };
+      
+      // Notify parent component
+      if (onPdfCreated) {
+        onPdfCreated(pdfDocument);
+      }
+      
+      alert(`PDF created successfully: ${pdfFileName}`);
+    } catch (err) {
+      console.error('Error converting to PDF:', err);
+      alert('Failed to convert to PDF');
+    } finally {
+      setConverting(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -106,22 +247,127 @@ const DocxPreview: React.FC<{ url: string; name: string }> = ({ url, name }) => 
   }
 
   return (
-    <div className="w-full h-full overflow-auto">
-      <div 
-        className="bg-white rounded-lg p-8 max-w-4xl mx-auto prose prose-slate"
-        dangerouslySetInnerHTML={{ __html: htmlContent }}
-        style={{
-          minHeight: '600px',
-          color: '#1e293b',
-          fontSize: '14px',
-          lineHeight: '1.6'
-        }}
-      />
+    <div className="w-full h-full flex flex-col">
+      {/* Toolbar for editing */}
+      {allowEdit && (
+        <div className="flex-shrink-0 mb-4 flex items-center justify-between gap-2 p-3 bg-slate-800 rounded-lg border border-slate-700">
+          <div className="flex items-center gap-2">
+            {editMode ? (
+              <span className="text-sm text-slate-300">✏️ Edit mode - Make your changes below</span>
+            ) : (
+              <span className="text-sm text-slate-400">👁️ View mode</span>
+            )}
+          </div>
+          
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {editMode ? (
+              <>
+                <button
+                  onClick={handleCancelEdit}
+                  className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white text-sm rounded transition-colors"
+                  disabled={saving}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSave}
+                  disabled={saving}
+                  className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-sm rounded transition-colors flex items-center gap-2 disabled:opacity-50"
+                >
+                  {saving ? (
+                    <>
+                      <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    <>
+                      <Save size={14} />
+                      Save Changes
+                    </>
+                  )}
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={handleEdit}
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded transition-colors flex items-center gap-2"
+                >
+                  <Edit size={14} />
+                  Edit
+                </button>
+                <button
+                  onClick={handleConvertToPdf}
+                  disabled={converting}
+                  className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-sm rounded transition-colors flex items-center gap-2 disabled:opacity-50"
+                >
+                  {converting ? (
+                    <>
+                      <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      Converting...
+                    </>
+                  ) : (
+                    <>
+                      <FileDown size={14} />
+                      Convert to PDF
+                    </>
+                  )}
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Content */}
+      <div className="flex-1 overflow-auto bg-slate-900 rounded-lg">
+        {editMode ? (
+          <div className="h-full flex flex-col p-4">
+            <div className="flex-1 bg-white rounded-lg shadow-lg overflow-hidden">
+              <NovelEditor
+                content={editorContent}
+                onChange={setEditorContent}
+                placeholder="Edit your document..."
+                dark={false}
+                minHeight="500px"
+                editable={!saving}
+                onEditorReady={(editor) => {
+                  editorRef.current = editor;
+                }}
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="h-full overflow-auto p-4">
+            <div 
+              className="bg-white rounded-lg p-8 mx-auto prose prose-slate max-w-4xl"
+              dangerouslySetInnerHTML={{ __html: htmlContent }}
+              style={{
+                minHeight: '500px',
+                color: '#1e293b',
+                fontSize: '14px',
+                lineHeight: '1.6'
+              }}
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 };
 
-export const DocumentPreview: React.FC<DocumentPreviewProps> = ({ document: doc, onClose }) => {
+export const DocumentPreview: React.FC<DocumentPreviewProps> = ({ 
+  document: doc, 
+  onClose, 
+  allowEdit = false, 
+  onSave,
+  clientId,
+  folder,
+  onPdfCreated,
+  onSendEmail
+}) => {
+  const [saving, setSaving] = useState(false);
+
   const downloadDocument = (url: string, filename: string) => {
     const link = window.document.createElement('a');
     link.href = url;
@@ -129,6 +375,34 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({ document: doc,
     window.document.body.appendChild(link);
     link.click();
     window.document.body.removeChild(link);
+  };
+
+  const handleSaveDocx = async (docxBlob: Blob) => {
+    setSaving(true);
+    try {
+      // Upload to Firebase Storage
+      const { storage } = await import('@/services/firebase');
+      const { ref, uploadBytes, getDownloadURL } = await import('firebase/storage');
+      
+      const timestamp = Date.now();
+      const fileName = doc.name.replace('.docx', `_edited_${timestamp}.docx`);
+      const storageRef = ref(storage, `documents/${doc.id || timestamp}/${fileName}`);
+      
+      await uploadBytes(storageRef, docxBlob);
+      const downloadURL = await getDownloadURL(storageRef);
+      
+      if (onSave) {
+        await onSave(downloadURL);
+      }
+      
+      alert('Document saved successfully!');
+    } catch (error) {
+      console.error('Error uploading document:', error);
+      alert('Failed to save document to server');
+      throw error;
+    } finally {
+      setSaving(false);
+    }
   };
 
   const printDocument = (url: string) => {
@@ -216,41 +490,72 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({ document: doc,
           </button>
         </div>
 
-        <div className="flex-1 p-6 bg-slate-900 min-h-[500px] flex flex-col">
+        <div className="flex-1 overflow-hidden bg-slate-900 flex flex-col">
           {doc.url.includes('data:image') || doc.name?.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? (
-            <img 
-              src={doc.url} 
-              alt={doc.name} 
-              className="max-w-full max-h-full object-contain rounded-lg mx-auto" 
-            />
+            <div className="flex-1 overflow-auto p-6">
+              <img 
+                src={doc.url} 
+                alt={doc.name} 
+                className="max-w-full max-h-full object-contain rounded-lg mx-auto" 
+              />
+            </div>
           ) : isPdfDoc(doc) ? (
-            <PdfPreview url={doc.url} title={doc.name} />
+            <div className="flex-1 overflow-hidden p-6">
+              <PdfPreview url={doc.url} title={doc.name} />
+            </div>
           ) : isDocxDoc(doc) ? (
-            <DocxPreview url={doc.url} name={doc.name} />
+            <div className="flex-1 overflow-hidden p-6">
+              <DocxPreview 
+                url={doc.url} 
+                name={doc.name} 
+                allowEdit={allowEdit}
+                onSave={handleSaveDocx}
+                clientId={clientId}
+                folder={folder}
+                onPdfCreated={onPdfCreated}
+              />
+            </div>
           ) : doc.url.includes('data:text') ? (
-            <div className="bg-slate-800 rounded-lg p-6 max-h-full overflow-auto border border-slate-700 w-full">
-              <pre className="text-sm text-slate-300 font-mono whitespace-pre-wrap break-words">
-                {atob(doc.url.split(',')[1])}
-              </pre>
+            <div className="flex-1 overflow-auto p-6">
+              <div className="bg-slate-800 rounded-lg p-6 border border-slate-700 w-full">
+                <pre className="text-sm text-slate-300 font-mono whitespace-pre-wrap break-words">
+                  {atob(doc.url.split(',')[1])}
+                </pre>
+              </div>
             </div>
           ) : (
-            <div className="text-center text-slate-400 flex flex-col items-center gap-4 justify-center h-full">
-              <File size={64} className="text-slate-600" />
-              <div>
-                <p className="font-semibold text-white mb-2">{doc.name}</p>
-                <p className="text-sm">Preview not available for this file type</p>
-                <button 
-                  onClick={() => downloadDocument(doc.url, doc.name)} 
-                  className="mt-4 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-sm font-semibold transition-all"
-                >
-                  Download File
-                </button>
+            <div className="flex-1 flex items-center justify-center p-6">
+              <div className="text-center text-slate-400 flex flex-col items-center gap-4">
+                <File size={64} className="text-slate-600" />
+                <div>
+                  <p className="font-semibold text-white mb-2">{doc.name}</p>
+                  <p className="text-sm">Preview not available for this file type</p>
+                  <button 
+                    onClick={() => downloadDocument(doc.url, doc.name)} 
+                    className="mt-4 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-sm font-semibold transition-all"
+                  >
+                    Download File
+                  </button>
+                </div>
               </div>
             </div>
           )}
         </div>
 
         <div className="flex gap-2 p-4 border-t border-slate-700 bg-slate-800 justify-end">
+          {isPdfDoc(doc) && onSendEmail && (
+            <button 
+              onClick={() => onSendEmail({
+                name: doc.name,
+                url: doc.url,
+                id: doc.id || Date.now().toString(),
+                date: doc.date || doc.uploadedAt || new Date()
+              })} 
+              className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-sm font-semibold flex items-center gap-2 transition-all"
+            >
+              <Mail size={16} /> Send Email
+            </button>
+          )}
           <button 
             onClick={() => downloadDocument(doc.url, doc.name)} 
             className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-semibold flex items-center gap-2 transition-all"

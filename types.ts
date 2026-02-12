@@ -144,6 +144,26 @@ export interface Quote {
     reopenReason: string;
     closedAgainAt?: Date; // When it was closed again after reopen
   }>;
+
+  // Email Tracking
+  emailSentAt?: Date; // When quote was last emailed
+  emailSentTo?: string; // Email address it was sent to
+  emailSentBy?: string; // User who sent the email
+  emailHistory?: Array<{
+    sentAt: Date;
+    sentTo: string;
+    sentBy: string;
+    documentName?: string;
+  }>;
+  
+  // Generated Documents
+  generatedDocuments?: Array<{
+    id: string;
+    name: string;
+    url: string; // Firebase Storage URL
+    date: Date;
+    generatedBy?: string; // User who generated it
+  }>;
 }
 
 export interface AIResponse {
@@ -190,6 +210,7 @@ export interface ClientNeed {
 
   // Project Info
   projectName?: string;
+  projectId?: string;
 
   // Site Location
   siteCountry?: string;
@@ -212,6 +233,8 @@ export interface ClientNeed {
   
   // Mounting Structure Selection
   selectedMountingSystem?: 'rail' | 'minirail'; // Selected mounting system option
+  rowCount?: number;
+  rowDistribution?: { [key: number]: number };
   
   // Inverter Requirements
   inverterKw?: number;
@@ -302,6 +325,8 @@ export interface ClientDocument {
   cfNumber?: string; // CF number
   cadNumber?: string; // CAD number
   docAddress?: string; // Address for CF/Factura
+  projectId?: string;
+  projectName?: string;
   url: string; // Base64 or URL
   date: Date;
   folder?: string; // Virtual folder path
@@ -312,8 +337,38 @@ export interface ClientDocument {
 export interface DocTemplate {
   id: string;
   name: string;
-  content: string; // Base64 string
+  content: string; // Base64 string or URL
   date: Date;
+}
+
+export interface SmtpSettings {
+  id: string; // Usually 'default' for company-wide settings
+  host: string; // smtp.gmail.com, smtp.office365.com, etc.
+  port: number; // Usually 587 (TLS) or 465 (SSL)
+  secure: boolean; // TLS enabled
+  username: string;
+  password: string; // Encrypted before storage
+  fromEmail: string;
+  fromName: string;
+  replyTo?: string;
+  signature?: string; // HTML signature to append to emails
+  updatedAt: Date;
+  updatedBy: string;
+}
+
+export type EmailTemplateCategory = 'quote' | 'invoice' | 'general' | 'project';
+
+export interface EmailTemplate {
+  id: string;
+  name: string;
+  category: EmailTemplateCategory;
+  subject: string; // Can include variables like {clientName}
+  body: string; // HTML content with variable placeholders
+  variables: string[]; // Available variables for this template
+  createdAt: Date;
+  updatedAt: Date;
+  createdBy: string;
+  updatedBy: string;
 }
 
 export type UserRole = 'SUPER_ADMIN' | 'WAREHOUSEMAN' | 'INSTALLER';

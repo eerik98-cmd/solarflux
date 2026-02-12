@@ -1155,6 +1155,8 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
         <DocumentPreview
           document={{ name: previewDoc.name, url: previewDoc.url, description: previewDoc.description, date: previewDoc.date }}
           onClose={() => setPreviewDoc(null)}
+          clientId={selectedClientId}
+          folder="quotes"
         />
       )}
     </div>

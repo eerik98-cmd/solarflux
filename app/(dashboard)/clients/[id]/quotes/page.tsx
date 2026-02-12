@@ -1,15 +1,22 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
-import { FileText, RefreshCcw, Save, Zap, Package, Info, Plus, Trash2, History, ChevronDown, CheckSquare, Square, Download, Eye, Sparkles, Users, X } from 'lucide-react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { FileText, Save, Zap, Package, Info, Plus, Trash2, ChevronDown, ChevronUp, Download, Eye, Sparkles, Users, X, FolderOpen, CheckCircle, AlertCircle, CheckSquare, Square, Mail } from 'lucide-react';
 import { useClient } from '@/contexts/ClientContext';
 import { useData } from '@/contexts/DataContext';
-import { Quote, QuoteLineItem, Category } from '@/types';
+import { useAuth } from '@/contexts/AuthContext';
+import { Quote, QuoteLineItem, Category, ClientNeed, EmailTemplate, SmtpSettings } from '@/types';
 import { DocumentPreview } from '@/components/DocumentPreview';
+import EmailPreviewModal from '@/components/EmailPreviewModal';
+import { storage } from '@/services/firebase';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { StorageService } from '@/services/storageService';
+import { replaceEmailVariables, getCommonTemplateData } from '@/lib/emailTemplateUtils';
 
 export default function ClientQuotesPage() {
   const { client } = useClient();
   const { inventory, savedQuotes, saveQuote, deleteQuote, docTemplates } = useData();
+  const { currentUser } = useAuth();
   
   const [quoteProjectName, setQuoteProjectName] = useState('');
   const [quoteItems, setQuoteItems] = useState<QuoteLineItem[]>([]);
@@ -21,10 +28,92 @@ export default function ClientQuotesPage() {
   const [offerSent, setOfferSent] = useState(false);
   const [quoteWon, setQuoteWon] = useState(false);
   const [allocatedInstallerId, setAllocatedInstallerId] = useState<string | null>(null);
+  const [expandedQuotes, setExpandedQuotes] = useState<Set<string>>(new Set());
+  const [notification, setNotification] = useState<{message: string; type: 'success' | 'error' | 'info'} | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<{message: string; onConfirm: () => void} | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [sendingEmailDocId, setSendingEmailDocId] = useState<string | null>(null);
+
+  // Email preview modal state
+  const [showEmailPreview, setShowEmailPreview] = useState(false);
+  const [emailPreviewData, setEmailPreviewData] = useState<any>(null);
+  const [emailTemplates, setEmailTemplates] = useState<EmailTemplate[]>([]);
+  const [smtpSettings, setSmtpSettings] = useState<SmtpSettings | null>(null);
+  
+  // Document format warning modal
+  const [docFormatWarning, setDocFormatWarning] = useState<{
+    show: boolean;
+    doc: {id: string, name: string, url: string, date: Date} | null;
+  }>({ show: false, doc: null });
 
   if (!client) return null;
 
+  // Load email templates and SMTP settings on mount
+  useEffect(() => {
+    const loadEmailData = async () => {
+      try {
+        // Load email templates
+        const templatesResponse = await fetch('/api/settings/email-templates');
+        if (templatesResponse.ok) {
+          const data = await templatesResponse.json();
+          setEmailTemplates(data.templates || []);
+        }
+
+        // Load SMTP settings for signature
+        const smtpResponse = await fetch('/api/settings/smtp');
+        if (smtpResponse.ok) {
+          const data = await smtpResponse.json();
+          setSmtpSettings(data.settings);
+        }
+      } catch (error) {
+        console.error('Error loading email data:', error);
+      }
+    };
+
+    loadEmailData();
+  }, []);
+
   const clientQuotes = savedQuotes.filter(q => q.clientId === client.id);
+  
+  // Get current quote's generated documents
+  const currentQuote = editingQuoteId ? clientQuotes.find(q => q.id === editingQuoteId) : null;
+  const generatedDocuments = currentQuote?.generatedDocuments || [];
+  
+  const showNotification = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    setNotification({ message, type });
+    setTimeout(() => setNotification(null), 3000);
+  };
+
+  const checkIfItemExists = (inventoryItemId: string) => {
+    return quoteItems.some(item => item.inventoryItemId === inventoryItemId);
+  };
+
+  const addItemToQuote = (newItem: QuoteLineItem) => {
+    if (newItem.inventoryItemId && checkIfItemExists(newItem.inventoryItemId)) {
+      // Show confirmation dialog for duplicate item
+      setConfirmDialog({
+        message: 'This item is already added once. Do you want to add one more?',
+        onConfirm: () => {
+          setQuoteItems([...quoteItems, newItem]);
+          showNotification('Item added to quote', 'success');
+          setConfirmDialog(null);
+        }
+      });
+      return;
+    }
+    setQuoteItems([...quoteItems, newItem]);
+    showNotification('Item added to quote', 'success');
+  };
+  
+  const toggleQuoteExpanded = (quoteId: string) => {
+    const newExpanded = new Set(expandedQuotes);
+    if (newExpanded.has(quoteId)) {
+      newExpanded.delete(quoteId);
+    } else {
+      newExpanded.add(quoteId);
+    }
+    setExpandedQuotes(newExpanded);
+  };
 
   const quoteTotals = useMemo(() => {
     const subtotalNet = quoteItems.reduce((acc, item) => acc + (item.quantity * item.netPrice), 0);
@@ -33,24 +122,51 @@ export default function ClientQuotesPage() {
     return { subtotalNet, vatTotal, totalGross };
   }, [quoteItems]);
 
+  const selectedProjectData = useMemo(() => {
+    if (!client) return null;
+    if (selectedProjectForQuote === 'current') {
+      return client.needs || null;
+    }
+    if (selectedProjectForQuote.startsWith('archived-')) {
+      const idx = Number.parseInt(selectedProjectForQuote.replace('archived-', ''), 10);
+      return client.archivedProjects?.[idx]?.data || null;
+    }
+    return null;
+  }, [client, selectedProjectForQuote]);
+
   const handleNewQuoteClick = () => { 
-    setQuoteItems([]); 
-    setQuoteProjectName(''); 
-    setEditingQuoteId(null);
-    setSelectedProjectForQuote('');
+    setConfirmDialog({
+      message: 'Clear current quote and start a new one?',
+      onConfirm: () => {
+        setQuoteItems([]); 
+        setQuoteProjectName(''); 
+        setEditingQuoteId(null);
+        setSelectedProjectForQuote('');
+        setOfferSent(false);
+        setQuoteWon(false);
+        setAllocatedInstallerId(null);
+        showNotification('New quote started', 'info');
+        setConfirmDialog(null);
+      }
+    });
   };
 
   const handleLoadQuote = (quote: Quote) => {
     setQuoteProjectName(quote.title || '');
     setQuoteItems(quote.items.map(i => ({...i, selectedSerialNumbers: i.selectedSerialNumbers || []})));
     setEditingQuoteId(quote.id);
+    setOfferSent(false); // Reset these since they're not in Quote type yet
+    setQuoteWon(false);
+    setAllocatedInstallerId(quote.allocatedInstallerId || null);
+    showNotification('Quote loaded successfully', 'success');
   };
 
   const saveClientQuote = () => {
-    if (quoteItems.length === 0 || !quoteProjectName.trim()) { 
-      alert("Please ensure project name is set and items are added."); 
+    if (!quoteProjectName.trim()) { 
+      showNotification("Please enter a quote name", 'error');
       return; 
     }
+    
     let targetId = editingQuoteId;
     if (!targetId) {
       const existingByName = savedQuotes.find(q => q.clientId === client.id && q.title === quoteProjectName.trim());
@@ -76,7 +192,7 @@ export default function ClientQuotesPage() {
     
     saveQuote(newQuote);
     setEditingQuoteId(targetId);
-    alert('Quote saved successfully.' + (allocatedInstallerId ? ` Allocated to installer: ${allocatedInstallerId}` : ''));
+    showNotification('Quote saved successfully' + (allocatedInstallerId ? ` - Allocated to installer` : ''), 'success');
   };
 
   const handleAddQuoteLine = () => {
@@ -96,30 +212,30 @@ export default function ClientQuotesPage() {
 
   const removeQuoteLine = (id: string) => setQuoteItems(quoteItems.filter(item => item.id !== id));
 
-  const addMountingStructuresToQuote = () => {
-    if (!client?.needs?.panelCount) {
-      alert('Panel count not configured in Client Needs');
+  const addMountingStructuresToQuote = (needsData?: ClientNeed | null) => {
+    const totalPanels = Number(needsData?.panelCount);
+    if (!Number.isFinite(totalPanels) || totalPanels <= 0) {
+      showNotification('Panel count not configured in Client Needs', 'error');
       return;
     }
 
-    const totalPanels = client.needs.panelCount;
-    const roofType = client.needs.roofType;
-    const selectedOption = client.needs.selectedMountingSystem;
+    const roofType = needsData?.roofType;
+    const selectedOption = needsData?.selectedMountingSystem;
     
     // For non-Tigla roofs, check if user has selected an option
     const isTabla = roofType === 'Tabla' || roofType === 'Tabla ondulata' || roofType === 'Tabla cutata';
     const isTiglaCeramica = roofType === 'Tigla ceramica';
     
     if (isTabla && !selectedOption) {
-      alert('Please select a mounting system option (Rail System or MiniRail System) in the Structure Components section on the Needs page before adding to quote.');
+      showNotification('Please select a mounting system option in the Needs page', 'error');
       return;
     }
     
     const option = selectedOption || 'rail';
     
     // Determine row configuration from needs
-    const rowCount = client.needs.rowCount || 1;
-    const rowDistribution = client.needs.rowDistribution || {};
+    const rowCount = needsData?.rowCount || 1;
+    const rowDistribution = needsData?.rowDistribution || {};
     
     let rowConfigs: number[] = [];
     if (rowCount === 1) {
@@ -129,13 +245,13 @@ export default function ClientQuotesPage() {
       if (totalDistributed === totalPanels) {
         rowConfigs = Array.from({length: rowCount}, (_, i) => rowDistribution[i + 1] || 0);
       } else {
-        alert('Please complete row distribution in Client Needs before adding mounting structures');
+        showNotification('Please complete row distribution in Client Needs', 'error');
         return;
       }
     }
 
     if (rowConfigs.length === 0 || rowConfigs.some(c => c === 0)) {
-      alert('Please configure row distribution in Client Needs');
+      showNotification('Please configure row distribution in Client Needs', 'error');
       return;
     }
 
@@ -145,8 +261,8 @@ export default function ClientQuotesPage() {
     const midClamps = (totalPanels - numRows) * 2; // CMID: (N - R) × 2 (1 per gap per rail)
     
     // Rail calculations
-    const selectedPanel = client.needs.panelStockItemId 
-      ? inventory.find(i => i.id === client.needs.panelStockItemId) 
+    const selectedPanel = needsData?.panelStockItemId 
+      ? inventory.find(i => i.id === needsData.panelStockItemId) 
       : null;
     const panelWidthMm = selectedPanel?.panelWidth || 1134;
     const panelWidth = panelWidthMm / 1000;
@@ -183,13 +299,13 @@ export default function ClientQuotesPage() {
     let hookSKU = '';
     
     if (roofType === 'Tigla ceramica') {
-      // CHOOK-Tigla: 1 hook every 40cm (0.4m)
-      roofHooks = Math.ceil(totalRailLength / 0.4);
+      // CHOOK-Tigla: 1 hook every 1m
+      roofHooks = Math.ceil(totalRailLength / 1);
       roofScrews = roofHooks * 2; // CHOOKSurub: 2 per hook
       hookSKU = 'CHOOK-Tigla';
     } else if (roofType === 'Tabla' || roofType === 'Tabla ondulata' || roofType === 'Tabla cutata') {
-      // CHOOK-Tabla: 1 hook every 40cm (0.4m), no screws
-      roofHooks = Math.ceil(totalRailLength / 0.4);
+      // CHOOK-Tabla: 1 hook every 1m, no screws
+      roofHooks = Math.ceil(totalRailLength / 1);
       hookSKU = 'CHOOK-Tabla';
     }
     
@@ -301,6 +417,29 @@ export default function ClientQuotesPage() {
       }
     }
 
+    // Check for duplicates in mounting items
+    const duplicateItems = mountingItems.filter(item => 
+      item.inventoryItemId && checkIfItemExists(item.inventoryItemId)
+    );
+
+    if (duplicateItems.length > 0) {
+      setConfirmDialog({
+        message: `${duplicateItems.length} mounting component(s) are already in the quote. Do you want to add them again?`,
+        onConfirm: () => {
+          setQuoteItems([...quoteItems, ...mountingItems]);
+          const missingPrices = mountingItems.filter(i => i.netPrice === 0).length;
+          const systemType = option === 'minirail' ? 'MiniRail System' : 'Rail System';
+          if (missingPrices > 0) {
+            showNotification(`${systemType} components added! ${missingPrices} item(s) have no price set.`, 'info');
+          } else {
+            showNotification(`${systemType} components added successfully!`, 'success');
+          }
+          setConfirmDialog(null);
+        }
+      });
+      return;
+    }
+
     // Add all mounting items to quote
     setQuoteItems([...quoteItems, ...mountingItems]);
     
@@ -308,352 +447,764 @@ export default function ClientQuotesPage() {
     const missingPrices = mountingItems.filter(i => i.netPrice === 0).length;
     const systemType = option === 'minirail' ? 'MiniRail System' : 'Rail System';
     if (missingPrices > 0) {
-      alert(`${systemType} components added! Note: ${missingPrices} item(s) have no price set. Please update prices manually or add the items to inventory.`);
+      showNotification(`${systemType} components added! ${missingPrices} item(s) have no price set.`, 'info');
     } else {
-      alert(`${systemType} components added successfully!`);
+      showNotification(`${systemType} components added successfully!`, 'success');
     }
   };
 
   const generateDocumentFromTemplate = async () => {
     if (!selectedTemplateId || !editingQuoteId) {
-      alert('Please select a template and save the quote first');
+      showNotification('Please select a template and save the quote first', 'error');
       return;
     }
 
     const template = docTemplates?.find(t => t.id === selectedTemplateId);
     if (!template) {
-      alert('Template not found');
+      showNotification('Template not found', 'error');
       return;
     }
 
+    setIsGenerating(true);
+
     try {
-      const quoteData = {
-        clientName: client?.name || '',
-        projectName: quoteProjectName,
-        items: quoteItems,
-        subtotal: quoteTotals.subtotalNet,
-        vat: quoteTotals.vatTotal,
-        total: quoteTotals.totalGross,
-        date: new Date()
+      // Dynamic imports
+      const [PizZipModule, DocxtemplaterModule] = await Promise.all([
+        import('pizzip'),
+        import('docxtemplater')
+      ]);
+
+      const PizZip = (PizZipModule as any).default || PizZipModule;
+      const Docxtemplater = (DocxtemplaterModule as any).default || DocxtemplaterModule;
+
+      // Fetch template file from URL or decode base64
+      let arrayBuffer: ArrayBuffer;
+      
+      if (template.content.startsWith('http://') || template.content.startsWith('https://')) {
+        // Template is stored as a URL - fetch it
+        const response = await fetch(template.content);
+        if (!response.ok) {
+          throw new Error('Failed to fetch template file');
+        }
+        arrayBuffer = await response.arrayBuffer();
+      } else {
+        // Template is stored as base64 data URL
+        let base64Content = template.content.trim();
+        
+        if (base64Content.includes(',')) {
+          // Remove data URL prefix if present
+          base64Content = base64Content.split(',')[1];
+        }
+        
+        // Remove any whitespace characters
+        base64Content = base64Content.replace(/\s/g, '');
+        
+        // Decode base64 to binary
+        const binaryString = atob(base64Content);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        arrayBuffer = bytes.buffer;
+      }
+
+      // Create document from template
+      const zip = new PizZip(arrayBuffer);
+      const doc = new Docxtemplater(zip, {
+        paragraphLoop: true,
+        linebreaks: true
+      });
+
+      const formatCurrency = (num: number) => {
+        return new Intl.NumberFormat('ro-RO', {
+          style: 'currency',
+          currency: 'RON',
+          minimumFractionDigits: 2
+        }).format(num);
       };
 
-      // Create a simple HTML representation of the quote
-      let htmlContent = `
-        <html>
-          <head>
-            <meta charset="UTF-8">
-            <style>
-              body { font-family: Arial, sans-serif; margin: 20px; }
-              .header { text-align: center; margin-bottom: 30px; }
-              .client-info { margin-bottom: 20px; }
-              table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-              th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
-              th { background-color: #f5f5f5; }
-              .totals { float: right; width: 300px; }
-              .total-row { font-weight: bold; }
-            </style>
-          </head>
-          <body>
-            <div class="header">
-              <h1>${template.name}</h1>
-              <p>Quotation for ${client?.name}</p>
-            </div>
-            <div class="client-info">
-              <p><strong>Project:</strong> ${quoteProjectName}</p>
-              <p><strong>Date:</strong> ${new Date().toLocaleDateString('ro-RO')}</p>
-            </div>
-            <table>
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Description</th>
-                  <th>Qty</th>
-                  <th>Unit Price</th>
-                  <th>Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${quoteItems.map((item, idx) => `
-                  <tr>
-                    <td>${idx + 1}</td>
-                    <td>${item.description}</td>
-                    <td>${item.quantity}</td>
-                    <td>${item.netPrice.toLocaleString('ro-RO', { style: 'currency', currency: 'RON' })}</td>
-                    <td>${(item.quantity * item.netPrice).toLocaleString('ro-RO', { style: 'currency', currency: 'RON' })}</td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
-            <div class="totals">
-              <table>
-                <tr>
-                  <td>Subtotal:</td>
-                  <td>${quoteTotals.subtotalNet.toLocaleString('ro-RO', { style: 'currency', currency: 'RON' })}</td>
-                </tr>
-                <tr>
-                  <td>VAT (21%):</td>
-                  <td>${quoteTotals.vatTotal.toLocaleString('ro-RO', { style: 'currency', currency: 'RON' })}</td>
-                </tr>
-                <tr class="total-row">
-                  <td>Total:</td>
-                  <td>${quoteTotals.totalGross.toLocaleString('ro-RO', { style: 'currency', currency: 'RON' })}</td>
-                </tr>
-              </table>
-            </div>
-          </body>
-        </html>
-      `;
+      // Prepare data for template
+      const data = {
+        customer_name: client?.name || '',
+        customer_email: client?.email || '',
+        customer_phone: client?.phone || '',
+        customer_address: client?.address || '',
+        project_title: quoteProjectName || 'Untitled Quote',
+        today_date: new Date().toLocaleDateString('ro-RO'),
+        subtotal_net: formatCurrency(quoteTotals.subtotalNet),
+        vat_total: formatCurrency(quoteTotals.vatTotal),
+        total_gross: formatCurrency(quoteTotals.totalGross),
+        net_price: formatCurrency(quoteTotals.subtotalNet),
+        tva: formatCurrency(quoteTotals.vatTotal),
+        total_price: formatCurrency(quoteTotals.totalGross),
+        items: quoteItems.map(item => ({
+          description: item.description || '',
+          qty: item.quantity || 0,
+          unit: item.unit || 'pcs',
+          net_price: formatCurrency(item.netPrice || 0),
+          total_price: formatCurrency((item.quantity || 0) * (item.netPrice || 0)),
+          serials: item.selectedSerialNumbers?.join(', ') || ''
+        }))
+      };
 
-      // Create a blob and preview it
-      const blob = new Blob([htmlContent], { type: 'text/html' });
-      const url = URL.createObjectURL(blob);
-      setPreviewDoc({ name: `${quoteProjectName}.html`, url: url, date: new Date() });
+      doc.render(data);
+      
+      const out = doc.getZip().generate({
+        type: "blob",
+        mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      });
+
+      const fileName = `Quote - ${quoteProjectName || client?.name} - ${new Date().toLocaleDateString('ro-RO').replace(/\//g, '-')}.docx`;
+      
+      // Upload to Firebase Storage
+      if (!storage) {
+        throw new Error('Firebase Storage not initialized');
+      }
+
+      const timestamp = Date.now();
+      const storagePath = `quotes/${editingQuoteId}/documents/${timestamp}_${fileName}`;
+      const storageRef = ref(storage, storagePath);
+      
+      showNotification('Uploading document...', 'info');
+      await uploadBytes(storageRef, out);
+      const downloadURL = await getDownloadURL(storageRef);
+
+      // Update quote with new document
+      const existingQuote = clientQuotes.find(q => q.id === editingQuoteId);
+      if (existingQuote) {
+        const updatedDocuments = [
+          ...(existingQuote.generatedDocuments || []),
+          {
+            id: timestamp.toString(),
+            name: fileName,
+            url: downloadURL,
+            date: new Date(),
+            generatedBy: currentUser?.username || 'Unknown'
+          }
+        ];
+
+        const updatedQuote: Quote = {
+          ...existingQuote,
+          generatedDocuments: updatedDocuments
+        };
+
+        saveQuote(updatedQuote);
+      }
+
+      setIsGenerating(false);
+      showNotification('Document generated and saved successfully!', 'success');
+      
+    } catch (err) {
+      console.error('Document generation error:', err);
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      showNotification(`Failed to generate document: ${errorMessage}`, 'error');
+      setIsGenerating(false);
+    }
+  };
+
+  const handleSendEmail = async (doc: {id: string, name: string, url: string, date: Date}) => {
+    if (!client?.email) {
+      showNotification('Client does not have an email address', 'error');
+      return;
+    }
+
+    // Check document format
+    const isPdf = doc.name.toLowerCase().endsWith('.pdf') || doc.url.includes('application/pdf');
+    const isDocx = doc.name.toLowerCase().endsWith('.docx') || doc.url.includes('officedocument.wordprocessingml');
+
+    if (isPdf) {
+      // PDF: proceed directly to email preview
+      await prepareEmailPreview(doc);
+    } else if (isDocx) {
+      // DOCX: show warning modal
+      setDocFormatWarning({ show: true, doc });
+    } else {
+      showNotification('Unsupported document format for email', 'error');
+    }
+  };
+
+  const prepareEmailPreview = async (doc: {id: string, name: string, url: string, date: Date}) => {
+    try {
+      // Find appropriate email template (quote category)
+      const quoteTemplate = emailTemplates.find(t => t.category === 'quote');
+      
+      // Prepare template data
+      const templateData = getCommonTemplateData(client, currentQuote, undefined, currentUser);
+      
+      // Use template or default content
+      let subject, body;
+      if (quoteTemplate) {
+        subject = replaceEmailVariables(quoteTemplate.subject, templateData);
+        body = replaceEmailVariables(quoteTemplate.body, templateData);
+      } else {
+        // Fallback to default
+        subject = `Quote from SolarFlux - ${client.name}`;
+        body = `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #2563eb;">Quote from SolarFlux</h2>
+            <p>Dear ${client.name},</p>
+            <p>Please find attached your quote document.</p>
+            <p>If you have any questions, please don't hesitate to contact us.</p>
+            <br/>
+            <p>Best regards,<br/><strong>SolarFlux Team</strong></p>
+          </div>
+        `;
+      }
+
+      // Prepare email preview data
+      setEmailPreviewData({
+        to: client.email,
+        subject,
+        body,
+        attachments: [],
+        docToSend: doc,
+      });
+      
+      setShowEmailPreview(true);
+
     } catch (error) {
-      alert('Failed to generate document');
-      console.error(error);
+      console.error('Error preparing email:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      showNotification(`Failed to prepare email: ${errorMessage}`, 'error');
+    }
+  };
+
+  const handleConfirmSendEmail = async (emailData: {
+    to: string;
+    subject: string;
+    body: string;
+    attachments: any[];
+  }) => {
+    if (!emailPreviewData?.docToSend) {
+      showNotification('No document selected', 'error');
+      return;
+    }
+
+    const doc = emailPreviewData.docToSend;
+    setSendingEmailDocId(doc.id);
+    setShowEmailPreview(false);
+
+    try {
+      // Fetch the document from Firebase Storage URL
+      showNotification('Downloading document...', 'info');
+      const response = await fetch(doc.url);
+      if (!response.ok) {
+        throw new Error('Failed to download document');
+      }
+      const blob = await response.blob();
+
+      // Check if document is PDF or DOCX
+      const isPdf = doc.name.toLowerCase().endsWith('.pdf') || doc.url.includes('application/pdf');
+      let pdfBase64: string;
+      let pdfFileName: string;
+
+      if (isPdf) {
+        // Already PDF, just convert to base64
+        pdfBase64 = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const result = reader.result as string;
+            const base64 = result.includes(',') ? result.split(',')[1] : result;
+            resolve(base64);
+          };
+          reader.readAsDataURL(blob);
+        });
+        pdfFileName = doc.name;
+      } else {
+        // DOCX: convert to PDF
+        const docxBase64 = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const result = reader.result as string;
+            const base64 = result.includes(',') ? result.split(',')[1] : result;
+            resolve(base64);
+          };
+          reader.readAsDataURL(blob);
+        });
+
+        showNotification('Converting to PDF...', 'info');
+        const convertResponse = await fetch('/api/convert-docx-to-pdf', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ docxBase64 }),
+        });
+
+        if (!convertResponse.ok) {
+          const error = await convertResponse.json();
+          throw new Error(error.error || 'Failed to convert to PDF');
+        }
+
+        const convertData = await convertResponse.json();
+        pdfBase64 = convertData.pdfBase64;
+        pdfFileName = doc.name.replace('.docx', '.pdf');
+      }
+
+      // Send email with PDF using data from modal
+      showNotification('Sending email...', 'info');
+      const emailResponse = await fetch('/api/email/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: emailData.to,
+          subject: emailData.subject,
+          body: emailData.body,
+          pdfBase64,
+          pdfFileName,
+          quoteId: editingQuoteId,
+        }),
+      });
+
+      if (!emailResponse.ok) {
+        const error = await emailResponse.json();
+        throw new Error(error.error || 'Failed to send email');
+      }
+
+      showNotification(`Email sent successfully to ${emailData.to}`, 'success');
+
+    } catch (error) {
+      console.error('Email sending error:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      showNotification(`Failed to send email: ${errorMessage}`, 'error');
+    } finally {
+      setSendingEmailDocId(null);
     }
   };
 
   return (
     <div className="h-full overflow-y-auto p-8 bg-slate-900">
-      <div className="max-w-6xl mx-auto space-y-8 pb-12">
-        {/* Quote Header */}
-        <div className="bg-slate-800 border border-slate-700 rounded-xl p-6 shadow-lg">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-bold text-white flex items-center gap-2">
-              <FileText size={20} className="text-amber-500" />Project Quote
-            </h3>
-            <div className="flex gap-2">
-              <button onClick={handleNewQuoteClick} className="px-4 py-2 text-sm text-slate-400 hover:text-white bg-slate-700/50 hover:bg-slate-700 rounded-lg flex items-center gap-2 transition-colors">
-                <RefreshCcw size={16} /> Reset
-              </button>
-              <button onClick={saveClientQuote} className="px-6 py-2 text-sm bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-lg flex items-center gap-2 transition-colors shadow-lg shadow-amber-500/10">
-                <Save size={18} /> Save
-              </button>
-            </div>
-          </div>
-
-          <div className="space-y-4">
-            <div>
-              <label className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 block">Quote Name</label>
-              <input 
-                type="text" 
-                placeholder="Enter quote name..." 
-                value={quoteProjectName} 
-                onChange={(e) => setQuoteProjectName(e.target.value)} 
-                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-lg text-white focus:ring-2 focus:ring-amber-500 outline-none" 
-              />
-            </div>
-
-            <div>
-              <label className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 block">Select from Saved Project</label>
-              <select
-                value={selectedProjectForQuote}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  setSelectedProjectForQuote(value);
-                  if (value === 'current') {
-                    setQuoteProjectName(client?.needs?.projectName || '');
-                  } else if (value.startsWith('archived-')) {
-                    const idx = parseInt(value.replace('archived-', ''));
-                    const project = client?.archivedProjects?.[idx];
-                    if (project) {
-                      setQuoteProjectName(project.projectName || `Project ${idx + 1}`);
-                    }
-                  }
-                }}
-                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-amber-500 outline-none"
+      {/* Notification Toast */}
+      {notification && (
+        <div className="fixed top-4 right-4 z-50 animate-in slide-in-from-top-2 duration-300">
+          <div className={`rounded-lg border shadow-lg p-4 min-w-[300px] max-w-md ${
+            notification.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400' :
+            notification.type === 'error' ? 'bg-red-500/10 border-red-500/50 text-red-400' :
+            'bg-blue-500/10 border-blue-500/50 text-blue-400'
+          }`}>
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                {notification.type === 'success' && <CheckCircle size={20} className="flex-shrink-0" />}
+                {notification.type === 'error' && <AlertCircle size={20} className="flex-shrink-0" />}
+                {notification.type === 'info' && <Info size={20} className="flex-shrink-0" />}
+                <p className="font-semibold">{notification.message}</p>
+              </div>
+              <button
+                onClick={() => setNotification(null)}
+                className="text-current hover:opacity-70 transition-opacity"
               >
-                <option value="">-- None (Manual Quote) --</option>
-                {client?.archivedProjects?.map((project, idx) => (
-                  <option key={idx} value={`archived-${idx}`}>
-                    {project.projectName || `Archived Project ${idx + 1}`}
-                  </option>
-                ))}
-              </select>
+                <X size={18} />
+              </button>
             </div>
           </div>
         </div>
+      )}
+
+      {/* Confirmation Dialog */}
+      {confirmDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-md shadow-2xl">
+            <div className="p-6">
+              <div className="flex items-start gap-4 mb-4">
+                <div className="p-3 bg-amber-500/10 rounded-lg">
+                  <AlertCircle size={24} className="text-amber-400" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-lg font-bold text-white mb-2">Confirm Action</h3>
+                  <p className="text-slate-300 text-sm">{confirmDialog.message}</p>
+                </div>
+              </div>
+              <div className="flex gap-3 justify-end">
+                <button
+                  onClick={() => setConfirmDialog(null)}
+                  className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white font-semibold rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmDialog.onConfirm}
+                  className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-900 font-semibold rounded-lg transition-colors"
+                >
+                  Confirm
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="max-w-6xl mx-auto space-y-8 pb-12">
+        {/* Header with Action Buttons */}
+        <div className="flex items-center justify-between gap-4">
+          <h1 className="text-3xl font-bold text-white flex items-center gap-3">
+            <FileText size={32} className="text-amber-500" />
+            Quotes
+          </h1>
+          <div className="flex gap-3">
+            <button 
+              onClick={handleNewQuoteClick}
+              className="bg-slate-700 hover:bg-slate-600 text-white font-bold px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
+            >
+              <Plus size={18} /> New Quote
+            </button>
+            <button 
+              onClick={saveClientQuote}
+              className="bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
+            >
+              <Save size={18} /> Save Quote
+            </button>
+          </div>
+        </div>
+
+        {/* Saved Quotes List */}
+        {clientQuotes.length > 0 && (
+          <section className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
+            <div className="px-6 py-4 border-b border-slate-700">
+              <h3 className="text-sm font-bold text-slate-300 flex items-center gap-2">
+                <FolderOpen size={16} className="text-amber-500" />
+                Saved Quotes ({clientQuotes.length})
+              </h3>
+            </div>
+            <div className="divide-y divide-slate-700">
+              {clientQuotes.slice().reverse().map(quote => {
+                const isCurrent = editingQuoteId === quote.id;
+                const isExpanded = expandedQuotes.has(quote.id);
+                
+                return (
+                  <div key={quote.id} className="bg-slate-800">
+                    {/* Quote Header */}
+                    <div className="flex items-center justify-between px-6 py-4 hover:bg-slate-750 transition-colors">
+                      <button
+                        onClick={() => toggleQuoteExpanded(quote.id)}
+                        className="flex items-center gap-3 flex-1 text-left"
+                      >
+                        <div className={`p-1.5 rounded ${isExpanded ? 'bg-slate-700' : 'bg-slate-700/50'}`}>
+                          {isExpanded ? <ChevronUp size={16} className="text-white" /> : <ChevronDown size={16} className="text-white" />}
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <p className={`font-bold text-sm ${isCurrent ? 'text-emerald-400' : 'text-white'}`}>
+                              {quote.title}
+                            </p>
+                            {isCurrent && (
+                              <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 text-xs font-bold rounded flex items-center gap-1">
+                                <CheckCircle size={12} /> EDITING
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-slate-400 mt-1">
+                            Created: {new Date(quote.date).toLocaleDateString()} • Total: {quote.totalGross.toLocaleString('ro-RO', {style:'currency', currency:'RON'})}
+                          </p>
+                        </div>
+                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleLoadQuote(quote)}
+                          className="px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 hover:border-amber-500/50 rounded font-bold text-xs transition-colors"
+                        >
+                          Load
+                        </button>
+                        <button
+                          onClick={() => {
+                            setConfirmDialog({
+                              message: `Delete quote "${quote.title}"?`,
+                              onConfirm: () => {
+                                deleteQuote(quote.id);
+                                if (editingQuoteId === quote.id) {
+                                  setQuoteItems([]); 
+                                  setQuoteProjectName(''); 
+                                  setEditingQuoteId(null);
+                                  setSelectedProjectForQuote('');
+                                }
+                                showNotification('Quote deleted', 'success');
+                                setConfirmDialog(null);
+                              }
+                            });
+                          }}
+                          className="p-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded transition-colors"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </div>
+                    
+                    {/* Quote Details - Expandable */}
+                    {isExpanded && (
+                      <div className="px-6 py-4 bg-slate-900/50 border-t border-slate-700">
+                        <div className="space-y-3">
+                          <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-xs mb-4">
+                            <div>
+                              <span className="text-slate-500">Customer:</span>
+                              <span className="ml-2 text-white font-semibold">{quote.customerName}</span>
+                            </div>
+                            <div>
+                              <span className="text-slate-500">Items:</span>
+                              <span className="ml-2 text-white font-semibold">{quote.items.length} items</span>
+                            </div>
+                            <div>
+                              <span className="text-slate-500">Subtotal:</span>
+                              <span className="ml-2 text-white font-semibold">{quote.subtotalNet.toLocaleString('ro-RO', {style:'currency', currency:'RON'})}</span>
+                            </div>
+                            <div>
+                              <span className="text-slate-500">VAT:</span>
+                              <span className="ml-2 text-white font-semibold">{quote.vatTotal.toLocaleString('ro-RO', {style:'currency', currency:'RON'})}</span>
+                            </div>
+                          </div>
+                          
+                          {/* Items preview */}
+                          <div className="bg-slate-800 rounded-lg p-3 border border-slate-600">
+                            <p className="text-xs font-bold text-slate-400 uppercase mb-2">Quote Items:</p>
+                            <div className="space-y-1 text-xs">
+                              {quote.items.slice(0, 5).map((item, idx) => (
+                                <div key={idx} className="flex justify-between text-slate-300">
+                                  <span className="truncate flex-1 pr-2">{item.description}</span>
+                                  <span className="text-slate-400">{item.quantity} {item.unit}</span>
+                                </div>
+                              ))}
+                              {quote.items.length > 5 && (
+                                <p className="text-slate-500 italic">...and {quote.items.length - 5} more items</p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
+        {/* Quote Editor */}
+        <div className="space-y-8">
+          {/* Quote Header */}
+          <section className="bg-slate-800 border border-slate-700 rounded-xl p-6">
+            <h3 className="text-lg font-bold text-white flex items-center gap-2 mb-4">
+              <FileText size={20} className="text-amber-500" />
+              {editingQuoteId ? 'Edit Quote' : 'Create New Quote'}
+            </h3>
+
+            <div className="space-y-4">
+              <div>
+                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 block">Quote Name</label>
+                <input 
+                  type="text" 
+                  placeholder="Enter quote name..." 
+                  value={quoteProjectName} 
+                  onChange={(e) => setQuoteProjectName(e.target.value)} 
+                  className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-lg text-white focus:ring-2 focus:ring-amber-500 outline-none" 
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 block">Select from Saved Project</label>
+                <select
+                  value={selectedProjectForQuote}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setSelectedProjectForQuote(value);
+                    if (value === 'current') {
+                      setQuoteProjectName(client?.needs?.projectName || '');
+                    } else if (value.startsWith('archived-')) {
+                      const idx = parseInt(value.replace('archived-', ''));
+                      const project = client?.archivedProjects?.[idx];
+                      if (project) {
+                        setQuoteProjectName(project.projectName || `Project ${idx + 1}`);
+                      }
+                    }
+                  }}
+                  className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-amber-500 outline-none"
+                >
+                  <option value="">-- None (Manual Quote) --</option>
+                  <option value="current">Current Needs</option>
+                  {client?.archivedProjects?.map((project, idx) => (
+                    <option key={idx} value={`archived-${idx}`}>
+                      {project.projectName || `Archived Project ${idx + 1}`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </section>
 
         {/* Project Summary */}
-        {selectedProjectForQuote && (() => {
-          const idx = parseInt(selectedProjectForQuote.replace('archived-', ''));
-          const projectData = client?.archivedProjects?.[idx]?.data;
-          
-          if (!projectData) return null;
-          
-          return (
-            <div className="bg-gradient-to-br from-amber-500/10 via-slate-800 to-slate-800 border border-amber-500/30 rounded-xl p-6">
-              <h4 className="text-sm font-bold text-amber-400 mb-3 flex items-center gap-2">
-                <Info size={16} /> Project Summary
-              </h4>
-              <p className="text-white leading-relaxed">
-                The client needs a system for <span className="font-bold text-amber-400">{projectData.connectionType || 'not specified'}</span> connection
-                {projectData.inverterKw && `, ${projectData.inverterKw}kW inverter`}
-                {projectData.batteryKwh && `, ${projectData.batteryKwh}kWh storage`}
-                {projectData.panelKw && `, ${projectData.panelKw}kW solar panels`}. 
-                Roof type: <span className="font-bold text-amber-400">{projectData.roofType || 'not specified'}</span>.
-              </p>
-            </div>
-          );
-        })()}
+        {selectedProjectData && (
+          <div className="bg-gradient-to-br from-amber-500/10 via-slate-800 to-slate-800 border border-amber-500/30 rounded-xl p-6">
+            <h4 className="text-sm font-bold text-amber-400 mb-3 flex items-center gap-2">
+              <Info size={16} /> Project Summary
+            </h4>
+            <p className="text-white leading-relaxed">
+              The client needs a system for <span className="font-bold text-amber-400">{selectedProjectData.connectionType || 'not specified'}</span> connection
+              {selectedProjectData.inverterKw && `, ${selectedProjectData.inverterKw}kW inverter`}
+              {selectedProjectData.batteryKwh && `, ${selectedProjectData.batteryKwh}kWh storage`}
+              {selectedProjectData.panelKw && `, ${selectedProjectData.panelKw}kW solar panels`}. 
+              Roof type: <span className="font-bold text-amber-400">{selectedProjectData.roofType || 'not specified'}</span>.
+            </p>
+          </div>
+        )}
 
         {/* Selected Components */}
-        {selectedProjectForQuote && (() => {
-          const idx = parseInt(selectedProjectForQuote.replace('archived-', ''));
-          const projectData = client?.archivedProjects?.[idx]?.data;
-          
-          if (!projectData) return null;
-
-          return (
-            <div className="space-y-6">
-              {/* Inverter */}
-              {projectData.selectedInverterId && (() => {
-                const selectedInv = inventory.find(i => i.id === projectData.selectedInverterId && i.category === Category.INVERTERS);
-                if (!selectedInv) return null;
-                
-                return (
-                  <div className="bg-slate-800 border border-slate-700 rounded-xl p-6">
-                    <h4 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2">
-                      <Zap size={16} className="text-amber-500" />Selected Inverter
-                    </h4>
-                    <div className="flex items-center justify-between bg-emerald-500/10 p-4 rounded-lg border border-emerald-500/50">
-                      <div className="flex-1">
-                        <p className="text-white font-bold">{selectedInv.name}</p>
-                        <p className="text-xs text-slate-400 mt-1">
-                          {selectedInv.inverterPowerKw}kW • {selectedInv.inverterConnectionType} • {selectedInv.quantity} in stock
-                        </p>
-                        <p className="text-sm text-emerald-400 font-bold mt-2">{selectedInv.sellPrice} RON</p>
-                      </div>
-                      <button
-                        onClick={() => {
-                          const newLine: QuoteLineItem = {
-                            id: Date.now().toString(),
-                            inventoryItemId: selectedInv.id,
-                            description: `${selectedInv.name} (${selectedInv.inverterPowerKw}kW)`,
-                            unit: 'piece',
-                            quantity: 1,
-                            netPrice: selectedInv.sellPrice,
-                            selectedSerialNumbers: []
-                          };
-                          setQuoteItems([...quoteItems, newLine]);
-                        }}
-                        className="ml-4 px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-lg text-sm transition-colors whitespace-nowrap"
-                      >
-                        Add to Quote
-                      </button>
+        {selectedProjectData && (
+          <div className="space-y-4">
+            {/* Inverter */}
+            {selectedProjectData.selectedInverterId && (() => {
+              const selectedInv = inventory.find(i => i.id === selectedProjectData.selectedInverterId && i.category === Category.INVERTERS);
+              if (!selectedInv) return null;
+              
+              return (
+                <div className="bg-slate-800 border border-slate-700 rounded-xl p-4">
+                  <h4 className="text-xs font-bold text-slate-300 mb-3 flex items-center gap-2">
+                    <Zap size={14} className="text-amber-500" />Selected Inverter
+                  </h4>
+                  <div className="flex items-center justify-between bg-emerald-500/10 p-3 rounded-lg border border-emerald-500/50">
+                    <div className="flex-1">
+                      <p className="text-white font-bold text-sm">{selectedInv.name}</p>
+                      <p className="text-xs text-slate-400 mt-1">
+                        {selectedInv.inverterPowerKw}kW • {selectedInv.inverterConnectionType} • {selectedInv.quantity} in stock
+                      </p>
+                      <p className="text-sm text-emerald-400 font-bold mt-1">{selectedInv.sellPrice} RON</p>
                     </div>
-                  </div>
-                );
-              })()}
-
-              {/* Battery */}
-              {projectData.selectedBatteryId && (() => {
-                const selectedBat = inventory.find(i => i.id === projectData.selectedBatteryId && i.category === Category.BATTERIES);
-                if (!selectedBat) return null;
-                
-                return (
-                  <div className="bg-slate-800 border border-slate-700 rounded-xl p-6">
-                    <h4 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2">
-                      <Package size={16} className="text-amber-500" />Selected Battery
-                    </h4>
-                    <div className="flex items-center justify-between bg-emerald-500/10 p-4 rounded-lg border border-emerald-500/50">
-                      <div className="flex-1">
-                        <p className="text-white font-bold">{selectedBat.name}</p>
-                        <p className="text-xs text-slate-400 mt-1">{selectedBat.batteryPowerKwh}kWh • {selectedBat.quantity} in stock</p>
-                        <p className="text-sm text-emerald-400 font-bold mt-2">{selectedBat.sellPrice} RON</p>
-                      </div>
-                      <button
-                        onClick={() => {
-                          const newLine: QuoteLineItem = {
-                            id: Date.now().toString(),
-                            inventoryItemId: selectedBat.id,
-                            description: `${selectedBat.name} (${selectedBat.batteryPowerKwh}kWh)`,
-                            unit: 'piece',
-                            quantity: 1,
-                            netPrice: selectedBat.sellPrice,
-                            selectedSerialNumbers: []
-                          };
-                          setQuoteItems([...quoteItems, newLine]);
-                        }}
-                        className="ml-4 px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-lg text-sm transition-colors whitespace-nowrap"
-                      >
-                        Add to Quote
-                      </button>
-                    </div>
-                  </div>
-                );
-              })()}
-
-              {/* Panels */}
-              {projectData.panelStockItemId && projectData.panelCount && (() => {
-                const selectedPanel = inventory.find(i => i.id === projectData.panelStockItemId && i.category === Category.PANELS);
-                if (!selectedPanel) return null;
-                
-                return (
-                  <div className="bg-slate-800 border border-slate-700 rounded-xl p-6">
-                    <h4 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2">
-                      <Package size={16} className="text-amber-500" />Selected Panels
-                    </h4>
-                    <div className="flex items-center justify-between bg-emerald-500/10 p-4 rounded-lg border border-emerald-500/50">
-                      <div className="flex-1">
-                        <p className="text-white font-bold">{selectedPanel.name}</p>
-                        <p className="text-xs text-slate-400 mt-1">
-                          {selectedPanel.powerW}W • {projectData.panelCount} pieces • {selectedPanel.quantity} in stock
-                        </p>
-                        <p className="text-sm text-emerald-400 font-bold mt-2">{selectedPanel.sellPrice} RON/piece</p>
-                      </div>
-                      <button
-                        onClick={() => {
-                          const newLine: QuoteLineItem = {
-                            id: Date.now().toString(),
-                            inventoryItemId: selectedPanel.id,
-                            description: `${selectedPanel.name} (${selectedPanel.powerW}W)`,
-                            unit: 'piece',
-                            quantity: projectData.panelCount!,
-                            netPrice: selectedPanel.sellPrice,
-                            selectedSerialNumbers: []
-                          };
-                          setQuoteItems([...quoteItems, newLine]);
-                        }}
-                        className="ml-4 px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-lg text-sm transition-colors whitespace-nowrap"
-                      >
-                        Add to Quote
-                      </button>
-                    </div>
-                  </div>
-                );
-              })()}
-
-              {/* Mounting Structure */}
-              {projectData.panelCount && (
-                <div className="bg-slate-800 border border-slate-700 rounded-xl p-6">
-                  <div className="flex items-center justify-between mb-4">
-                    <h4 className="text-sm font-bold text-slate-300 flex items-center gap-2">
-                      <Package size={16} className="text-amber-500" />Mounting Structure
-                    </h4>
                     <button
-                      onClick={addMountingStructuresToQuote}
-                      className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-bold rounded-lg text-sm transition-colors flex items-center gap-2"
+                      onClick={() => {
+                        const newLine: QuoteLineItem = {
+                          id: Date.now().toString(),
+                          inventoryItemId: selectedInv.id,
+                          description: `${selectedInv.name} (${selectedInv.inverterPowerKw}kW)`,
+                          unit: 'piece',
+                          quantity: 1,
+                          netPrice: selectedInv.sellPrice,
+                          selectedSerialNumbers: []
+                        };
+                        addItemToQuote(newLine);
+                      }}
+                      className="ml-3 px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-lg text-xs transition-colors whitespace-nowrap"
                     >
-                      <Plus size={16} /> Add All to Quote
+                      Add to Quote
                     </button>
                   </div>
-                  <div className="p-4 bg-blue-500/10 border border-blue-500/30 rounded-lg">
-                    <p className="text-sm text-blue-300">
-                      Mounting structures calculated for <span className="font-bold">{projectData.panelCount} panels</span>.
-                      Click "Add All to Quote" to include all components.
-                    </p>
+                </div>
+              );
+            })()}
+
+            {/* Battery */}
+            {selectedProjectData.selectedBatteryId && (() => {
+              const selectedBat = inventory.find(i => i.id === selectedProjectData.selectedBatteryId && i.category === Category.BATTERIES);
+              if (!selectedBat) return null;
+              
+              return (
+                <div className="bg-slate-800 border border-slate-700 rounded-xl p-4">
+                  <h4 className="text-xs font-bold text-slate-300 mb-3 flex items-center gap-2">
+                    <Package size={14} className="text-amber-500" />Selected Battery
+                  </h4>
+                  <div className="flex items-center justify-between bg-emerald-500/10 p-3 rounded-lg border border-emerald-500/50">
+                    <div className="flex-1">
+                      <p className="text-white font-bold text-sm">{selectedBat.name}</p>
+                      <p className="text-xs text-slate-400 mt-1">{selectedBat.batteryPowerKwh}kWh • {selectedBat.quantity} in stock</p>
+                      <p className="text-sm text-emerald-400 font-bold mt-1">{selectedBat.sellPrice} RON</p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        const newLine: QuoteLineItem = {
+                          id: Date.now().toString(),
+                          inventoryItemId: selectedBat.id,
+                          description: `${selectedBat.name} (${selectedBat.batteryPowerKwh}kWh)`,
+                          unit: 'piece',
+                          quantity: 1,
+                          netPrice: selectedBat.sellPrice,
+                          selectedSerialNumbers: []
+                        };
+                        addItemToQuote(newLine);
+                      }}
+                      className="ml-3 px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-lg text-xs transition-colors whitespace-nowrap"
+                    >
+                      Add to Quote
+                    </button>
                   </div>
                 </div>
-              )}
-            </div>
-          );
-        })()}
+              );
+            })()}
 
-        {/* Quote Items Table */}
-        <div className="bg-slate-800 border border-slate-700 rounded-xl overflow-hidden flex flex-col min-h-[500px]">
-          <div className="overflow-x-auto p-6 flex-1">
+            {/* Panels */}
+            {selectedProjectData.panelStockItemId && selectedProjectData.panelCount && (() => {
+              const selectedPanel = inventory.find(i => i.id === selectedProjectData.panelStockItemId && i.category === Category.PANELS);
+              if (!selectedPanel) return null;
+              
+              return (
+                <div className="bg-slate-800 border border-slate-700 rounded-xl p-4">
+                  <h4 className="text-xs font-bold text-slate-300 mb-3 flex items-center gap-2">
+                    <Package size={14} className="text-amber-500" />Selected Panels
+                  </h4>
+                  <div className="flex items-center justify-between bg-emerald-500/10 p-3 rounded-lg border border-emerald-500/50">
+                    <div className="flex-1">
+                      <p className="text-white font-bold text-sm">{selectedPanel.name}</p>
+                      <p className="text-xs text-slate-400 mt-1">
+                        {selectedPanel.powerW}W • {selectedProjectData.panelCount} pieces • {selectedPanel.quantity} in stock
+                      </p>
+                      <p className="text-sm text-emerald-400 font-bold mt-1">{selectedPanel.sellPrice} RON/piece</p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        const newLine: QuoteLineItem = {
+                          id: Date.now().toString(),
+                          inventoryItemId: selectedPanel.id,
+                          description: `${selectedPanel.name} (${selectedPanel.powerW}W)`,
+                          unit: 'piece',
+                          quantity: selectedProjectData.panelCount!,
+                          netPrice: selectedPanel.sellPrice,
+                          selectedSerialNumbers: []
+                        };
+                        addItemToQuote(newLine);
+                      }}
+                      className="ml-3 px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-lg text-xs transition-colors whitespace-nowrap"
+                    >
+                      Add to Quote
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
+
+          {/* Mounting Structure */}
+            {selectedProjectData.panelCount && (
+              <div className="bg-slate-800 border border-slate-700 rounded-xl p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-xs font-bold text-slate-300 flex items-center gap-2">
+                    <Package size={14} className="text-amber-500" />Mounting Structure
+                  </h4>
+                  <button
+                    onClick={() => addMountingStructuresToQuote(selectedProjectData)}
+                    className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-bold rounded-lg text-xs transition-colors flex items-center gap-2"
+                  >
+                    <Plus size={14} /> Add All to Quote
+                  </button>
+                </div>
+                <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+                  <p className="text-xs text-blue-300">
+                    Mounting structures calculated for <span className="font-bold">{selectedProjectData.panelCount} panels</span>.
+                    Click "Add All to Quote" to include all components.
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Quote Items Table - Only show when there are items or when actively editing a quote */}
+        {(quoteItems.length > 0 || editingQuoteId || quoteProjectName.trim()) && (
+          <section className="bg-slate-800 border border-slate-700 rounded-xl overflow-hidden">
+            <div className="px-6 py-4 border-b border-slate-700 flex items-center justify-between">
+              <h3 className="text-sm font-bold text-slate-300 flex items-center gap-2">
+                <FileText size={16} className="text-amber-500" />
+                Quote Items
+              </h3>
+              <button 
+                onClick={handleAddQuoteLine} 
+                className="px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 hover:border-emerald-500/50 rounded font-bold text-xs transition-colors flex items-center gap-1"
+              >
+                <Plus size={14} /> Add Line
+              </button>
+            </div>
+            
+            <div className="overflow-x-auto p-6">
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-900/50 text-slate-400 border-b border-slate-700 text-xs uppercase tracking-wider">
@@ -670,7 +1221,7 @@ export default function ClientQuotesPage() {
                 {quoteItems.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="p-12 text-center text-slate-500 italic">
-                      No items. Click &quot;Add Line&quot; to start.
+                      No items yet. Click &quot;Add Line&quot; or add components from the project above.
                     </td>
                   </tr>
                 ) : (
@@ -781,11 +1332,7 @@ export default function ClientQuotesPage() {
               </tbody>
             </table>
           </div>
-          <div className="p-4 bg-slate-800 border-t border-slate-700">
-            <button onClick={handleAddQuoteLine} className="w-full py-3 border-2 border-dashed border-slate-600 rounded-lg text-slate-400 hover:border-amber-500 hover:text-amber-300 font-bold flex justify-center items-center gap-2 transition-colors">
-              <Plus size={18} /> Add Line
-            </button>
-          </div>
+          
           <div className="bg-slate-900 p-6 border-t border-slate-700">
             <div className="flex justify-end">
               <div className="w-80 space-y-2 text-sm">
@@ -804,40 +1351,7 @@ export default function ClientQuotesPage() {
               </div>
             </div>
           </div>
-        </div>
-
-        {/* Document Template Section */}
-        {docTemplates && docTemplates.length > 0 && editingQuoteId && (
-          <div className="bg-slate-800 rounded-xl border border-slate-700 p-6 shadow-lg">
-            <div className="flex items-center gap-4 mb-4">
-              <div className="flex-1">
-                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">
-                  <FileText className="inline-block mr-2" size={14} />
-                  Document Template
-                </label>
-                <select
-                  value={selectedTemplateId}
-                  onChange={(e) => setSelectedTemplateId(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-amber-500 outline-none"
-                >
-                  <option value="">Select a template...</option>
-                  {docTemplates.map(tmpl => (
-                    <option key={tmpl.id} value={tmpl.id}>{tmpl.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="pt-7">
-                <button
-                  onClick={generateDocumentFromTemplate}
-                  disabled={!selectedTemplateId}
-                  className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed font-semibold transition-all flex items-center gap-2 shadow-lg"
-                >
-                  <Eye size={18} />
-                  Preview
-                </button>
-              </div>
-            </div>
-          </div>
+          </section>
         )}
 
         {/* Document Preview */}
@@ -855,7 +1369,13 @@ export default function ClientQuotesPage() {
                 <X size={20} />
               </button>
             </div>
-            <DocumentPreview docUrl={previewDoc.url} />
+            <div className="bg-slate-900 rounded-lg border border-slate-600 overflow-hidden">
+              <iframe 
+                src={previewDoc.url} 
+                className="w-full h-[600px]"
+                title="Document Preview"
+              />
+            </div>
             <div className="mt-4 flex gap-2">
               <a
                 href={previewDoc.url}
@@ -949,43 +1469,266 @@ export default function ClientQuotesPage() {
           </div>
         )}
 
-        {/* Quote History */}
-        <div className="border-t border-slate-700 pt-8">
-          <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-            <History size={20} className="text-slate-400" />History
-          </h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {clientQuotes.slice().reverse().map(q => (
-              <div key={q.id} className="bg-slate-800 border border-slate-700 hover:border-amber-500/50 rounded-xl p-4 transition-all relative group">
-                <div className="flex justify-between items-start mb-2">
-                  <h4 className="font-bold text-white truncate pr-6">{q.title}</h4>
-                  <button 
-                    type="button"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      if (confirm(`Delete quote "${q.title}"?`)) {
-                        deleteQuote(q.id);
-                      }
-                    }} 
-                    className="text-slate-600 hover:text-red-400 cursor-pointer"
+        {/* Documents for this Quote */}
+        {docTemplates && docTemplates.length > 0 && editingQuoteId && (
+          <div className="bg-slate-800 rounded-xl border border-slate-700 p-6 shadow-lg">
+            <h3 className="text-lg font-bold text-white mb-6 flex items-center gap-2">
+              <FileText size={20} className="text-green-500" />
+              Documents for this Quote
+            </h3>
+            
+            {/* Template Selection and Generate */}
+            <div className="mb-6 pb-6 border-b border-slate-700">
+              <div className="flex items-center gap-4">
+                <div className="flex-1">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">
+                    <FileText className="inline-block mr-2" size={14} />
+                    Select Template
+                  </label>
+                  <select
+                    value={selectedTemplateId}
+                    onChange={(e) => setSelectedTemplateId(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-amber-500 outline-none"
                   >
-                    <Trash2 size={16} />
-                  </button>
+                    <option value="">Select a template...</option>
+                    {docTemplates.map(tmpl => (
+                      <option key={tmpl.id} value={tmpl.id}>{tmpl.name}</option>
+                    ))}
+                  </select>
                 </div>
-                <div className="flex justify-between items-end">
-                  <span className="text-emerald-400 font-bold">{q.totalGross.toLocaleString('ro-RO', {style:'currency', currency:'RON'})}</span>
-                  <button 
-                    type="button"
-                    onClick={() => handleLoadQuote(q)} 
-                    className="text-xs bg-slate-700 hover:bg-slate-600 text-white px-3 py-1.5 rounded cursor-pointer"
+                <div className="pt-7">
+                  <button
+                    onClick={generateDocumentFromTemplate}
+                    disabled={!selectedTemplateId || isGenerating || quoteItems.length === 0}
+                    className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed font-semibold transition-all flex items-center gap-2 shadow-lg hover:shadow-xl"
                   >
-                    Load
+                    {isGenerating ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        Generating...
+                      </>
+                    ) : (
+                      <>
+                        <FileText size={18} />
+                        Generate Document
+                      </>
+                    )}
                   </button>
                 </div>
               </div>
-            ))}
+            </div>
+
+            {/* List of Generated Documents */}
+            {generatedDocuments.length > 0 && (
+              <div>
+                <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-3">
+                  Generated Documents
+                </h4>
+                <div className="space-y-2">
+                  {generatedDocuments.map(doc => (
+                    <div key={doc.id} className="flex items-center justify-between p-3 bg-slate-700/30 border border-slate-600 rounded-lg hover:bg-slate-700/50 transition-colors">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-white font-semibold text-sm truncate">{doc.name}</p>
+                        <p className="text-xs text-slate-400 mt-1">
+                          {new Date(doc.date).toLocaleString('ro-RO')}
+                          {doc.generatedBy && ` • by ${doc.generatedBy}`}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 ml-4">
+                        <button
+                          onClick={() => {
+                            setPreviewDoc({ name: doc.name, url: doc.url, date: new Date(doc.date) });
+                          }}
+                          className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
+                        >
+                          <Eye size={14} />
+                          Preview
+                        </button>
+                        <button
+                          onClick={() => {
+                            // Direct download from Firebase Storage URL
+                            const link = document.createElement('a');
+                            link.href = doc.url;
+                            link.download = doc.name;
+                            link.target = '_blank';
+                            document.body.appendChild(link);
+                            link.click();
+                            document.body.removeChild(link);
+                          }}
+                          className="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
+                        >
+                          <Download size={14} />
+                          Download
+                        </button>
+                        <button
+                          onClick={() => handleSendEmail(doc)}
+                          disabled={sendingEmailDocId === doc.id || !client?.email}
+                          className="px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                          title={!client?.email ? 'Client has no email address' : 'Send via email'}
+                        >
+                          {sendingEmailDocId === doc.id ? (
+                            <>
+                              <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                              Sending...
+                            </>
+                          ) : (
+                            <>
+                              <Mail size={14} />
+                              Send Email
+                            </>
+                          )}
+                        </button>
+                        <button
+                          onClick={() => {
+                            setConfirmDialog({
+                              message: `Delete "${doc.name}"?`,
+                              onConfirm: () => {
+                                if (currentQuote) {
+                                  const updatedDocuments = (currentQuote.generatedDocuments || []).filter(d => d.id !== doc.id);
+                                  const updatedQuote: Quote = {
+                                    ...currentQuote,
+                                    generatedDocuments: updatedDocuments
+                                  };
+                                  saveQuote(updatedQuote);
+                                  showNotification('Document deleted', 'success');
+                                }
+                                setConfirmDialog(null);
+                              }
+                            });
+                          }}
+                          className="p-2 text-red-500 hover:text-red-400 hover:bg-slate-600 rounded transition-colors"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
+        )}
+
+        {/* Document Preview Modal */}
+        {previewDoc && (
+          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-6xl h-[90vh] shadow-2xl flex flex-col">
+              <div className="flex items-center justify-between p-6 border-b border-slate-700">
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                  <FileText size={20} className="text-blue-500" />
+                  {previewDoc.name}
+                </h3>
+                <button
+                  onClick={() => setPreviewDoc(null)}
+                  className="text-slate-400 hover:text-white transition-colors p-2 hover:bg-slate-700 rounded"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+              <div className="flex-1 overflow-hidden p-6">
+                <DocumentPreview 
+                  document={previewDoc as any}
+                  onClose={() => setPreviewDoc(null)}
+                  allowEdit={true}
+                  clientId={client.id}
+                  folder="quotes"
+                  onSave={async (newUrl) => {
+                    // Optionally update the document URL in the quote
+                    showNotification('Document saved successfully!', 'success');
+                  }}
+                  onPdfCreated={(pdfDoc) => {
+                    // Add the PDF to the generatedDocuments array
+                    if (currentQuote) {
+                      const updatedDocuments = [...generatedDocuments, pdfDoc];
+                      const updatedQuote: Quote = {
+                        ...currentQuote,
+                        generatedDocuments: updatedDocuments
+                      };
+                      saveQuote(updatedQuote);
+                      showNotification(`PDF created: ${pdfDoc.name}`, 'success');
+                    }
+                  }}
+                  onSendEmail={(doc) => {
+                    // Close preview and open email flow
+                    setPreviewDoc(null);
+                    handleSendEmail(doc);
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Email Preview Modal */}
+        {showEmailPreview && emailPreviewData && (
+          <EmailPreviewModal
+            isOpen={showEmailPreview}
+            onClose={() => {
+              setShowEmailPreview(false);
+              setEmailPreviewData(null);
+            }}
+            onSend={handleConfirmSendEmail}
+            initialData={{
+              to: emailPreviewData.to,
+              subject: emailPreviewData.subject,
+              body: emailPreviewData.body,
+              attachments: emailPreviewData.attachments || [],
+            }}
+            signature={smtpSettings?.signature || ''}
+          />
+        )}
+
+        {/* Document Format Warning Modal */}
+        {docFormatWarning.show && docFormatWarning.doc && (
+          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-slate-800 rounded-xl border border-amber-500/50 shadow-2xl max-w-md w-full">
+              <div className="flex items-start gap-3 p-6 border-b border-slate-700">
+                <div className="w-10 h-10 rounded-lg bg-amber-500/10 flex items-center justify-center flex-shrink-0">
+                  <AlertCircle size={24} className="text-amber-500" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-white mb-1">DOCX Document Detected</h3>
+                  <p className="text-sm text-slate-300">
+                    This is a DOCX file. For email attachments, it should be converted to PDF format.
+                  </p>
+                </div>
+              </div>
+              
+              <div className="p-6 space-y-3">
+                <button
+                  onClick={() => {
+                    const doc = docFormatWarning.doc!;
+                    setDocFormatWarning({ show: false, doc: null });
+                    setPreviewDoc({ name: doc.name, url: doc.url, date: doc.date });
+                  }}
+                  className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition-colors flex items-center justify-center gap-2"
+                >
+                  <Eye size={18} />
+                  Preview & Convert to PDF First
+                </button>
+                
+                <button
+                  onClick={async () => {
+                    const doc = docFormatWarning.doc!;
+                    setDocFormatWarning({ show: false, doc: null });
+                    await prepareEmailPreview(doc);
+                  }}
+                  className="w-full px-4 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-semibold transition-colors flex items-center justify-center gap-2"
+                >
+                  <Mail size={18} />
+                  Convert & Send Now
+                </button>
+                
+                <button
+                  onClick={() => setDocFormatWarning({ show: false, doc: null })}
+                  className="w-full px-4 py-3 bg-slate-700 hover:bg-slate-600 text-white rounded-lg font-semibold transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         </div>
       </div>
     </div>

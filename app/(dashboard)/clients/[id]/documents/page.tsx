@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { FolderOpen, Upload, Eye, Edit2, Download, Printer, Trash2, FileText, X, Save } from 'lucide-react';
+import { FolderOpen, Upload, Eye, Edit2, Download, Printer, Trash2, FileText, X, Save, AlertCircle, Check } from 'lucide-react';
 import { useClient } from '@/contexts/ClientContext';
 import { ClientType } from '@/types';
 import { FileSystem, getFolderForDocType } from '@/services/fileSystemService';
@@ -17,10 +17,43 @@ export default function ClientDocumentsPage() {
   const [cfNumber, setCfNumber] = useState('');
   const [cadNumber, setCadNumber] = useState('');
   const [docAddress, setDocAddress] = useState('');
+  const [selectedProjectKey, setSelectedProjectKey] = useState('none');
   const [previewDoc, setPreviewDoc] = useState<any>(null);
   const [editingDoc, setEditingDoc] = useState<any>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState<{docId: string; docName: string} | null>(null);
+  const [notification, setNotification] = useState<{message: string; type: 'success' | 'error' | 'info'} | null>(null);
 
   if (!client) return null;
+
+  const projectOptions = [
+    { key: 'none', label: 'General (No project)', projectId: '', projectName: '' }
+  ];
+
+  const currentProjectName = client.needs?.projectName?.trim();
+  if (currentProjectName) {
+    projectOptions.push({
+      key: 'current',
+      label: `Current Project: ${currentProjectName}`,
+      projectId: client.needs?.projectId || '',
+      projectName: currentProjectName
+    });
+  }
+
+  (client.archivedProjects || []).forEach(project => {
+    projectOptions.push({
+      key: `archived-${project.id}`,
+      label: `Archived: ${project.projectName}`,
+      projectId: project.id,
+      projectName: project.projectName
+    });
+  });
+
+  const selectedProject = projectOptions.find(option => option.key === selectedProjectKey) || projectOptions[0];
+
+  const showNotification = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    setNotification({ message, type });
+    setTimeout(() => setNotification(null), 4000);
+  };
 
   const handleFileSelection = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) setUploadFile(e.target.files[0]);
@@ -46,6 +79,17 @@ export default function ClientDocumentsPage() {
     } else if (docType === 'Other' && docInput.trim()) {
       generatedName = `[${internalId}] ${docInput.trim()} ${client.name}`;
     }
+
+    let projectId = selectedProject.projectId;
+    let projectName = selectedProject.projectName;
+    if (selectedProject.key === 'current' && currentProjectName && !projectId) {
+      const generatedId = client.needs?.projectId || Date.now().toString();
+      projectId = generatedId;
+      projectName = currentProjectName;
+      if (!client.needs?.projectId) {
+        await updateClient({ needs: { ...client.needs, projectId: generatedId } });
+      }
+    }
     
     try {
       const newDoc = await FileSystem.saveFile(client, uploadFile, getFolderForDocType(docType), fsType, generatedName);
@@ -54,6 +98,8 @@ export default function ClientDocumentsPage() {
       newDoc.cfNumber = cfNumber.trim() || undefined;
       newDoc.cadNumber = cadNumber.trim() || undefined;
       newDoc.docAddress = docAddress.trim() || undefined;
+      newDoc.projectId = projectId || undefined;
+      newDoc.projectName = projectName || undefined;
       await updateClient({ documents: [newDoc, ...(client.documents || [])] });
       setUploadFile(null);
       setDocInput('');
@@ -63,17 +109,16 @@ export default function ClientDocumentsPage() {
       setCadNumber('');
       setDocAddress('');
       setDocType('CI');
+      showNotification('Document uploaded successfully!', 'success');
     } catch (error) { 
       console.error(error); 
-      alert("Failed to upload document"); 
+      showNotification('Failed to upload document', 'error'); 
     }
   };
 
-  const handleDeleteDocument = async (docId: string) => {
+  const handleDeleteDocument = (docId: string, docName: string) => {
     if (!client) return;
-    if (confirm('Are you sure you want to delete this document? This action cannot be undone.')) {
-      await updateClient({ documents: client.documents?.filter(d => d.id !== docId) || [] });
-    }
+    setDeleteConfirmation({ docId, docName });
   };
 
   const openDocument = (url: string) => {
@@ -93,7 +138,7 @@ export default function ClientDocumentsPage() {
   const printDocument = (url: string) => {
     const printWindow = window.open('', '_blank', 'width=800,height=600');
     if (!printWindow) {
-      alert('Please allow pop-ups to print documents');
+      showNotification('Please allow pop-ups to print documents', 'error');
       return;
     }
     
@@ -159,6 +204,74 @@ export default function ClientDocumentsPage() {
 
   return (
     <div className="h-full flex flex-col p-8 bg-slate-900 overflow-y-auto">
+      {/* Notification Toast */}
+      {notification && (
+        <div className="fixed top-4 right-4 z-50 animate-in slide-in-from-top-2 duration-300">
+          <div className={`rounded-lg border shadow-lg p-4 min-w-[300px] max-w-md ${
+            notification.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400' :
+            notification.type === 'error' ? 'bg-red-500/10 border-red-500/50 text-red-400' :
+            'bg-blue-500/10 border-blue-500/50 text-blue-400'
+          }`}>
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                {notification.type === 'success' && <Check size={20} className="flex-shrink-0" />}
+                {notification.type === 'error' && <AlertCircle size={20} className="flex-shrink-0" />}
+                {notification.type === 'info' && <AlertCircle size={20} className="flex-shrink-0" />}
+                <p className="font-semibold">{notification.message}</p>
+              </div>
+              <button
+                onClick={() => setNotification(null)}
+                className="text-current hover:opacity-70 transition-opacity"
+              >
+                <X size={18} />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirmation && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-md shadow-2xl">
+            <div className="p-6">
+              <div className="flex items-start gap-4 mb-4">
+                <div className="p-3 bg-red-500/10 rounded-lg">
+                  <AlertCircle size={24} className="text-red-400" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-lg font-bold text-white mb-2">Delete Document</h3>
+                  <p className="text-slate-300 text-sm">
+                    Are you sure you want to delete <span className="font-bold text-white">"{deleteConfirmation.docName}"</span>?
+                  </p>
+                  <p className="text-slate-400 text-xs mt-2">
+                    This action cannot be undone.
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-3 justify-end">
+                <button
+                  onClick={() => setDeleteConfirmation(null)}
+                  className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white font-semibold rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    if (!client) return;
+                    await updateClient({ documents: client.documents?.filter(d => d.id !== deleteConfirmation.docId) || [] });
+                    setDeleteConfirmation(null);
+                    showNotification('Document deleted successfully', 'success');
+                  }}
+                  className="px-4 py-2 bg-red-500 hover:bg-red-400 text-white font-semibold rounded-lg transition-colors"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="max-w-5xl w-full mx-auto space-y-8 pb-12">
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-bold text-white flex items-center gap-2">
@@ -195,6 +308,21 @@ export default function ClientDocumentsPage() {
                       <option value="Other">Other</option>
                     </>
                   )}
+                </select>
+              </div>
+
+              <div className="w-full md:w-1/3">
+                <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Project</label>
+                <select
+                  value={selectedProjectKey}
+                  onChange={(e) => setSelectedProjectKey(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-600 rounded-lg p-2.5 text-white outline-none focus:ring-1 focus:ring-amber-500"
+                >
+                  {projectOptions.map(option => (
+                    <option key={option.key} value={option.key}>
+                      {option.label}
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -314,6 +442,9 @@ export default function ClientDocumentsPage() {
                       {doc.description && (
                         <p className="text-xs text-amber-500 mt-0.5 font-medium">{doc.description}</p>
                       )}
+                      {doc.projectName && (
+                        <p className="text-xs text-slate-400 mt-0.5">Project: {doc.projectName}</p>
+                      )}
                       {doc.type === 'CF' && (doc.cfNumber || doc.cadNumber || doc.docAddress) && (
                         <p className="text-xs text-amber-500 mt-0.5 font-medium">
                           {doc.cfNumber && `Nr CF: ${doc.cfNumber}`}
@@ -370,7 +501,7 @@ export default function ClientDocumentsPage() {
                     </button>
                     <button 
                       type="button" 
-                      onClick={() => handleDeleteDocument(doc.id)} 
+                      onClick={() => handleDeleteDocument(doc.id, doc.name)} 
                       title="Delete" 
                       className="p-2 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg"
                     >
@@ -393,6 +524,30 @@ export default function ClientDocumentsPage() {
         <DocumentPreview 
           document={previewDoc}
           onClose={() => setPreviewDoc(null)}
+          allowEdit={true}
+          clientId={client.id}
+          folder="documents"
+          onSave={async (newUrl) => {
+            // Update document URL in client documents
+            const updatedDocuments = client.documents?.map(doc =>
+              doc.id === previewDoc.id ? { ...doc, url: newUrl } : doc
+            );
+            // You would call updateClient here with updated documents
+            console.log('Document saved with new URL:', newUrl);
+          }}
+          onPdfCreated={(pdfDoc) => {
+            // Add the PDF to client documents
+            const newDocument = {
+              ...pdfDoc,
+              type: previewDoc.type || 'PDF',
+              description: `PDF from ${previewDoc.name}`,
+              projectId: previewDoc.projectId,
+              projectName: previewDoc.projectName,
+            };
+            const updatedDocuments = [...(client.documents || []), newDocument];
+            updateClient({ ...client, documents: updatedDocuments });
+            showNotification(`PDF created: ${pdfDoc.name}`, 'success');
+          }}
         />
       )}
 

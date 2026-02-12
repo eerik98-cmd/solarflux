@@ -8,6 +8,7 @@ import {
   onSnapshot, 
   query, 
   getDocs,
+  getDoc,
   writeBatch
 } from 'firebase/firestore';
 import { 
@@ -141,6 +142,11 @@ function sanitizeForFirestore(obj: any, seen = new WeakSet()): any {
 }
 
 export const StorageService = {
+  // Upload a file to Firebase Storage
+  uploadFile: async (base64Data: string, path: string): Promise<string> => {
+    return await uploadBase64ToStorage(base64Data, path);
+  },
+
   // Subscribe to a collection (Real-time updates)
   subscribe: (collectionName: string, callback: (data: any[]) => void) => {
     if (!db) return () => {};
@@ -239,6 +245,34 @@ export const StorageService = {
         batch.set(ref, sanitized);
       });
       await batch.commit();
+    }
+  },
+
+  // Get a single item by ID
+  getItem: async (collectionName: string, itemId: string): Promise<any | null> => {
+    if (!db) return null;
+    
+    try {
+      const docRef = doc(db, collectionName, itemId);
+      const docSnap = await getDoc(docRef);
+      return docSnap.exists() ? docSnap.data() : null;
+    } catch (error: any) {
+      console.error(`Error getting item from ${collectionName}:`, error);
+      return null;
+    }
+  },
+
+  // Get all items from a collection (non-realtime)
+  getAllItems: async (collectionName: string): Promise<any[]> => {
+    if (!db) return [];
+    
+    try {
+      const q = query(collection(db, collectionName));
+      const snapshot = await getDocs(q);
+      return snapshot.docs.map(doc => doc.data());
+    } catch (error: any) {
+      console.error(`Error getting items from ${collectionName}:`, error);
+      return [];
     }
   }
 };
