@@ -1,12 +1,13 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useData } from '@/contexts/DataContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { 
   ArrowLeft, User, MapPin, Phone, Mail, FileText, Upload, Download, Eye, Package, AlertCircle, 
-  X, Image as ImageIcon, Barcode, Plus, Minus, Save, Camera, TrendingUp, ListChecks
+  X, Image as ImageIcon, Plus, Minus, Save, Camera, TrendingUp, ListChecks,
+  FolderOpen, ChevronDown, ChevronUp, CheckCircle
 } from 'lucide-react';
 import { ClientDocument, QuoteLineItem } from '@/types';
 
@@ -16,6 +17,8 @@ interface EnhancedQuoteItem extends QuoteLineItem {
   barcode?: string;
   hasBarcode?: boolean;
 }
+
+const SERIAL_REQUIRED_REGEX = /(inverter|invertor|battery|baterie|acumulator)/i;
 
 export default function InstallerClientDetailPage() {
   const params = useParams();
@@ -33,62 +36,122 @@ export default function InstallerClientDetailPage() {
   const [extraItems, setExtraItems] = useState<EnhancedQuoteItem[]>([]);
   const [installationPhotos, setInstallationPhotos] = useState<Array<{id: string, url: string, description: string, timestamp: Date, uploadedBy?: string, uploadedAt?: Date}>>([]);
   const [finalReport, setFinalReport] = useState<string>('');
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('');
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
   const [isInitialized, setIsInitialized] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [groundingValue, setGroundingValue] = useState('');
+  const [lowVoltageCableCheck, setLowVoltageCableCheck] = useState<'' | 'Corespunde' | 'Nu corespunde'>('');
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [scannerError, setScannerError] = useState<string | null>(null);
+  const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+  const [lockedProjectMention, setLockedProjectMention] = useState('');
+  const [isSendingMention, setIsSendingMention] = useState(false);
+
+  const scannerVideoRef = useRef<HTMLVideoElement | null>(null);
+  const scannerStreamRef = useRef<MediaStream | null>(null);
+  const scannerTickRef = useRef<number | null>(null);
 
   const client = clients.find(c => c.id === clientId);
 
-  // Get quote items for this client
-  const clientQuotes = savedQuotes.filter(q => q.clientId === clientId);
-  const allQuoteItems = clientQuotes.flatMap(q => q.items || []);
+  const clientQuotes = useMemo(() => {
+    const quotes = savedQuotes.filter(q => q.clientId === clientId);
+    return quotes.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }, [savedQuotes, clientId]);
 
-  // Initialize equipment data only once, don't reinitialize on data changes
+  const selectedProject = useMemo(
+    () => clientQuotes.find((quote) => quote.id === selectedProjectId) || null,
+    [clientQuotes, selectedProjectId]
+  );
+
+  const allQuoteItems = useMemo(
+    () => selectedProject?.items || [],
+    [selectedProject]
+  );
+
   useEffect(() => {
-    if (!isInitialized && allQuoteItems.length > 0) {
-      const enhanced: EnhancedQuoteItem[] = allQuoteItems.map(item => {
-        const inventoryItem = inventory.find(inv => inv.id === item.inventoryItemId);
-        
-        // Check if we have saved consumption data for this item
-        const savedConsumptionData = clientQuotes
-          .flatMap(q => q.consumptionData || [])
-          .find(cd => cd.id === item.id);
-        
-        return {
-          ...item,
-          actuallyUsed: savedConsumptionData?.actuallyUsed ?? item.quantity,
-          quotedQuantity: item.quantity,
-          barcode: inventoryItem?.barcode,
-          hasBarcode: !!inventoryItem?.barcode,
-        };
-      });
-      setEquipmentData(enhanced);
-      
-      // Load extra items from saved data
-      const savedExtraItems = clientQuotes
-        .flatMap(q => q.extraItems || [])
-        .filter(item => item.isExtra)
-        .map(item => ({
-          ...item,
-          quantity: item.consumedQty,
-          actuallyUsed: item.actuallyUsed || item.consumedQty,
-        } as EnhancedQuoteItem));
-      
-      if (savedExtraItems.length > 0) {
-        setExtraItems(savedExtraItems);
-      }
-
-      // Load installation photos and report from quote
-      const quote = clientQuotes[0];
-      if (quote) {
-        // Photos are stored in quote's completionData (or custom field)
-        setInstallationPhotos((quote as any).installationPhotos || []);
-        setFinalReport((quote as any).completionNotes || '');
-      }
-      
-      setIsInitialized(true);
+    if (clientQuotes.length === 0) {
+      setSelectedProjectId('');
+      return;
     }
-  }, [clientId]);
+
+    if (selectedProjectId && !clientQuotes.some((quote) => quote.id === selectedProjectId)) {
+      setSelectedProjectId('');
+    }
+  }, [clientQuotes, selectedProjectId]);
+
+  const toggleProjectExpanded = (quoteId: string) => {
+    setExpandedProjects((prev) => {
+      const next = new Set(prev);
+      if (next.has(quoteId)) {
+        next.delete(quoteId);
+      } else {
+        next.add(quoteId);
+      }
+      return next;
+    });
+  };
+
+  // Initialize data for selected project
+  useEffect(() => {
+    if (!selectedProject) {
+      setEquipmentData([]);
+      setExtraItems([]);
+      setInstallationPhotos([]);
+      setFinalReport('');
+      setGroundingValue('');
+      setLowVoltageCableCheck('');
+      setHasUnsavedChanges(false);
+      setIsInitialized(false);
+      return;
+    }
+
+    const enhanced: EnhancedQuoteItem[] = allQuoteItems.map(item => {
+      const existingLocal = equipmentData.find(local => local.id === item.id);
+      const inventoryItem = inventory.find(inv => inv.id === item.inventoryItemId);
+      const savedConsumptionData = (selectedProject.consumptionData || []).find(cd => cd.id === item.id);
+
+      return {
+        ...item,
+        actuallyUsed: savedConsumptionData?.actuallyUsed ?? savedConsumptionData?.consumedQty ?? item.quantity,
+        selectedSerialNumbers:
+          savedConsumptionData?.selectedSerialNumbers ??
+          existingLocal?.selectedSerialNumbers ??
+          item.selectedSerialNumbers ??
+          [],
+        quotedQuantity: item.quantity,
+        barcode: inventoryItem?.barcode,
+        hasBarcode: !!inventoryItem?.barcode,
+      };
+    });
+
+    const savedExtraItems = (selectedProject.extraItems || [])
+      .filter(item => item.isExtra)
+      .map(item => ({
+        ...item,
+        quantity: item.actuallyUsed ?? item.consumedQty,
+        actuallyUsed: item.actuallyUsed ?? item.consumedQty,
+      } as EnhancedQuoteItem));
+
+    const projectPhotos = (selectedProject.installationPhotos || []).map(photo => ({
+      ...photo,
+      timestamp: new Date(photo.timestamp),
+      uploadedAt: photo.uploadedAt ? new Date(photo.uploadedAt) : undefined,
+    }));
+
+    setEquipmentData(enhanced);
+    setExtraItems(savedExtraItems);
+    setInstallationPhotos(projectPhotos);
+    setFinalReport(selectedProject.completionNotes || '');
+    setGroundingValue(selectedProject.groundingValue || '');
+    setLowVoltageCableCheck(selectedProject.lowVoltageCableCheck || '');
+    setLockedProjectMention('');
+    setHasUnsavedChanges(false);
+    setIsInitialized(true);
+  }, [selectedProject, allQuoteItems, inventory]);
+
+  const isProjectLocked = !!selectedProject?.adminApprovedAt;
 
   // Warn if leaving with unsaved changes
   useEffect(() => {
@@ -102,6 +165,12 @@ export default function InstallerClientDetailPage() {
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [hasUnsavedChanges]);
+
+  useEffect(() => {
+    return () => {
+      stopScanner();
+    };
+  }, []);
 
   // Detect changes in photos or report
   useEffect(() => {
@@ -129,6 +198,10 @@ export default function InstallerClientDetailPage() {
   }
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (isProjectLocked) {
+      showNotification('Project is closed by admin. Editing is locked until reopen.', 'error');
+      return;
+    }
     const file = e.target.files?.[0];
     if (!file || !currentUser) return;
 
@@ -170,12 +243,127 @@ export default function InstallerClientDetailPage() {
   };
 
   const handleQuantityChange = (itemId: string, value: number) => {
+    if (isProjectLocked) return;
     setEquipmentData(prev =>
       prev.map(item => item.id === itemId ? { ...item, actuallyUsed: value } : item)
     );
+    setHasUnsavedChanges(true);
+  };
+
+  const showNotification = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    setNotification({ message, type });
+    window.setTimeout(() => setNotification(null), 3500);
+  };
+
+  const parseSerialInput = (raw: string) => {
+    return raw
+      .split(/[,\n]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  };
+
+  const updateSerialInput = (itemId: string, raw: string) => {
+    if (isProjectLocked) return;
+    const serials = parseSerialInput(raw);
+    setEquipmentData(prev => prev.map(item =>
+      item.id === itemId ? { ...item, selectedSerialNumbers: serials } : item
+    ));
+    setHasUnsavedChanges(true);
+  };
+
+  const isSerialRequiredItem = (item: EnhancedQuoteItem) => {
+    const inv = inventory.find((i) => i.id === item.inventoryItemId);
+    const byCategory = inv?.category === 'Inverters' || inv?.category === 'Batteries';
+    const byDescription = SERIAL_REQUIRED_REGEX.test(item.description || '');
+    return byCategory || byDescription;
+  };
+
+  const getRequiredSerialItems = () => {
+    return equipmentData.filter((item) => isSerialRequiredItem(item));
+  };
+
+  const getMissingRequiredSerialItems = () => {
+    return getRequiredSerialItems().filter(item => !(item.selectedSerialNumbers && item.selectedSerialNumbers.length > 0));
+  };
+
+  function stopScanner() {
+    if (scannerTickRef.current) {
+      window.clearInterval(scannerTickRef.current);
+      scannerTickRef.current = null;
+    }
+    if (scannerStreamRef.current) {
+      scannerStreamRef.current.getTracks().forEach(track => track.stop());
+      scannerStreamRef.current = null;
+    }
+  }
+
+  const closeScanner = () => {
+    stopScanner();
+    setScannerOpen(false);
+    setScannerError(null);
+  };
+
+  const appendScannedSerial = (itemId: string, scannedCode: string) => {
+    const code = scannedCode.trim();
+    if (!code) return;
+
+    setEquipmentData(prev => prev.map(item => {
+      if (item.id !== itemId) return item;
+      const existing = item.selectedSerialNumbers || [];
+      if (existing.includes(code)) return item;
+      return { ...item, selectedSerialNumbers: [...existing, code] };
+    }));
+    setHasUnsavedChanges(true);
+    showNotification('Serial number scanned and added.', 'success');
+    closeScanner();
+  };
+
+  const startScanner = async (itemId: string) => {
+    if (isProjectLocked) {
+      showNotification('Project is closed by admin. Editing is locked until reopen.', 'error');
+      return;
+    }
+    setScannerError(null);
+    setScannerOpen(true);
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' }
+      });
+      scannerStreamRef.current = stream;
+
+      if (scannerVideoRef.current) {
+        scannerVideoRef.current.srcObject = stream;
+        await scannerVideoRef.current.play();
+      }
+
+      if ('BarcodeDetector' in window) {
+        const detector = new (window as any).BarcodeDetector({
+          formats: ['code_128', 'code_39', 'ean_13', 'ean_8', 'qr_code']
+        });
+
+        scannerTickRef.current = window.setInterval(async () => {
+          if (!scannerVideoRef.current || scannerVideoRef.current.readyState < 2) return;
+
+          try {
+            const barcodes = await detector.detect(scannerVideoRef.current);
+            if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
+              appendScannedSerial(itemId, barcodes[0].rawValue);
+            }
+          } catch {
+            // Ignore intermittent detector errors while camera is warming up.
+          }
+        }, 500);
+      } else {
+        setScannerError('Barcode scanning is not supported in this browser. Enter serial manually.');
+      }
+    } catch {
+      setScannerError('Could not access camera. Please allow camera permission or enter serial manually.');
+    }
   };
 
   const handleAddExtraItem = () => {
+    if (isProjectLocked) return;
     const newItem: EnhancedQuoteItem = {
       id: `extra-${Date.now()}`,
       description: '',
@@ -188,10 +376,12 @@ export default function InstallerClientDetailPage() {
   };
 
   const handleRemoveExtraItem = (itemId: string) => {
+    if (isProjectLocked) return;
     setExtraItems(prev => prev.filter(item => item.id !== itemId));
   };
 
   const handleExtraItemChange = (itemId: string, field: string, value: any) => {
+    if (isProjectLocked) return;
     setExtraItems(prev =>
       prev.map(item => item.id === itemId ? { ...item, [field]: value } : item)
     );
@@ -207,47 +397,51 @@ export default function InstallerClientDetailPage() {
 
   const handleSaveEquipment = async () => {
     try {
-      // Find all quotes for this client and update them with consumption data and edit tracking
-      const updatedQuotes = clientQuotes.map(quote => {
-        // Match items from this quote
-        const consumptionData = equipmentData
-          .filter(item => quote.items.some(qi => qi.id === item.id))
-          .map(item => ({
-            id: item.id,
-            description: item.description,
-            quotedQty: item.quotedQuantity || item.quantity,
-            consumedQty: item.actuallyUsed || 0,
-            actuallyUsed: item.actuallyUsed,
-            unit: item.unit,
-            netPrice: item.netPrice,
-            inventoryItemId: item.inventoryItemId,
-            barcode: item.barcode,
-            hasBarcode: item.hasBarcode,
-          }));
-
-        return {
-          ...quote,
-          consumptionData,
-          consumptionDataUpdatedAt: new Date(),
-          consumptionDataUpdatedBy: currentUser?.nickname || 'Unknown',
-          extraItems: extraItems.map(item => ({
-            id: item.id,
-            description: item.description,
-            quotedQty: 0,
-            consumedQty: item.quantity || 0,
-            actuallyUsed: item.quantity,
-            unit: item.unit,
-            netPrice: item.netPrice,
-            isExtra: true,
-          })),
-          phase: 'in-progress' as const,
-        };
-      });
-
-      // Save all updated quotes
-      for (const quote of updatedQuotes) {
-        await saveQuote(quote);
+      if (!selectedProject) {
+        alert('Please select a project first.');
+        return;
       }
+      if (isProjectLocked) {
+        showNotification('Project is closed by admin. Editing is locked until reopen.', 'error');
+        return;
+      }
+
+      const consumptionData = equipmentData.map(item => ({
+        id: item.id,
+        description: item.description,
+        quotedQty: item.quotedQuantity || item.quantity,
+        consumedQty: item.actuallyUsed || 0,
+        actuallyUsed: item.actuallyUsed,
+        selectedSerialNumbers: item.selectedSerialNumbers || [],
+        unit: item.unit,
+        netPrice: item.netPrice,
+        inventoryItemId: item.inventoryItemId,
+        barcode: item.barcode,
+        hasBarcode: item.hasBarcode,
+      }));
+
+      const updatedQuote = {
+        ...selectedProject,
+        consumptionData,
+        consumptionDataUpdatedAt: new Date(),
+        consumptionDataUpdatedBy: currentUser?.nickname || 'Unknown',
+        groundingValue,
+        lowVoltageCableCheck: lowVoltageCableCheck || undefined,
+        extraItems: extraItems.map(item => ({
+          id: item.id,
+          description: item.description,
+          quotedQty: 0,
+          consumedQty: item.quantity || 0,
+          actuallyUsed: item.quantity,
+          unit: item.unit,
+          netPrice: item.netPrice,
+          isExtra: true,
+        })),
+        phase: 'in-progress' as const,
+      };
+
+      await saveQuote(updatedQuote);
+  setHasUnsavedChanges(false);
 
       alert('✓ Equipment data saved successfully!');
       console.log('Saved consumption data:', { equipmentData, extraItems });
@@ -258,20 +452,14 @@ export default function InstallerClientDetailPage() {
   };
 
   const handleBarcodeScan = (itemId: string) => {
-    // In a real app, this would activate camera/scanner
-    // For now, show prompt
-    const barcode = prompt('Enter or scan barcode:');
-    if (barcode) {
-      const item = equipmentData.find(i => i.id === itemId);
-      if (item && item.barcode === barcode) {
-        alert(`✓ Barcode matched for ${item.description}`);
-      } else {
-        alert('⚠ Barcode does not match inventory item');
-      }
-    }
+    startScanner(itemId);
   };
 
   const handleInstallationPhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (isProjectLocked) {
+      showNotification('Project is closed by admin. Editing is locked until reopen.', 'error');
+      return;
+    }
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -298,11 +486,13 @@ export default function InstallerClientDetailPage() {
   };
 
   const handleRemoveInstallationPhoto = (photoId: string) => {
+    if (isProjectLocked) return;
     setInstallationPhotos(prev => prev.filter(p => p.id !== photoId));
     setHasUnsavedChanges(true);
   };
 
   const handleUpdatePhotoDescription = (photoId: string, description: string) => {
+    if (isProjectLocked) return;
     setInstallationPhotos(prev =>
       prev.map(p => p.id === photoId ? { ...p, description } : p)
     );
@@ -312,21 +502,43 @@ export default function InstallerClientDetailPage() {
   // Save installation photos and report
   const handleSaveInstallationData = async () => {
     try {
+      if (!selectedProject) {
+        alert('Please select a project first.');
+        return;
+      }
+      if (isProjectLocked) {
+        showNotification('Project is closed by admin. Editing is locked until reopen.', 'error');
+        return;
+      }
+
       setIsSaving(true);
-      
-      // Update all quotes with installation data and edit tracking
-      const updatedQuotes = clientQuotes.map(quote => ({
-        ...quote,
+
+      const consumptionData = equipmentData.map(item => ({
+        id: item.id,
+        description: item.description,
+        quotedQty: item.quotedQuantity || item.quantity,
+        consumedQty: item.actuallyUsed || 0,
+        actuallyUsed: item.actuallyUsed,
+        selectedSerialNumbers: item.selectedSerialNumbers || [],
+        unit: item.unit,
+        netPrice: item.netPrice,
+        inventoryItemId: item.inventoryItemId,
+        barcode: item.barcode,
+        hasBarcode: item.hasBarcode,
+      }));
+
+      const updatedQuote = {
+        ...selectedProject,
+        consumptionData,
         installationPhotos,
         completionNotes: finalReport,
         consumptionDataUpdatedAt: new Date(),
         consumptionDataUpdatedBy: currentUser?.nickname || 'Unknown',
-      }));
+        groundingValue,
+        lowVoltageCableCheck: lowVoltageCableCheck || undefined,
+      };
 
-      // Save all updated quotes
-      for (const quote of updatedQuotes) {
-        await saveQuote(quote);
-      }
+      await saveQuote(updatedQuote);
 
       setHasUnsavedChanges(false);
       alert('✓ Installation photos and report saved successfully!');
@@ -335,6 +547,68 @@ export default function InstallerClientDetailPage() {
       alert('Failed to save installation data');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleDeclareFinish = async () => {
+    if (!selectedProject) {
+      showNotification('Please select a project first.', 'error');
+      return;
+    }
+    if (isProjectLocked) {
+      showNotification('Project is already closed by admin.', 'info');
+      return;
+    }
+
+    const missingSerialItems = getMissingRequiredSerialItems();
+    if (missingSerialItems.length > 0) {
+      showNotification('This project has to include serial numbers for inverter and battery before declaring finish.', 'error');
+      return;
+    }
+
+    try {
+      const consumptionData = equipmentData.map(item => ({
+        id: item.id,
+        description: item.description,
+        quotedQty: item.quotedQuantity || item.quantity,
+        consumedQty: item.actuallyUsed || 0,
+        actuallyUsed: item.actuallyUsed,
+        selectedSerialNumbers: item.selectedSerialNumbers || [],
+        unit: item.unit,
+        netPrice: item.netPrice,
+        inventoryItemId: item.inventoryItemId,
+        barcode: item.barcode,
+        hasBarcode: item.hasBarcode,
+      }));
+
+      const updatedQuote = {
+        ...selectedProject,
+        consumptionData,
+        extraItems: extraItems.map(item => ({
+          id: item.id,
+          description: item.description,
+          quotedQty: 0,
+          consumedQty: item.quantity || 0,
+          actuallyUsed: item.quantity,
+          unit: item.unit,
+          netPrice: item.netPrice,
+          isExtra: true,
+        })),
+        installationPhotos,
+        completionNotes: finalReport,
+        groundingValue,
+        lowVoltageCableCheck: lowVoltageCableCheck || undefined,
+        phase: 'pending-inspection' as const,
+        installerDeclaredFinishedAt: new Date(),
+        installerDeclaredFinishedBy: currentUser?.nickname || 'Unknown',
+      };
+
+      await saveQuote(updatedQuote);
+      setHasUnsavedChanges(false);
+      showNotification('Project declared finished. Admin has been notified for review.', 'success');
+    } catch (error) {
+      console.error('Error declaring project finish:', error);
+      showNotification('Failed to declare finish. Please try again.', 'error');
     }
   };
 
@@ -356,8 +630,58 @@ export default function InstallerClientDetailPage() {
     };
   };
 
+  const missingRequiredSerialItems = getMissingRequiredSerialItems();
+  const hasMissingRequiredSerials = missingRequiredSerialItems.length > 0;
+
+  const handleSubmitLockedMention = async () => {
+    if (!selectedProject) return;
+    const message = lockedProjectMention.trim();
+    if (!message) {
+      showNotification('Please write a mention first.', 'error');
+      return;
+    }
+
+    setIsSendingMention(true);
+    try {
+      const mentions = selectedProject.installerMentions || [];
+      const mention = {
+        id: `${Date.now()}`,
+        message,
+        createdAt: new Date(),
+        createdBy: currentUser?.nickname || 'Unknown',
+      };
+
+      await saveQuote({
+        ...selectedProject,
+        installerMentions: [mention, ...mentions],
+      });
+
+      setLockedProjectMention('');
+      showNotification('Mention sent to admin notifications.', 'success');
+    } catch (error) {
+      console.error('Error sending mention:', error);
+      showNotification('Failed to send mention. Please try again.', 'error');
+    } finally {
+      setIsSendingMention(false);
+    }
+  };
+
   return (
     <div className="h-full overflow-y-auto p-8 bg-slate-900">
+      {notification && (
+        <div className="fixed top-4 right-4 z-50">
+          <div className={`rounded-lg border px-4 py-3 shadow-lg min-w-[280px] ${
+            notification.type === 'success'
+              ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-300'
+              : notification.type === 'error'
+                ? 'bg-red-500/10 border-red-500/50 text-red-300'
+                : 'bg-blue-500/10 border-blue-500/50 text-blue-300'
+          }`}>
+            {notification.message}
+          </div>
+        </div>
+      )}
+
       {/* Unsaved Changes Warning */}
       {hasUnsavedChanges && (
         <div className="mb-6 p-4 bg-amber-500/20 border border-amber-500/50 rounded-lg flex items-center justify-between">
@@ -366,6 +690,14 @@ export default function InstallerClientDetailPage() {
             <span className="text-amber-300 font-semibold">You have unsaved changes</span>
           </div>
           <span className="text-sm text-amber-200">Scroll down to save photos and report</span>
+        </div>
+      )}
+
+      {selectedProject && isProjectLocked && (
+        <div className="mb-6 p-4 bg-green-500/10 border border-green-500/40 rounded-lg">
+          <p className="text-green-300 font-semibold text-sm">
+            This project is finished and closed by admin. Editing is disabled until admin reopens it.
+          </p>
         </div>
       )}
       <div className="max-w-6xl mx-auto space-y-8 pb-12">
@@ -428,8 +760,138 @@ export default function InstallerClientDetailPage() {
           </div>
         </div>
 
-        {/* Project Needs */}
-        {client.needs && (
+        {/* Client Projects */}
+        <section className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
+          <div className="px-6 py-4 border-b border-slate-700">
+            <h3 className="text-sm font-bold text-slate-300 flex items-center gap-2">
+              <FolderOpen size={16} className="text-emerald-500" />
+              Projects ({clientQuotes.length})
+            </h3>
+          </div>
+
+          {clientQuotes.length > 0 ? (
+            <div className="divide-y divide-slate-700">
+              {clientQuotes.map((quote) => {
+                const isSelected = quote.id === selectedProjectId;
+                const isExpanded = expandedProjects.has(quote.id);
+                const isAssignedToCurrentInstaller = quote.allocatedInstallerId === currentUser?.nickname;
+
+                return (
+                  <div key={quote.id} className="bg-slate-800">
+                    <div className="flex items-center justify-between px-6 py-4 hover:bg-slate-700/40 transition-colors">
+                      <button
+                        onClick={() => toggleProjectExpanded(quote.id)}
+                        className="flex items-center gap-3 flex-1 text-left"
+                      >
+                        <div className={`p-1.5 rounded ${isExpanded ? 'bg-slate-700' : 'bg-slate-700/50'}`}>
+                          {isExpanded ? <ChevronUp size={16} className="text-white" /> : <ChevronDown size={16} className="text-white" />}
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <p className={`font-bold text-sm ${isSelected ? 'text-emerald-400' : 'text-white'}`}>
+                              {quote.title || 'Untitled Project'}
+                            </p>
+                            {isSelected && (
+                              <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 text-xs font-bold rounded flex items-center gap-1">
+                                <CheckCircle size={12} /> ACTIVE
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-slate-400 mt-1">
+                            Created: {new Date(quote.date).toLocaleDateString('ro-RO')} • Total: {quote.totalGross.toLocaleString('ro-RO', { style: 'currency', currency: 'RON' })}
+                          </p>
+                        </div>
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          const isUnloadingCurrent = quote.id === selectedProjectId;
+
+                          if (hasUnsavedChanges && !confirm('You have unsaved changes for the current project. Continue anyway?')) {
+                            return;
+                          }
+
+                          setSelectedProjectId(isUnloadingCurrent ? '' : quote.id);
+                          setExpandedProjects((prev) => {
+                            const next = new Set(prev);
+                            if (isUnloadingCurrent) {
+                              next.delete(quote.id);
+                            } else {
+                              next.add(quote.id);
+                            }
+                            return next;
+                          });
+                        }}
+                        className="px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 hover:border-emerald-500/50 rounded font-bold text-xs transition-colors"
+                      >
+                        {isSelected ? 'Unload' : 'Load'}
+                      </button>
+                    </div>
+
+                    {isExpanded && (
+                      <div className="px-6 py-4 bg-slate-900/50 border-t border-slate-700">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 text-xs mb-4">
+                          <div>
+                            <span className="text-slate-500">Customer:</span>
+                            <span className="ml-2 text-white font-semibold">{quote.customerName}</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-500">Items:</span>
+                            <span className="ml-2 text-white font-semibold">{quote.items.length}</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-500">Phase:</span>
+                            <span className="ml-2 text-white font-semibold capitalize">{quote.phase || 'planning'}</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-500">Installer:</span>
+                            <span className="ml-2 text-white font-semibold">{quote.allocatedInstallerId || '-'}</span>
+                          </div>
+                        </div>
+
+                        {isAssignedToCurrentInstaller && (
+                          <div className="mb-4">
+                            <span className="text-xs px-2 py-1 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                              Assigned to you
+                            </span>
+                          </div>
+                        )}
+
+                        <div className="bg-slate-800 rounded-lg p-3 border border-slate-600">
+                          <p className="text-xs font-bold text-slate-400 uppercase mb-2">Project Items:</p>
+                          <div className="space-y-1 text-xs">
+                            {quote.items.slice(0, 5).map((item, idx) => (
+                              <div key={idx} className="flex justify-between text-slate-300">
+                                <span className="truncate flex-1 pr-2">{item.description}</span>
+                                <span className="text-slate-400">{item.quantity} {item.unit}</span>
+                              </div>
+                            ))}
+                            {quote.items.length > 5 && (
+                              <p className="text-slate-500 italic">...and {quote.items.length - 5} more items</p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="text-center py-8 text-slate-500 bg-slate-900/40">
+              No projects found for this client.
+            </div>
+          )}
+        </section>
+
+        {!selectedProject && clientQuotes.length > 0 && (
+          <div className="bg-slate-800 border border-slate-700 rounded-lg p-6 text-slate-400">
+            Select and load a project to view equipment, photos, and report data.
+          </div>
+        )}
+
+        {/* Project-specific sections */}
+        {selectedProject && client.needs && (
           <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
             <h2 className="text-xl font-bold text-white mb-4">Project Specifications</h2>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -452,6 +914,57 @@ export default function InstallerClientDetailPage() {
                 </div>
               )}
             </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+              <div className="bg-slate-900/50 rounded p-4 border border-slate-700">
+                <p className="text-xs text-slate-500 mb-2">Valoare impamantare</p>
+                <input
+                  type="text"
+                  value={groundingValue}
+                  onChange={(e) => {
+                    setGroundingValue(e.target.value);
+                    setHasUnsavedChanges(true);
+                  }}
+                  placeholder="Introdu valoarea masurata"
+                  className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              </div>
+
+              <div className="bg-slate-900/50 rounded p-4 border border-slate-700">
+                <p className="text-xs text-slate-500 mb-2">Verificare cabluri de joasa tensiune</p>
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLowVoltageCableCheck('Corespunde');
+                      setHasUnsavedChanges(true);
+                    }}
+                    className={`px-4 py-2 rounded-lg font-semibold text-sm transition-colors ${
+                      lowVoltageCableCheck === 'Corespunde'
+                        ? 'bg-green-500 text-white'
+                        : 'bg-green-500/20 text-green-300 hover:bg-green-500/30'
+                    }`}
+                  >
+                    Corespunde
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLowVoltageCableCheck('Nu corespunde');
+                      setHasUnsavedChanges(true);
+                    }}
+                    className={`px-4 py-2 rounded-lg font-semibold text-sm transition-colors ${
+                      lowVoltageCableCheck === 'Nu corespunde'
+                        ? 'bg-red-500 text-white'
+                        : 'bg-red-500/20 text-red-300 hover:bg-red-500/30'
+                    }`}
+                  >
+                    Nu corespunde
+                  </button>
+                </div>
+              </div>
+            </div>
+
             {client.needs.technicalNotes && (
               <div className="mt-4 bg-slate-900/50 rounded p-4">
                 <p className="text-xs text-slate-500 mb-2">Technical Notes</p>
@@ -462,7 +975,7 @@ export default function InstallerClientDetailPage() {
         )}
 
         {/* Onsite Pictures */}
-        {client.needs?.siteImages && client.needs.siteImages.length > 0 && (
+        {selectedProject && client.needs?.siteImages && client.needs.siteImages.length > 0 && (
           <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-xl font-bold text-white flex items-center gap-2">
@@ -506,12 +1019,19 @@ export default function InstallerClientDetailPage() {
         )}
 
         {/* Equipment List with Quantity Tracking */}
-        {equipmentData.length > 0 && (
+        {selectedProject && equipmentData.length > 0 && (
           <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
             <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
               <Package size={24} className="text-emerald-500" />
               Equipment List & Usage Tracking
             </h2>
+
+            {missingRequiredSerialItems.length > 0 && (
+              <div className="mb-4 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-300">
+                Serial numbers are mandatory for inverter and battery. Add them before any save or finish action.
+              </div>
+            )}
+
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead className="border-b-2 border-slate-700">
@@ -521,12 +1041,16 @@ export default function InstallerClientDetailPage() {
                     <th className="text-center text-xs font-semibold text-slate-400 pb-3 px-4">Actually Used</th>
                     <th className="text-center text-xs font-semibold text-slate-400 pb-3 px-4">Difference</th>
                     <th className="text-right text-xs font-semibold text-slate-400 pb-3 px-4">Value Diff</th>
-                    <th className="text-center text-xs font-semibold text-slate-400 pb-3 px-4">Barcode</th>
+                    <th className="text-center text-xs font-semibold text-slate-400 pb-3 px-4">Serial / Barcode</th>
                   </tr>
                 </thead>
                 <tbody>
                   {equipmentData.map((item) => {
                     const { diff, valueDiff } = calculateVariance(item);
+                    const invItem = inventory.find(inv => inv.id === item.inventoryItemId);
+                    const serialRequired = isSerialRequiredItem(item);
+                    const canShowSerialControls = serialRequired || item.hasBarcode;
+                    const serialInputValue = (item.selectedSerialNumbers || []).join(', ');
                     return (
                       <tr key={item.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
                         <td className="py-3 px-4 text-slate-300">{item.description}</td>
@@ -537,10 +1061,10 @@ export default function InstallerClientDetailPage() {
                               type="number"
                               value={item.actuallyUsed || 0}
                               onChange={(e) => handleQuantityChange(item.id, Number(e.target.value))}
-                              disabled={false}
+                              disabled={isProjectLocked}
                               min="0"
                               step="1"
-                              className="w-24 bg-slate-900 border-2 border-slate-500 hover:border-emerald-500 rounded px-3 py-2 text-white text-center focus:border-emerald-400 focus:ring-2 focus:ring-emerald-500/50 outline-none transition-colors cursor-text"
+                              className="w-24 bg-slate-900 border-2 border-slate-500 hover:border-emerald-500 rounded px-3 py-2 text-white text-center focus:border-emerald-400 focus:ring-2 focus:ring-emerald-500/50 outline-none transition-colors cursor-text disabled:opacity-60"
                             />
                           </div>
                         </td>
@@ -555,14 +1079,35 @@ export default function InstallerClientDetailPage() {
                           {valueDiff > 0 ? '+' : ''}{valueDiff.toFixed(2)} RON
                         </td>
                         <td className="py-3 px-4 text-center">
-                          {item.hasBarcode ? (
-                            <button
-                              onClick={() => handleBarcodeScan(item.id)}
-                              className="p-2 bg-blue-500/20 hover:bg-blue-500/30 rounded-lg transition-colors text-blue-400"
-                              title="Scan barcode"
-                            >
-                              <Barcode size={18} />
-                            </button>
+                          {canShowSerialControls ? (
+                            <div className="flex flex-col gap-2 items-center">
+                              <input
+                                type="text"
+                                value={serialInputValue}
+                                onChange={(e) => updateSerialInput(item.id, e.target.value)}
+                                disabled={isProjectLocked}
+                                placeholder={serialRequired ? 'Serial number (required)' : 'Serial number (optional)'}
+                                className={`w-56 bg-slate-900 border rounded px-2 py-1.5 text-white text-xs focus:ring-2 focus:ring-emerald-500 outline-none ${
+                                  serialRequired && (!item.selectedSerialNumbers || item.selectedSerialNumbers.length === 0)
+                                    ? 'border-red-500/70'
+                                    : 'border-slate-600'
+                                } disabled:opacity-60`}
+                              />
+                              <button
+                                onClick={() => handleBarcodeScan(item.id)}
+                                disabled={isProjectLocked}
+                                className="p-2 bg-blue-500/20 hover:bg-blue-500/30 rounded-lg transition-colors text-blue-400"
+                                title="Open camera to scan serial"
+                              >
+                                <Camera size={18} />
+                              </button>
+                              {serialRequired && (
+                                <span className="text-[10px] text-red-300 font-semibold">MUST for inverter/battery</span>
+                              )}
+                              {!invItem?.barcode && (
+                                <span className="text-[10px] text-slate-500">No inventory barcode set. Manual SN is allowed.</span>
+                              )}
+                            </div>
                           ) : (
                             <span className="text-xs text-slate-500">No barcode</span>
                           )}
@@ -580,6 +1125,7 @@ export default function InstallerClientDetailPage() {
                 <h3 className="text-lg font-bold text-white">Extra Materials Used</h3>
                 <button
                   onClick={handleAddExtraItem}
+                  disabled={isProjectLocked}
                   className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors text-sm font-semibold"
                 >
                   <Plus size={16} />
@@ -597,6 +1143,7 @@ export default function InstallerClientDetailPage() {
                           placeholder="Item description"
                           value={item.description}
                           onChange={(e) => handleExtraItemChange(item.id, 'description', e.target.value)}
+                          disabled={isProjectLocked}
                           className="col-span-5 bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white focus:ring-2 focus:ring-emerald-500 outline-none"
                         />
                         <input
@@ -604,6 +1151,7 @@ export default function InstallerClientDetailPage() {
                           placeholder="Qty"
                           value={item.quantity}
                           onChange={(e) => handleExtraItemChange(item.id, 'quantity', Number(e.target.value))}
+                          disabled={isProjectLocked}
                           className="col-span-2 bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white focus:ring-2 focus:ring-emerald-500 outline-none"
                         />
                         <input
@@ -611,6 +1159,7 @@ export default function InstallerClientDetailPage() {
                           placeholder="Unit"
                           value={item.unit}
                           onChange={(e) => handleExtraItemChange(item.id, 'unit', e.target.value)}
+                          disabled={isProjectLocked}
                           className="col-span-2 bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white focus:ring-2 focus:ring-emerald-500 outline-none"
                         />
                         <input
@@ -618,10 +1167,12 @@ export default function InstallerClientDetailPage() {
                           placeholder="Price"
                           value={item.netPrice}
                           onChange={(e) => handleExtraItemChange(item.id, 'netPrice', Number(e.target.value))}
+                          disabled={isProjectLocked}
                           className="col-span-2 bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white focus:ring-2 focus:ring-emerald-500 outline-none"
                         />
                         <button
                           onClick={() => handleRemoveExtraItem(item.id)}
+                          disabled={isProjectLocked}
                           className="col-span-1 p-2 bg-red-500/20 hover:bg-red-500/30 rounded-lg transition-colors text-red-400"
                         >
                           <Minus size={18} />
@@ -639,7 +1190,8 @@ export default function InstallerClientDetailPage() {
             <div className="mt-6 flex justify-end">
               <button
                 onClick={handleSaveEquipment}
-                className="flex items-center gap-2 px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors font-semibold"
+                disabled={isProjectLocked}
+                className="flex items-center gap-2 px-6 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-600 disabled:opacity-60 text-white rounded-lg transition-colors font-semibold"
               >
                 <Save size={18} />
                 Save Equipment Data
@@ -649,7 +1201,7 @@ export default function InstallerClientDetailPage() {
         )}
 
         {/* Summary Section */}
-        {(equipmentData.length > 0 || extraItems.length > 0) && (() => {
+        {selectedProject && (equipmentData.length > 0 || extraItems.length > 0) && (() => {
           const summary = calculateSummary();
           return (
             <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
@@ -737,6 +1289,7 @@ export default function InstallerClientDetailPage() {
         })()}
 
         {/* Installation Pictures Section */}
+        {selectedProject && (
         <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
           <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
             <Camera size={24} className="text-emerald-500" />
@@ -754,6 +1307,7 @@ export default function InstallerClientDetailPage() {
             />
             <button
               type="button"
+              disabled={isProjectLocked}
               className="w-full px-4 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg transition-colors flex items-center justify-center gap-2 border-2 border-dashed border-emerald-500/50 hover:border-emerald-400"
               onClick={() => document.querySelector('input[type="file"][accept="image/*"]')?.dispatchEvent(new MouseEvent('click'))}
             >
@@ -777,6 +1331,7 @@ export default function InstallerClientDetailPage() {
                     </div>
                     <button
                       onClick={() => handleRemoveInstallationPhoto(photo.id)}
+                      disabled={isProjectLocked}
                       className="absolute top-1 right-1 p-1 bg-red-500/80 hover:bg-red-600 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"
                     >
                       <X size={16} />
@@ -804,6 +1359,7 @@ export default function InstallerClientDetailPage() {
                           placeholder="Add description for this photo..."
                           value={photo.description}
                           onChange={(e) => handleUpdatePhotoDescription(photo.id, e.target.value)}
+                          disabled={isProjectLocked}
                           className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
                         />
                         <p className="text-xs text-slate-500 mt-1">{new Date(photo.timestamp).toLocaleDateString('ro-RO')}</p>
@@ -820,8 +1376,10 @@ export default function InstallerClientDetailPage() {
             </div>
           )}
         </div>
+        )}
 
         {/* Final Report Section */}
+        {selectedProject && (
         <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
           <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
             <FileText size={24} className="text-emerald-500" />
@@ -839,15 +1397,17 @@ export default function InstallerClientDetailPage() {
 - Client sign-off"
             className="w-full h-48 bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 outline-none resize-none"
             onChange={(e) => {
+              if (isProjectLocked) return;
               setFinalReport(e.target.value);
               setHasUnsavedChanges(true);
             }}
+            disabled={isProjectLocked}
           />
 
           <div className="mt-4 flex gap-3">
             <button
               onClick={handleSaveInstallationData}
-              disabled={isSaving || !hasUnsavedChanges}
+              disabled={isSaving || isProjectLocked}
               className="flex-1 px-6 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-600 disabled:opacity-50 text-white rounded-lg transition-colors font-semibold flex items-center justify-center gap-2"
             >
               <Save size={18} />
@@ -871,9 +1431,43 @@ export default function InstallerClientDetailPage() {
               Export as PDF
             </button>
           </div>
+
+          <div className="mt-3">
+            <button
+              onClick={handleDeclareFinish}
+              disabled={isProjectLocked}
+              className="w-full px-6 py-3 bg-amber-500 hover:bg-amber-400 disabled:bg-slate-600 disabled:text-slate-300 text-slate-900 rounded-lg transition-colors font-bold"
+            >
+              Declare Finish
+            </button>
+          </div>
         </div>
+        )}
+
+        {selectedProject && isProjectLocked && (
+          <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
+            <h2 className="text-xl font-bold text-white mb-4">Mention For Admin</h2>
+            <p className="text-sm text-slate-400 mb-3">
+              Project is closed. If you need changes, leave a mention for admin.
+            </p>
+            <textarea
+              value={lockedProjectMention}
+              onChange={(e) => setLockedProjectMention(e.target.value)}
+              placeholder="Write your mention..."
+              className="w-full h-28 bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-amber-500 outline-none resize-none"
+            />
+            <button
+              onClick={handleSubmitLockedMention}
+              disabled={isSendingMention || !lockedProjectMention.trim()}
+              className="mt-3 px-5 py-2.5 bg-amber-500 hover:bg-amber-400 disabled:bg-slate-600 disabled:text-slate-300 text-slate-900 font-semibold rounded-lg transition-colors"
+            >
+              {isSendingMention ? 'Sending...' : 'Send Mention'}
+            </button>
+          </div>
+        )}
 
         {/* Documents Section */}
+        {selectedProject && (
         <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
           <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
             <FileText size={24} className="text-emerald-500" />
@@ -890,6 +1484,7 @@ export default function InstallerClientDetailPage() {
               <select
                 value={uploadType}
                 onChange={(e) => setUploadType(e.target.value as any)}
+                disabled={isProjectLocked}
                 className="bg-slate-900 border border-slate-600 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-emerald-500 outline-none"
               >
                 <option value="Other">Other</option>
@@ -903,19 +1498,20 @@ export default function InstallerClientDetailPage() {
                 placeholder="Description (optional)"
                 value={uploadDescription}
                 onChange={(e) => setUploadDescription(e.target.value)}
+                disabled={isProjectLocked}
                 className="bg-slate-900 border border-slate-600 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-emerald-500 outline-none"
               />
               <label className="relative">
                 <input
                   type="file"
                   onChange={handleFileUpload}
-                  disabled={uploading}
+                  disabled={uploading || isProjectLocked}
                   className="hidden"
                   accept="image/*,.pdf"
                 />
                 <button
                   type="button"
-                  disabled={uploading}
+                  disabled={uploading || isProjectLocked}
                   className="w-full px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-700 text-white font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
                   onClick={() => document.querySelector('input[type="file"]')?.dispatchEvent(new MouseEvent('click'))}
                 >
@@ -991,6 +1587,7 @@ export default function InstallerClientDetailPage() {
             </div>
           )}
         </div>
+        )}
 
         {/* Document Preview Modal */}
         {previewDoc && (
@@ -1039,6 +1636,28 @@ export default function InstallerClientDetailPage() {
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+        )}
+
+        {scannerOpen && (
+          <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+            <div className="bg-slate-800 border border-slate-700 rounded-lg w-full max-w-xl p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-white font-bold">Scan Serial Number</h3>
+                <button onClick={closeScanner} className="text-slate-400 hover:text-white">
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="bg-black rounded-lg overflow-hidden border border-slate-600">
+                <video ref={scannerVideoRef} className="w-full h-[320px] object-cover" muted playsInline />
+              </div>
+              {scannerError && (
+                <p className="text-xs text-red-300 mt-3">{scannerError}</p>
+              )}
+              <p className="text-xs text-slate-400 mt-3">
+                Point the camera at the barcode/QR. If scanning fails, enter the serial manually in the table.
+              </p>
             </div>
           </div>
         )}

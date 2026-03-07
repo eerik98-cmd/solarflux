@@ -291,6 +291,7 @@ export default function ClientNeedsPage() {
       connectionType: undefined,
       roofType: undefined, 
       roofTypeOther: undefined,
+      groundingStatus: undefined,
       inverterKw: undefined,
       panelKw: 0,
       panelCount: 0, 
@@ -714,8 +715,8 @@ export default function ClientNeedsPage() {
           </div>
         </section>
 
-        {/* Connection Type & Roof Type */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Connection Type, Roof Type & Grounding */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div className="bg-slate-800 p-6 rounded-xl border border-slate-700">
             <label className="text-sm font-bold text-slate-300 mb-3 block">Bransament</label>
             <div className="flex gap-4">
@@ -762,6 +763,24 @@ export default function ClientNeedsPage() {
                 className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500 mt-2" 
               />
             )}
+          </div>
+
+          <div className="bg-slate-800 p-6 rounded-xl border border-slate-700">
+            <label className="text-sm font-bold text-slate-300 mb-3 block">Impamantare</label>
+            <select
+              value={client.needs?.groundingStatus || ''}
+              onChange={(e) => handleNeedsChange('groundingStatus', e.target.value)}
+              className="w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none focus:ring-1 focus:ring-amber-500 appearance-none"
+            >
+              <option value="">-- Select --</option>
+              {[
+                'exista',
+                'nu exista, face Solar Invest',
+                'nu exista, face Beneficiarul'
+              ].map(opt => (
+                <option key={opt} value={opt}>{opt}</option>
+              ))}
+            </select>
           </div>
         </div>
 

@@ -59,7 +59,6 @@ export interface QuoteLineItem {
 export type ProjectPhase = 
   | 'planning' 
   | 'pending-assignment' 
-  | 'assigned-acknowledged' 
   | 'in-progress' 
   | 'pending-inspection' 
   | 'completed' 
@@ -82,6 +81,7 @@ export interface ConsumptionItem {
   quotedQty: number;
   consumedQty: number;
   actuallyUsed?: number; // For installer input
+  selectedSerialNumbers?: string[];
   unit: string;
   netPrice: number;
   isExtra?: boolean;
@@ -106,8 +106,15 @@ export interface Quote {
   // Installer Allocation & Status
   allocatedInstallerId?: string; // Installer nickname who is assigned
   allocatedAt?: Date;
-  acknowledgedAt?: Date; // When installer acknowledged the job
-  acknowledgedBy?: string; // Installer nickname who acknowledged
+  scheduledWorkDate?: Date; // Planned work day assigned by admin
+  scheduledBy?: string;
+  scheduledAt?: Date;
+  schedulingNotes?: string;
+
+  // Assignment acknowledgment workflow
+  assignmentAcknowledgedAt?: Date;
+  assignmentAcknowledgedBy?: string;
+  assignmentAcknowledgementNotes?: string;
   
   // Project Phase Tracking
   phase?: ProjectPhase; // Current phase of the project
@@ -128,6 +135,16 @@ export interface Quote {
   completionNotes?: string;
   installationPhotos?: InstallationPhoto[];
   materialVariances?: MaterialVariance[];
+  groundingValue?: string; // Installer measured grounding value
+  lowVoltageCableCheck?: 'Corespunde' | 'Nu corespunde';
+  installerDeclaredFinishedAt?: Date;
+  installerDeclaredFinishedBy?: string;
+  installerMentions?: Array<{
+    id: string;
+    message: string;
+    createdAt: Date;
+    createdBy: string;
+  }>;
 
   // Admin Completion & Approval
   adminApprovedAt?: Date; // When admin confirmed the completion
@@ -164,6 +181,22 @@ export interface Quote {
     date: Date;
     generatedBy?: string; // User who generated it
   }>;
+}
+
+export type InstallerReminderType = 'MISSING_DAILY_REPORT';
+
+export interface InstallerReminder {
+  id: string;
+  installerId: string;
+  installerNickname: string;
+  quoteId?: string;
+  quoteTitle?: string;
+  reminderType: InstallerReminderType;
+  reminderDate: Date; // Date for which reminder is generated
+  createdAt: Date;
+  createdBy: string;
+  message: string;
+  isReadByInstaller: boolean;
 }
 
 export interface AIResponse {
@@ -230,6 +263,9 @@ export interface ClientNeed {
   // Roof
   roofType?: 'Tigla ceramica' | 'Tabla' | 'Tigla metalica' | 'Tabla ondulata' | 'Tabla cutata' | 'Panou sandwich' | 'Other';
   roofTypeOther?: string; // Custom text when roofType is 'Other'
+
+  // Grounding
+  groundingStatus?: 'exista' | 'nu exista, face Solar Invest' | 'nu exista, face Beneficiarul';
   
   // Mounting Structure Selection
   selectedMountingSystem?: 'rail' | 'minirail'; // Selected mounting system option
@@ -420,4 +456,33 @@ export interface InstallerNotification {
   priority?: 'low' | 'medium' | 'high';
 }
 
-export type View = 'DASHBOARD' | 'INVENTORY' | 'AI_ASSISTANT' | 'QUOTE_GENERATOR' | 'CLIENTS' | 'SETTINGS' | 'FILE_MANAGER';
+export interface TeamMessage {
+  id: string;
+  senderRole: UserRole;
+  senderName: string;
+  message: string;
+  createdAt: Date;
+  readByAdmin: boolean;
+  readByInstaller: boolean;
+  quoteId?: string;
+}
+
+export interface TeamMessageThread {
+  id: string;
+  installerId: string;
+  installerNickname: string;
+  updatedAt: Date;
+  messages: TeamMessage[];
+}
+
+export interface InstallerReport {
+  id: string;
+  installerId: string;
+  createdByNickname: string;
+  date: Date;
+  type: 'daily' | 'incident' | 'time';
+  createdAt: Date;
+  data: Record<string, unknown>;
+}
+
+export type View = 'DASHBOARD' | 'INVENTORY' | 'AI_ASSISTANT' | 'QUOTE_GENERATOR' | 'CLIENTS' | 'SETTINGS' | 'FILE_MANAGER' | 'MANAGE_TEAM';

@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation';
 import { useData } from '@/contexts/DataContext';
 import {
   Hammer, Package, AlertCircle, User, Calendar, CheckCircle2, Camera, Download, Trash2,
-  X, ChevronLeft, ChevronRight, FileText, TrendingUp, TrendingDown, ChevronDown, ChevronUp, RotateCcw
+  X, ChevronLeft, ChevronRight, FileText, TrendingUp, TrendingDown, ChevronDown, ChevronUp, RotateCcw, MessageSquare
 } from 'lucide-react';
 import { InstallationPhoto } from '@/types';
 
@@ -332,7 +332,7 @@ export default function InstallationPage() {
                                 <th className="text-center py-3 px-4 text-slate-400">Quoted</th>
                                 <th className="text-center py-3 px-4 text-slate-400">Actually Used</th>
                                 <th className="text-center py-3 px-4 text-slate-400">Variance</th>
-                                <th className="text-center py-3 px-4 text-slate-400">Barcode</th>
+                                <th className="text-center py-3 px-4 text-slate-400">Barcode/SN</th>
                                 <th className="text-right py-3 px-4 text-slate-400">Unit Price</th>
                               </tr>
                             </thead>
@@ -355,6 +355,7 @@ export default function InstallationPage() {
                                     variance,
                                     netPrice: item.netPrice,
                                     barcode: consumed?.barcode,
+                                    serialNumbers: consumed?.selectedSerialNumbers || [],
                                     isExtra: false,
                                   };
                                 }) || [];
@@ -368,6 +369,7 @@ export default function InstallationPage() {
                                   variance: e.consumedQty || 0,
                                   netPrice: e.netPrice,
                                   barcode: null,
+                                  serialNumbers: [],
                                   isExtra: true,
                                 }));
 
@@ -396,8 +398,10 @@ export default function InstallationPage() {
                                       </div>
                                     </td>
                                     <td className="py-3 px-4 text-center text-slate-500 text-xs">
-                                      {item.barcode ? (
-                                        <span className="px-2 py-1 bg-blue-500/20 text-blue-300 rounded">{item.barcode}</span>
+                                      {item.serialNumbers && item.serialNumbers.length > 0 ? (
+                                        <span className="text-slate-300 break-all">{item.serialNumbers.join(', ')}</span>
+                                      ) : item.barcode ? (
+                                        <span className="text-slate-300 break-all">{item.barcode}</span>
                                       ) : (
                                         <span className="text-slate-600">-</span>
                                       )}
@@ -543,6 +547,37 @@ export default function InstallationPage() {
                               </div>
                             );
                           })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Installer Mentions */}
+                    {group.quotes.some(q => ((q as any).installerMentions || []).length > 0) && (
+                      <div>
+                        <h4 className="text-sm font-bold text-slate-300 uppercase mb-4 flex items-center gap-2">
+                          <MessageSquare size={14} className="text-blue-400" />
+                          Installer Mentions
+                        </h4>
+                        <div className="space-y-3">
+                          {group.quotes
+                            .flatMap(q => ((q as any).installerMentions || []).map((mention: any) => ({
+                              quoteTitle: q.title || 'Untitled Project',
+                              mention,
+                            })))
+                            .sort((a, b) => new Date(b.mention.createdAt).getTime() - new Date(a.mention.createdAt).getTime())
+                            .map((entry, idx) => (
+                              <div key={`${entry.mention.id || idx}`} className="bg-slate-900/50 rounded-lg p-4 border border-blue-500/30">
+                                <p className="text-sm text-white">
+                                  <span className="font-bold text-blue-300">{entry.mention.createdBy || 'Installer'}</span>{' '}
+                                  added a mention for{' '}
+                                  <span className="font-bold">{entry.quoteTitle}</span>
+                                </p>
+                                <p className="text-sm text-slate-300 mt-2 whitespace-pre-wrap">{entry.mention.message}</p>
+                                <p className="text-xs text-slate-500 mt-2">
+                                  {entry.mention.createdAt ? new Date(entry.mention.createdAt).toLocaleString('ro-RO') : ''}
+                                </p>
+                              </div>
+                            ))}
                         </div>
                       </div>
                     )}

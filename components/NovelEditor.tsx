@@ -4,6 +4,7 @@ import { useEditor, EditorContent } from '@tiptap/react';
 import { useDebouncedCallback } from 'use-debounce';
 import { useEffect } from 'react';
 import { defaultExtensions } from './novel-extensions';
+import RichTextToolbar from './RichTextToolbar';
 
 interface NovelEditorProps {
   content?: string;
@@ -14,6 +15,7 @@ interface NovelEditorProps {
   dark?: boolean;
   minHeight?: string;
   onEditorReady?: (editor: any) => void;
+  showToolbar?: boolean;
 }
 
 export default function NovelEditor({
@@ -25,6 +27,7 @@ export default function NovelEditor({
   dark = false,
   minHeight = '300px',
   onEditorReady,
+  showToolbar = false,
 }: NovelEditorProps) {
   
   const editor = useEditor({
@@ -64,8 +67,13 @@ export default function NovelEditor({
   const borderColor = dark ? 'border-slate-600' : 'border-gray-300';
 
   return (
-    <div className={`relative w-full border ${borderColor} ${bgColor} rounded-md`}>
-      <EditorContent editor={editor} />
+    <div className={`relative w-full border ${borderColor} ${bgColor} rounded-md flex flex-col`}>
+      {showToolbar && editable && (
+        <RichTextToolbar editor={editor} disabled={!editable} dark={dark} />
+      )}
+      <div className="flex-1 overflow-auto">
+        <EditorContent editor={editor} />
+      </div>
     </div>
   );
 }

@@ -34,6 +34,54 @@ const isDocxDoc = (doc: { url: string; name: string }) =>
     doc.name?.toLowerCase().endsWith('.docx')
   );
 
+const isHtmlDoc = (doc: { url: string; name: string }) =>
+  !!doc.url && (
+    doc.url.startsWith('data:text/html') ||
+    doc.name?.toLowerCase().endsWith('.html') ||
+    doc.name?.toLowerCase().endsWith('.htm')
+  );
+
+const HtmlPreview: React.FC<{ url: string; title: string }> = ({ url, title }) => {
+  const [html, setHtml] = React.useState<string>('');
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    const load = async () => {
+      try {
+        setLoading(true);
+        if (url.startsWith('data:text/html')) {
+          const base64 = url.split(',')[1];
+          setHtml(atob(base64));
+        } else {
+          const res = await fetch(url);
+          setHtml(await res.text());
+        }
+      } catch (e) {
+        setError('Failed to load document');
+      } finally {
+        setLoading(false);
+      }
+    };
+    load();
+  }, [url]);
+
+  if (loading) return (
+    <div className="flex items-center justify-center min-h-[400px]">
+      <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-amber-500" />
+    </div>
+  );
+  if (error) return <div className="text-red-400 p-4">{error}</div>;
+
+  return (
+    <div
+      className="bg-white rounded-lg p-8 mx-auto prose prose-slate max-w-4xl"
+      style={{ color: '#1e293b', fontSize: '14px', lineHeight: '1.6' }}
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+};
+
 const PdfPreview: React.FC<{ url: string; title: string }> = ({ url, title }) => {
   return (
     <div className="w-full h-full flex flex-col">
@@ -66,7 +114,32 @@ const DocxPreview: React.FC<{
   const [converting, setConverting] = useState(false);
   const [originalArrayBuffer, setOriginalArrayBuffer] = useState<ArrayBuffer | null>(null);
   const [editorContent, setEditorContent] = useState<string>('');
+  const [embeddedStyles, setEmbeddedStyles] = useState<string>('');
   const editorRef = useRef<Editor | null>(null);
+
+  const decodeQuotedPrintable = (input: string) => {
+    return input
+      .replace(/=\r?\n/g, '')
+      .replace(/=([A-Fa-f0-9]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+  };
+
+  const extractHtmlBody = (html: string) => {
+    const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+    return bodyMatch ? bodyMatch[1].trim() : html;
+  };
+
+  const extractStyleBlocks = (html: string) => {
+    const matches = html.match(/<style[^>]*>[\s\S]*?<\/style>/gi);
+    return matches ? matches.join('\n') : '';
+  };
+
+  const isRenderableHtml = (html: string) => {
+    const trimmed = (html || '').trim();
+    if (!trimmed) return false;
+    const textLength = trimmed.replace(/<[^>]*>/g, '').trim().length;
+    if (textLength > 0) return true;
+    return /<(img|table|svg|canvas|object|iframe|div|p|span|h[1-6]|ul|ol|li|br)\b/i.test(trimmed);
+  };
 
   useEffect(() => {
     const loadDocx = async () => {
@@ -86,15 +159,51 @@ const DocxPreview: React.FC<{
           arrayBuffer = bytes.buffer;
         } else {
           // Fetch remote URL and convert to ArrayBuffer
-          const response = await fetch(url);
+          const response = await fetch(url, { cache: 'no-store' });
           arrayBuffer = await response.arrayBuffer();
         }
 
         setOriginalArrayBuffer(arrayBuffer);
         const result = await mammoth.convertToHtml({ arrayBuffer });
-        const htmlResult = result.value;
-        setHtmlContent(htmlResult);
-        setEditorContent(htmlResult);
+        let htmlResult = (result.value || '').trim();
+        let previewHtml = htmlResult;
+        let editableHtml = extractHtmlBody(htmlResult);
+        let styleBlocks = extractStyleBlocks(htmlResult);
+
+        if (!isRenderableHtml(previewHtml)) {
+          try {
+            const PizZipModule = await import('pizzip');
+            const PizZip = (PizZipModule as any).default || PizZipModule;
+            const zip = new PizZip(arrayBuffer);
+            const zipFiles = Object.keys((zip as any).files || {});
+            const chunkPath = zipFiles.find(path => /^word\/afchunk.*\.(mht|mhtml)$/i.test(path));
+
+            if (chunkPath) {
+              const mhtRaw = zip.file(chunkPath)?.asText() || '';
+              const decoded = decodeQuotedPrintable(mhtRaw);
+              const htmlMatch = decoded.match(/<html[\s\S]*<\/html>/i) || mhtRaw.match(/<html[\s\S]*<\/html>/i);
+              if (htmlMatch?.[0]) {
+                const fallbackHtml = htmlMatch[0].trim();
+                styleBlocks = extractStyleBlocks(fallbackHtml);
+                editableHtml = extractHtmlBody(fallbackHtml).trim();
+                previewHtml = `${styleBlocks}${editableHtml}`.trim();
+              }
+            }
+          } catch (fallbackError) {
+            console.warn('DOCX fallback parse failed:', fallbackError);
+          }
+        }
+
+        if (!isRenderableHtml(previewHtml)) {
+          setError('Unable to render this DOCX preview. Please download to view.');
+          setHtmlContent('');
+          setEditorContent('');
+          setEmbeddedStyles('');
+        } else {
+          setEmbeddedStyles(styleBlocks);
+          setHtmlContent(previewHtml);
+          setEditorContent(editableHtml);
+        }
         
         if (result.messages.length > 0) {
           console.warn('Mammoth conversion messages:', result.messages);
@@ -108,7 +217,7 @@ const DocxPreview: React.FC<{
     };
 
     loadDocx();
-  }, [url]);
+  }, [url, name]);
 
   const handleEdit = () => {
     setEditMode(true);
@@ -116,47 +225,77 @@ const DocxPreview: React.FC<{
 
   const handleCancelEdit = () => {
     setEditMode(false);
-    setEditorContent(htmlContent); // Reset to original content
+    setEditorContent(extractHtmlBody(htmlContent)); // Reset to original content
   };
 
   const handleSave = async () => {
     if (!editorRef.current) return;
+    if (!originalArrayBuffer) {
+      alert('Original document not loaded yet. Please wait and try again.');
+      return;
+    }
 
     setSaving(true);
     try {
       const editedHtml = editorRef.current.getHTML();
-      
-      // For now, we'll alert the user that HTML to DOCX conversion requires a library
-      // In production, you'd want to use a server-side conversion service
-      alert('Note: The edited content is saved as HTML. For .docx format, please use "Convert to PDF" or download and manually convert.');
-      
-      // Create a simple HTML file as a backup
-      const htmlBlob = new Blob([`
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="UTF-8">
-          <style>
-            body { font-family: Arial, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; }
-          </style>
-        </head>
-        <body>
-          ${editedHtml}
-        </body>
-        </html>
-      `], { type: 'text/html' });
-      
+
+      const defaultStyleBlock = `<style>
+    body { font-family: Arial, sans-serif; font-size: 12pt; line-height: 1.6; max-width: 860px; margin: 40px auto; padding: 20px; }
+    table { border-collapse: collapse; width: 100%; }
+    td, th { border: 1px solid #ccc; padding: 6px 8px; }
+    img { max-width: 100%; }
+    h1 { font-size: 20pt; } h2 { font-size: 16pt; } h3 { font-size: 14pt; }
+  </style>`;
+
+      const fullHtml = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  ${embeddedStyles || defaultStyleBlock}
+</head>
+<body>${editedHtml}</body>
+</html>`;
+
+      // Encode both HTML and original DOCX so the server can merge them
+      const htmlBase64 = btoa(unescape(encodeURIComponent(fullHtml)));
+      const origBytes = new Uint8Array(originalArrayBuffer);
+      let binaryStr = '';
+      for (let i = 0; i < origBytes.length; i++) binaryStr += String.fromCharCode(origBytes[i]);
+      const originalDocxBase64 = btoa(binaryStr);
+
+      const response = await fetch('/api/convert-html-to-docx', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ htmlBase64, originalDocxBase64 }),
+      });
+
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error || 'Conversion failed');
+      }
+
+      const { docxBase64 } = await response.json();
+
+      // Decode base64 → real DOCX Blob
+      const decoded = atob(docxBase64);
+      const bytes = new Uint8Array(decoded.length);
+      for (let i = 0; i < decoded.length; i++) bytes[i] = decoded.charCodeAt(i);
+      const docxBlob = new Blob([bytes], {
+        type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      });
+
+      // Update local preview immediately so user sees changes without reload
+      setHtmlContent(`${embeddedStyles}${editedHtml}`.trim());
+      setEditorContent(editedHtml);
+      setEditMode(false);
+
+      // Pass the real DOCX blob upstream for Firebase upload
       if (onSave) {
-        // For now, we'll skip the actual save since HTML to DOCX conversion needs proper setup
-        setHtmlContent(editedHtml);
-        setEditorContent(editedHtml);
-        setEditMode(false);
-        
-        alert('Changes saved to preview. Note: Full DOCX save requires additional server-side conversion setup.');
+        onSave(docxBlob);
       }
     } catch (err) {
       console.error('Error saving document:', err);
-      alert('Failed to save document');
+      alert('Failed to save document. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -247,10 +386,10 @@ const DocxPreview: React.FC<{
   }
 
   return (
-    <div className="w-full h-full flex flex-col">
+    <div className="w-full flex flex-col min-h-full">
       {/* Toolbar for editing */}
       {allowEdit && (
-        <div className="flex-shrink-0 mb-4 flex items-center justify-between gap-2 p-3 bg-slate-800 rounded-lg border border-slate-700">
+        <div className="sticky top-0 z-10 flex-shrink-0 mb-4 flex items-center justify-between gap-2 p-3 bg-slate-800 rounded-lg border border-slate-700 shadow-md">
           <div className="flex items-center gap-2">
             {editMode ? (
               <span className="text-sm text-slate-300">✏️ Edit mode - Make your changes below</span>
@@ -320,9 +459,9 @@ const DocxPreview: React.FC<{
       )}
 
       {/* Content */}
-      <div className="flex-1 overflow-auto bg-slate-900 rounded-lg">
+      <div className="bg-slate-900 rounded-lg">
         {editMode ? (
-          <div className="h-full flex flex-col p-4">
+          <div className="flex flex-col p-4" style={{ minHeight: '60vh' }}>
             <div className="flex-1 bg-white rounded-lg shadow-lg overflow-hidden">
               <NovelEditor
                 content={editorContent}
@@ -331,6 +470,7 @@ const DocxPreview: React.FC<{
                 dark={false}
                 minHeight="500px"
                 editable={!saving}
+                showToolbar={true}
                 onEditorReady={(editor) => {
                   editorRef.current = editor;
                 }}
@@ -338,7 +478,7 @@ const DocxPreview: React.FC<{
             </div>
           </div>
         ) : (
-          <div className="h-full overflow-auto p-4">
+          <div className="p-4">
             <div 
               className="bg-white rounded-lg p-8 mx-auto prose prose-slate max-w-4xl"
               dangerouslySetInnerHTML={{ __html: htmlContent }}
@@ -377,25 +517,47 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
     window.document.body.removeChild(link);
   };
 
-  const handleSaveDocx = async (docxBlob: Blob) => {
+  // Extract the Firebase Storage path from a download URL so we can overwrite the exact file
+  const getStoragePathFromUrl = (url: string): string | null => {
+    try {
+      // Firebase download URL format:
+      // https://firebasestorage.googleapis.com/v0/b/{bucket}/o/{encodedPath}?alt=media&token=...
+      const match = url.match(/\/o\/([^?#]+)/);
+      return match ? decodeURIComponent(match[1]) : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const handleSaveDocx = async (blob: Blob) => {
     setSaving(true);
     try {
-      // Upload to Firebase Storage
       const { storage } = await import('@/services/firebase');
       const { ref, uploadBytes, getDownloadURL } = await import('firebase/storage');
-      
-      const timestamp = Date.now();
-      const fileName = doc.name.replace('.docx', `_edited_${timestamp}.docx`);
-      const storageRef = ref(storage, `documents/${doc.id || timestamp}/${fileName}`);
-      
-      await uploadBytes(storageRef, docxBlob);
+
+      // Always overwrite the same storage path so refresh shows the updated file
+      const existingPath = getStoragePathFromUrl(doc.url);
+      let storageRef;
+      if (existingPath) {
+        storageRef = ref(storage, existingPath);
+      } else {
+        // Fallback: build path from client/folder context
+        const fileName = doc.name.toLowerCase().endsWith('.docx') ? doc.name : `${doc.name}.docx`;
+        const storagePath = clientId && folder
+          ? `clients/${clientId}/${folder}/${fileName}`
+          : `documents/${doc.id || Date.now()}/${fileName}`;
+        storageRef = ref(storage, storagePath);
+      }
+
+      await uploadBytes(storageRef, blob, {
+        contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        cacheControl: 'no-cache, max-age=0'
+      });
       const downloadURL = await getDownloadURL(storageRef);
       
       if (onSave) {
         await onSave(downloadURL);
       }
-      
-      alert('Document saved successfully!');
     } catch (error) {
       console.error('Error uploading document:', error);
       alert('Failed to save document to server');
@@ -503,8 +665,12 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
             <div className="flex-1 overflow-hidden p-6">
               <PdfPreview url={doc.url} title={doc.name} />
             </div>
+          ) : isHtmlDoc(doc) ? (
+            <div className="flex-1 overflow-auto p-6">
+              <HtmlPreview url={doc.url} title={doc.name} />
+            </div>
           ) : isDocxDoc(doc) ? (
-            <div className="flex-1 overflow-hidden p-6">
+            <div className="flex-1 overflow-auto p-6">
               <DocxPreview 
                 url={doc.url} 
                 name={doc.name} 

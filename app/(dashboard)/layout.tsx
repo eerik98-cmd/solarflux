@@ -16,6 +16,7 @@ export default function DashboardLayout({
   const router = useRouter();
   const pathname = usePathname();
   const { logout, isAuthenticated, authLoading, currentUser } = useAuth();
+  const isInstallerPortalRoute = pathname === '/installer' || pathname.startsWith('/installer/');
   
   // Protect dashboard routes - redirect to login if not authenticated
   useEffect(() => {
@@ -26,10 +27,10 @@ export default function DashboardLayout({
 
   // Redirect installers to their dashboard
   useEffect(() => {
-    if (!authLoading && currentUser && currentUser.role === 'INSTALLER' && !pathname.startsWith('/installer')) {
+    if (!authLoading && currentUser && currentUser.role === 'INSTALLER' && !isInstallerPortalRoute) {
       router.replace('/installer');
     }
-  }, [authLoading, currentUser, pathname, router]);
+  }, [authLoading, currentUser, isInstallerPortalRoute, router]);
   
   // Show loading state while checking authentication
   if (authLoading) {
@@ -42,22 +43,26 @@ export default function DashboardLayout({
   }
 
   const pathToView: Record<string, View> = {
+    '/dashboard': 'DASHBOARD',
     '/clients': 'CLIENTS',
     '/inventory': 'INVENTORY',
     '/quote-generator': 'QUOTE_GENERATOR',
     '/file-manager': 'FILE_MANAGER',
     '/settings': 'SETTINGS',
+    '/installers': 'MANAGE_TEAM',
   };
 
   const currentView = pathToView[pathname] || 'CLIENTS';
 
   const handleChangeView = (view: View) => {
     const viewToPath: Partial<Record<View, string>> = {
+      'DASHBOARD': '/dashboard',
       'CLIENTS': '/clients',
       'INVENTORY': '/inventory',
       'QUOTE_GENERATOR': '/quote-generator',
       'FILE_MANAGER': '/file-manager',
       'SETTINGS': '/settings',
+      'MANAGE_TEAM': '/installers',
     };
     
     const path = viewToPath[view];
@@ -73,11 +78,13 @@ export default function DashboardLayout({
 
   return (
     <div className="flex h-screen bg-slate-900">
-      <Sidebar
-        currentView={currentView}
-        onChangeView={handleChangeView}
-        onLogout={handleLogout}
-      />
+      {!isInstallerPortalRoute && (
+        <Sidebar
+          currentView={currentView}
+          onChangeView={handleChangeView}
+          onLogout={handleLogout}
+        />
+      )}
       <main className="flex-1 overflow-auto">
         {children}
       </main>

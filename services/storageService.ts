@@ -22,6 +22,41 @@ const isBase64 = (str: string) => {
   return typeof str === 'string' && str.startsWith('data:');
 };
 
+// Convert Firestore Timestamp-like values to plain JS Date recursively.
+const normalizeFirestoreDates = (value: any): any => {
+  if (value === null || value === undefined) {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(normalizeFirestoreDates);
+  }
+
+  if (typeof value === 'object') {
+    const maybeTimestamp = value as { toDate?: () => Date; seconds?: number; nanoseconds?: number };
+
+    if (typeof maybeTimestamp.toDate === 'function') {
+      return maybeTimestamp.toDate();
+    }
+
+    if (
+      typeof maybeTimestamp.seconds === 'number' &&
+      typeof maybeTimestamp.nanoseconds === 'number' &&
+      Object.keys(value).every((key) => key === 'seconds' || key === 'nanoseconds')
+    ) {
+      return new Date(maybeTimestamp.seconds * 1000 + Math.floor(maybeTimestamp.nanoseconds / 1_000_000));
+    }
+
+    const normalized: Record<string, unknown> = {};
+    for (const [key, nestedValue] of Object.entries(value)) {
+      normalized[key] = normalizeFirestoreDates(nestedValue);
+    }
+    return normalized;
+  }
+
+  return value;
+};
+
 // Helper to upload a single Base64 string to Storage and return the URL
 const uploadBase64ToStorage = async (base64Data: string, path: string): Promise<string> => {
   if (!storage) return base64Data; // Fallback if storage not init
@@ -153,7 +188,7 @@ export const StorageService = {
     
     const q = query(collection(db, collectionName));
     return onSnapshot(q, (snapshot) => {
-      const items = snapshot.docs.map(doc => doc.data());
+      const items = snapshot.docs.map((doc) => normalizeFirestoreDates(doc.data()));
       callback(items);
     }, (error) => {
       console.error(`Error subscribing to ${collectionName}:`, error);

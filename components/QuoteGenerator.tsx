@@ -168,7 +168,7 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
       ...(quoteStatus === 'won' && allocatedInstallerId ? {
         allocatedInstallerId,
         allocatedAt: new Date(),
-        phase: 'assigned-acknowledged' as const
+        phase: 'in-progress' as const
       } : {})
     };
 

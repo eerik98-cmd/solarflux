@@ -1,17 +1,16 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
-import { Users, ArrowLeft, CheckCircle, Clock, AlertCircle, TrendingUp, BarChart3, Calendar, Briefcase, DollarSign, TrendingDown } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowLeft, CheckCircle, Clock, AlertCircle, BarChart3, Calendar, Briefcase, DollarSign, TrendingDown, MessageSquare, Send, Activity, CalendarDays } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useData } from '@/contexts/DataContext';
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
-import { Quote, ProjectPhase } from '@/types';
+import { InstallerReport, Quote, ProjectPhase, TeamMessageThread } from '@/types';
 
 const phaseLabels: Record<ProjectPhase | '', string> = {
   'planning': 'Planning',
   'pending-assignment': 'Pending Assignment',
-  'assigned-acknowledged': 'Acknowledged',
   'in-progress': 'In Progress',
   'pending-inspection': 'Pending Inspection',
   'completed': 'Completed',
@@ -22,7 +21,6 @@ const phaseLabels: Record<ProjectPhase | '', string> = {
 const phaseColors: Record<ProjectPhase | '', string> = {
   'planning': 'bg-slate-500/20 text-slate-300',
   'pending-assignment': 'bg-yellow-500/20 text-yellow-300',
-  'assigned-acknowledged': 'bg-blue-500/20 text-blue-300',
   'in-progress': 'bg-purple-500/20 text-purple-300',
   'pending-inspection': 'bg-orange-500/20 text-orange-300',
   'completed': 'bg-green-500/20 text-green-300',
@@ -30,13 +28,27 @@ const phaseColors: Record<ProjectPhase | '', string> = {
   '': 'bg-slate-700/20 text-slate-400'
 };
 
+const getTimelineDayLabel = (value: Date) => {
+  const day = new Date(value);
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+
+  if (day.toDateString() === today.toDateString()) return 'Today';
+  if (day.toDateString() === yesterday.toDateString()) return 'Yesterday';
+  return day.toLocaleDateString('ro-RO', { year: 'numeric', month: 'short', day: 'numeric' });
+};
+
 export default function InstallerDetailPage() {
   const { currentUser } = useAuth();
-  const { savedQuotes, users, clients } = useData();
+  const { savedQuotes, users, clients, teamMessageThreads, installerReports, saveTeamMessageThread } = useData();
   const router = useRouter();
   const params = useParams();
   const installerId = params?.id as string;
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
+  const [adminMessage, setAdminMessage] = useState('');
+  const [isSendingMessage, setIsSendingMessage] = useState(false);
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
 
   // Find installer first (move before early return)
   const installer = users?.find(u => u.id === installerId);
@@ -49,10 +61,6 @@ export default function InstallerDetailPage() {
 
   const activeProjects = useMemo(() => allProjects.filter(q => !q.completedAt), [allProjects]);
   const completedProjects = useMemo(() => allProjects.filter(q => q.completedAt), [allProjects]);
-  const pendingAcknowledgement = useMemo(
-    () => allProjects.filter(q => q.allocatedInstallerId && !q.acknowledgedAt),
-    [allProjects]
-  );
 
   // Calculate performance metrics
   const metrics = useMemo(() => {
@@ -83,6 +91,140 @@ export default function InstallerDetailPage() {
     };
   }, [allProjects, completedProjects]);
 
+  const messageThread = useMemo<TeamMessageThread | null>(() => {
+    if (!installer) return null;
+    return (teamMessageThreads || []).find((thread) => thread.installerId === installer.id) || null;
+  }, [teamMessageThreads, installer]);
+
+  const timelineMessages = useMemo(() => {
+    return [...(messageThread?.messages || [])]
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  }, [messageThread]);
+
+  useEffect(() => {
+    if (!chatScrollRef.current) return;
+    chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+  }, [timelineMessages]);
+
+  const installerOwnReports = useMemo<InstallerReport[]>(() => {
+    if (!installer) return [];
+    return (installerReports || []).filter(
+      (report) => report.installerId === installer.id || report.createdByNickname === installer.nickname
+    );
+  }, [installerReports, installer]);
+
+  const installerActivity = useMemo(() => {
+    if (!installer) return [];
+
+    const projectEvents = allProjects.flatMap((project) => {
+      const events: Array<{ id: string; createdAt: Date; title: string; detail: string; kind: 'accepted' | 'declared' }> = [];
+
+      const acceptancePhase = (project.phaseHistory || []).find(
+        (phase) => phase.phase === 'in-progress' && phase.changedBy?.toLowerCase().includes(installer.nickname.toLowerCase())
+      );
+
+      const acceptanceTimestamp = acceptancePhase?.timestamp
+        || (project.consumptionDataUpdatedBy === installer.nickname ? project.consumptionDataUpdatedAt : undefined)
+        || (project.installerDeclaredFinishedBy === installer.nickname ? project.installerDeclaredFinishedAt : undefined);
+
+      if (acceptanceTimestamp) {
+        events.push({
+          id: `accepted-${project.id}`,
+          createdAt: new Date(acceptanceTimestamp),
+          title: 'Accepted a new project',
+          detail: project.title || project.customerName,
+          kind: 'accepted',
+        });
+      }
+
+      if (project.installerDeclaredFinishedBy === installer.nickname && project.installerDeclaredFinishedAt) {
+        const confirmation = project.adminApprovedAt
+          ? `Admin confirmed on ${new Date(project.adminApprovedAt).toLocaleDateString('ro-RO')}`
+          : 'Waiting for admin confirmation';
+
+        events.push({
+          id: `declared-${project.id}`,
+          createdAt: new Date(project.installerDeclaredFinishedAt),
+          title: 'Declared project as finished',
+          detail: `${project.title || project.customerName} · ${confirmation}`,
+          kind: 'declared',
+        });
+      }
+
+      return events;
+    });
+
+    const reportEvents = installerOwnReports.map((report) => ({
+      id: `report-${report.id}`,
+      createdAt: new Date(report.createdAt),
+      title: `Made a report for day (${report.type})`,
+      detail: new Date(report.date).toLocaleDateString('ro-RO'),
+      kind: 'report' as const,
+    }));
+
+    return [...projectEvents, ...reportEvents].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }, [allProjects, installerOwnReports, installer]);
+
+  useEffect(() => {
+    if (!messageThread || !currentUser || currentUser.role !== 'SUPER_ADMIN') return;
+
+    const hasUnreadInstallerMessages = messageThread.messages.some(
+      (message) => message.senderRole === 'INSTALLER' && !message.readByAdmin
+    );
+    if (!hasUnreadInstallerMessages) return;
+
+    const updatedThread: TeamMessageThread = {
+      ...messageThread,
+      messages: messageThread.messages.map((message) =>
+        message.senderRole === 'INSTALLER' ? { ...message, readByAdmin: true } : message
+      ),
+      updatedAt: new Date(),
+    };
+
+    saveTeamMessageThread(updatedThread).catch((error) => {
+      console.error('Failed to mark installer messages as read:', error);
+    });
+  }, [messageThread, currentUser, saveTeamMessageThread]);
+
+  const handleSendAdminMessage = async () => {
+    if (!installer) return;
+    const content = adminMessage.trim();
+    if (!content) return;
+
+    setIsSendingMessage(true);
+    try {
+      const nextMessage = {
+        id: `${Date.now()}`,
+        senderRole: 'SUPER_ADMIN' as const,
+        senderName: currentUser?.nickname || currentUser?.username || 'Admin',
+        message: content,
+        createdAt: new Date(),
+        readByAdmin: true,
+        readByInstaller: false,
+      };
+
+      const baseThread: TeamMessageThread = messageThread || {
+        id: `team-${installer.id}`,
+        installerId: installer.id,
+        installerNickname: installer.nickname,
+        updatedAt: new Date(),
+        messages: [],
+      };
+
+      await saveTeamMessageThread({
+        ...baseThread,
+        installerNickname: installer.nickname,
+        updatedAt: new Date(),
+        messages: [nextMessage, ...baseThread.messages],
+      });
+      setAdminMessage('');
+    } catch (error) {
+      console.error('Failed to send message to installer:', error);
+    } finally {
+      setIsSendingMessage(false);
+    }
+  };
+
   if (!currentUser || currentUser.role !== 'SUPER_ADMIN') {
     return (
       <div className="h-full flex items-center justify-center bg-slate-900">
@@ -101,7 +243,7 @@ export default function InstallerDetailPage() {
         <div className="text-center">
           <AlertCircle size={48} className="text-red-500 mx-auto mb-4" />
           <p className="text-white font-bold">Installer Not Found</p>
-          <Link href="/dashboard/installers">
+          <Link href="/installers">
             <button className="mt-4 px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold transition-colors">
               Back to Installers
             </button>
@@ -117,11 +259,10 @@ export default function InstallerDetailPage() {
     return clients?.find(c => c.id === clientId)?.name || 'Unknown Client';
   };
 
-  const renderProjectCard = (project: Quote, index: number) => {
+  const renderProjectCard = (project: Quote) => {
     const isExpanded = expandedProjectId === project.id;
     const clientName = getClientName(project.clientId);
     const isCompleted = !!project.completedAt;
-    const isPendingAck = !project.acknowledgedAt && project.allocatedInstallerId;
     const variance = project.materialVariances?.reduce((sum, mv) => sum + mv.variance, 0) || 0;
 
     return (
@@ -174,21 +315,10 @@ export default function InstallerDetailPage() {
 
           {/* Status Badges */}
           <div className="flex flex-wrap gap-2 mt-4">
-            {isPendingAck && (
-              <span className="text-xs bg-red-500/20 text-red-400 px-2 py-1 rounded flex items-center gap-1">
-                <AlertCircle size={12} />
-                Pending Acknowledgment
-              </span>
-            )}
             {isCompleted && (
               <span className="text-xs bg-green-500/20 text-green-400 px-2 py-1 rounded flex items-center gap-1">
                 <CheckCircle size={12} />
                 Completed on {new Date(project.completedAt!).toLocaleDateString('ro-RO')}
-              </span>
-            )}
-            {project.acknowledgedAt && !isCompleted && (
-              <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-1 rounded">
-                Acknowledged on {new Date(project.acknowledgedAt).toLocaleDateString('ro-RO')}
               </span>
             )}
           </div>
@@ -264,7 +394,7 @@ export default function InstallerDetailPage() {
 
             {/* Quick Actions */}
             <div className="flex gap-2 pt-4 border-t border-slate-700">
-              <Link href={`/dashboard/clients/${project.clientId}`}>
+              <Link href={`/clients/${project.clientId}`}>
                 <button className="flex-1 px-3 py-2 bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold rounded transition-colors">
                   View Client
                 </button>
@@ -283,7 +413,8 @@ export default function InstallerDetailPage() {
     <div className="h-full overflow-y-auto p-8 bg-slate-900">
       <div className="max-w-6xl mx-auto space-y-8 pb-12">
         {/* Header */}
-        <div className="flex items-center gap-4 mb-8">
+        <div className="flex items-start justify-between gap-4 mb-8">
+          <div className="flex items-center gap-4">
           <button
             onClick={() => router.back()}
             className="p-2 hover:bg-slate-800 rounded-lg transition-colors text-slate-400 hover:text-white"
@@ -297,6 +428,14 @@ export default function InstallerDetailPage() {
             </h1>
             <p className="text-slate-400">@{installer.username}</p>
           </div>
+          </div>
+
+          <Link href={`/installers/${installer.id}/reports`}>
+            <button className="inline-flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition-colors">
+              <CalendarDays size={16} />
+              Reports
+            </button>
+          </Link>
         </div>
 
         {/* Performance Metrics */}
@@ -339,18 +478,119 @@ export default function InstallerDetailPage() {
           </div>
         </div>
 
-        {/* Pending Acknowledgments Alert */}
-        {pendingAcknowledgement.length > 0 && (
-          <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 flex items-start gap-3">
-            <AlertCircle size={20} className="text-red-400 mt-0.5 flex-shrink-0" />
-            <div>
-              <p className="font-semibold text-red-400">Pending Acknowledgments</p>
-              <p className="text-xs text-red-300">
-                {pendingAcknowledgement.length} project(s) awaiting installer acknowledgment
-              </p>
+        <div className="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden">
+          <div className="p-6 border-b border-slate-700">
+            <h2 className="text-xl font-bold text-white mb-2 flex items-center gap-2">
+              <MessageSquare size={20} className="text-emerald-500" />
+              Message
+            </h2>
+            <p className="text-sm text-slate-400">
+              Leave a direct message for {installer.nickname}. They will see it under Notifications on their installer dashboard.
+            </p>
+          </div>
+
+          <div className="h-[62vh] flex flex-col">
+            <div ref={chatScrollRef} className="flex-1 overflow-y-auto p-5 space-y-3 bg-slate-900/40">
+              {timelineMessages.length === 0 ? (
+                <p className="text-sm text-slate-500">No messages yet.</p>
+              ) : (
+                timelineMessages.map((message, index) => {
+                  const currentDay = new Date(message.createdAt).toDateString();
+                  const previousDay = index > 0 ? new Date(timelineMessages[index - 1].createdAt).toDateString() : null;
+                  const showDaySeparator = currentDay !== previousDay;
+
+                  return (
+                    <React.Fragment key={message.id}>
+                      {showDaySeparator && (
+                        <div className="flex justify-center">
+                          <span className="text-[11px] px-3 py-1 rounded-full bg-slate-700/70 text-slate-300 border border-slate-600">
+                            {getTimelineDayLabel(new Date(message.createdAt))}
+                          </span>
+                        </div>
+                      )}
+                      <div className={`flex ${message.senderRole === 'SUPER_ADMIN' ? 'justify-end' : 'justify-start'}`}>
+                        <div
+                          className={`max-w-[82%] rounded-2xl px-3 py-2 border ${
+                            message.senderRole === 'SUPER_ADMIN'
+                              ? 'bg-sky-200 border-sky-300 text-slate-900 rounded-br-sm'
+                              : 'bg-slate-900 border-slate-700 text-slate-100 rounded-bl-sm'
+                          }`}
+                        >
+                          <p className="text-sm whitespace-pre-wrap">{message.message}</p>
+                          <div className="mt-1.5 flex items-center justify-end gap-2">
+                            <span className="text-[11px] opacity-80">{message.senderName}</span>
+                            <span className="text-[11px] opacity-70">
+                              {new Date(message.createdAt).toLocaleTimeString('ro-RO', {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </React.Fragment>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="border-t border-slate-700 p-4 bg-slate-800/80">
+              <div className="flex gap-3 items-end">
+                <textarea
+                  value={adminMessage}
+                  onChange={(event) => setAdminMessage(event.target.value)}
+                  placeholder="Write an instruction, reminder, or question..."
+                  className="flex-1 h-24 bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 outline-none resize-none"
+                />
+
+                <button
+                  onClick={handleSendAdminMessage}
+                  disabled={isSendingMessage || !adminMessage.trim()}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-700 disabled:text-slate-400 text-white rounded-lg font-semibold transition-colors"
+                >
+                  <Send size={16} />
+                  {isSendingMessage ? 'Sending...' : 'Send'}
+                </button>
+              </div>
             </div>
           </div>
-        )}
+        </div>
+
+        <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
+            <h2 className="text-xl font-bold text-white mb-3 flex items-center gap-2">
+              <Activity size={20} className="text-blue-500" />
+              Activity
+            </h2>
+            <p className="text-sm text-slate-400 mb-4">
+              Timeline of installer actions. More activity types can be added later.
+            </p>
+
+            <div className="space-y-3 max-h-[430px] overflow-y-auto pr-1">
+              {installerActivity.length === 0 ? (
+                <div className="bg-slate-900/50 border border-slate-700 rounded-lg p-4">
+                  <p className="text-sm text-slate-500">No activity yet for this installer.</p>
+                </div>
+              ) : (
+                installerActivity.map((activityItem) => (
+                  <div key={activityItem.id} className="bg-slate-900/60 border border-slate-700 rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-2 gap-3">
+                      <p className="text-sm font-semibold text-white truncate">{activityItem.title}</p>
+                      <span className="text-xs text-slate-500 whitespace-nowrap">
+                        {new Date(activityItem.createdAt).toLocaleString('ro-RO', {
+                          year: 'numeric',
+                          month: 'short',
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </span>
+                    </div>
+                    <p className="text-sm text-slate-300 whitespace-pre-wrap">{activityItem.detail}</p>
+                  </div>
+                ))
+              )}
+            </div>
+        </div>
 
         {/* Active Projects */}
         {activeProjects.length > 0 && (
@@ -360,7 +600,7 @@ export default function InstallerDetailPage() {
               Active Projects ({activeProjects.length})
             </h2>
             <div className="space-y-4">
-              {activeProjects.map((project, idx) => renderProjectCard(project, idx))}
+              {activeProjects.map((project) => renderProjectCard(project))}
             </div>
           </div>
         )}
@@ -373,7 +613,7 @@ export default function InstallerDetailPage() {
               Completed Projects ({completedProjects.length})
             </h2>
             <div className="space-y-4">
-              {completedProjects.map((project, idx) => renderProjectCard(project, idx))}
+              {completedProjects.map((project) => renderProjectCard(project))}
             </div>
           </div>
         )}

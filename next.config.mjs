@@ -2,6 +2,13 @@
 const nextConfig = {
   reactStrictMode: true,
   transpilePackages: ['lucide-react', 'recharts'],
+  async rewrites() {
+    return [
+      // Keep legacy /dashboard URLs working while routes live in a route group.
+      { source: '/dashboard', destination: '/' },
+      { source: '/dashboard/:path*', destination: '/:path*' },
+    ];
+  },
   webpack: (config, { isServer }) => {
     config.resolve.alias.canvas = false;
     config.resolve.alias.encoding = false;

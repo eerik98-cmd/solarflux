@@ -1,15 +1,41 @@
 'use client';
 
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useData } from '@/contexts/DataContext';
-import { Bell, AlertCircle, CheckCircle, Clock, Briefcase, TrendingUp } from 'lucide-react';
+import { Bell, CheckCircle, Clock, Briefcase, TrendingUp, MessageSquare, Send } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import { Quote, TeamMessageThread } from '@/types';
+
+const getTimelineDayLabel = (value: Date) => {
+  const day = new Date(value);
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+
+  if (day.toDateString() === today.toDateString()) return 'Today';
+  if (day.toDateString() === yesterday.toDateString()) return 'Yesterday';
+  return day.toLocaleDateString('ro-RO', { year: 'numeric', month: 'short', day: 'numeric' });
+};
 
 export default function InstallerDashboard() {
   const { currentUser } = useAuth();
-  const { savedQuotes } = useData();
+  const {
+    savedQuotes,
+    teamMessageThreads,
+    saveTeamMessageThread,
+    installerReports,
+    installerReminders,
+    saveInstallerReminder,
+    updateQuote,
+    markInstallerReminderRead,
+  } = useData();
   const router = useRouter();
+  const [replyMessage, setReplyMessage] = useState('');
+  const [isSendingReply, setIsSendingReply] = useState(false);
+  const [ackNotesByProjectId, setAckNotesByProjectId] = useState<Record<string, string>>({});
+  const [ackLoadingProjectId, setAckLoadingProjectId] = useState<string | null>(null);
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
 
   // Get projects assigned to current installer
   const myProjects = useMemo(() => {
@@ -22,14 +48,24 @@ export default function InstallerDashboard() {
     return myProjects.filter(p => p.phase !== 'completed' && p.phase !== 'archived');
   }, [myProjects]);
 
-  // Pending acknowledgment
-  const pendingAcknowledgment = useMemo(() => {
-    return myProjects.filter(p => !p.acknowledgedAt && p.allocatedInstallerId === currentUser?.nickname);
-  }, [myProjects, currentUser]);
-
   // In progress projects
   const inProgressProjects = useMemo(() => {
     return myProjects.filter(p => p.phase === 'in-progress');
+  }, [myProjects]);
+
+  const pendingAcknowledgements = useMemo(() => {
+    return myProjects
+      .filter((project) => {
+        if (project.phase === 'completed' || project.phase === 'archived') return false;
+        if (!project.scheduledWorkDate) return false;
+        return !project.assignmentAcknowledgedAt;
+      })
+      .sort((a, b) => new Date(a.scheduledWorkDate as Date).getTime() - new Date(b.scheduledWorkDate as Date).getTime());
+  }, [myProjects]);
+
+  // Completed this month
+  const completedProjects = useMemo(() => {
+    return myProjects.filter(p => p.phase === 'completed' || p.phase === 'archived' || !!p.adminApprovedAt);
   }, [myProjects]);
 
   // Completed this month
@@ -38,23 +74,107 @@ export default function InstallerDashboard() {
     const currentMonth = now.getMonth();
     const currentYear = now.getFullYear();
     
-    return myProjects.filter(p => {
-      if (!p.completedAt) return false;
-      const completedDate = new Date(p.completedAt);
+    return completedProjects.filter(p => {
+      const completionDateSource = p.adminApprovedAt || p.completedAt;
+      if (!completionDateSource) return false;
+      const completedDate = new Date(completionDateSource);
       return completedDate.getMonth() === currentMonth && completedDate.getFullYear() === currentYear;
     });
-  }, [myProjects]);
+  }, [completedProjects]);
 
-  // Mock notifications (in production, these would come from database)
+  const myThread = useMemo<TeamMessageThread | null>(() => {
+    if (!currentUser) return null;
+    return (
+      teamMessageThreads.find(
+        (thread) => thread.installerId === currentUser.id || thread.installerNickname === currentUser.nickname
+      ) || null
+    );
+  }, [teamMessageThreads, currentUser]);
+
+  const unreadAdminMessages = useMemo(() => {
+    return (myThread?.messages || []).filter(
+      (message) => message.senderRole === 'SUPER_ADMIN' && !message.readByInstaller
+    ).length;
+  }, [myThread]);
+
+  const timelineMessages = useMemo(() => {
+    return [...(myThread?.messages || [])]
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  }, [myThread]);
+
+  useEffect(() => {
+    if (!chatScrollRef.current) return;
+    chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+  }, [timelineMessages]);
+
+  useEffect(() => {
+    if (!myThread || !currentUser) return;
+    if (unreadAdminMessages === 0) return;
+
+    const updatedThread: TeamMessageThread = {
+      ...myThread,
+      messages: myThread.messages.map((message) =>
+        message.senderRole === 'SUPER_ADMIN' ? { ...message, readByInstaller: true } : message
+      ),
+      updatedAt: new Date(),
+    };
+
+    saveTeamMessageThread(updatedThread).catch((error) => {
+      console.error('Failed to mark admin messages as read:', error);
+    });
+  }, [myThread, unreadAdminMessages, currentUser, saveTeamMessageThread]);
+
+  const handleReplyToAdmin = async () => {
+    if (!currentUser) return;
+    const content = replyMessage.trim();
+    if (!content) return;
+
+    setIsSendingReply(true);
+    try {
+      const nextMessage = {
+        id: `${Date.now()}`,
+        senderRole: 'INSTALLER' as const,
+        senderName: currentUser.nickname,
+        message: content,
+        createdAt: new Date(),
+        readByAdmin: false,
+        readByInstaller: true,
+      };
+
+      const baseThread: TeamMessageThread = myThread || {
+        id: `team-${currentUser.id}`,
+        installerId: currentUser.id,
+        installerNickname: currentUser.nickname,
+        updatedAt: new Date(),
+        messages: [],
+      };
+
+      await saveTeamMessageThread({
+        ...baseThread,
+        installerNickname: currentUser.nickname,
+        updatedAt: new Date(),
+        messages: [nextMessage, ...baseThread.messages],
+      });
+
+      setReplyMessage('');
+    } catch (error) {
+      console.error('Failed to send reply to admin:', error);
+    } finally {
+      setIsSendingReply(false);
+    }
+  };
+
+  // Project notifications
   const notifications = useMemo(() => {
     const notifs: Array<{
       id: string;
-      type: 'PROJECT_ASSIGNED' | 'ADMIN_MESSAGE' | 'PROJECT_UPDATE';
+      type: 'PROJECT_ASSIGNED' | 'REMINDER';
       title: string;
       message: string;
       createdAt: Date;
       priority: 'low' | 'medium' | 'high';
       projectId?: string;
+      clientId?: string;
     }> = [];
 
     // Add notification for each unfinished project
@@ -67,19 +187,26 @@ export default function InstallerDashboard() {
         createdAt: project.allocatedAt || new Date(),
         priority: project.phase === 'in-progress' ? 'high' : 'medium',
         projectId: project.id,
+        clientId: project.clientId,
       });
     });
 
-    // Add notification for pending acknowledgments
-    pendingAcknowledgment.forEach(project => {
+    const myReminders = (installerReminders || []).filter(
+      (reminder) =>
+        !!currentUser &&
+        (reminder.installerId === currentUser.id || reminder.installerNickname === currentUser.nickname) &&
+        !reminder.isReadByInstaller
+    );
+
+    myReminders.forEach((reminder) => {
       notifs.push({
-        id: `ack-${project.id}`,
-        type: 'PROJECT_UPDATE',
-        title: 'Acknowledgment Required',
-        message: `Please acknowledge project: ${project.title || project.customerName}`,
-        createdAt: project.allocatedAt || new Date(),
+        id: `reminder-${reminder.id}`,
+        type: 'REMINDER',
+        title: 'Daily Report Reminder',
+        message: reminder.message,
+        createdAt: new Date(reminder.createdAt),
         priority: 'high',
-        projectId: project.id,
+        projectId: reminder.quoteId,
       });
     });
 
@@ -91,16 +218,98 @@ export default function InstallerDashboard() {
       }
       return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
     });
-  }, [unfinishedProjects, pendingAcknowledgment]);
+  }, [unfinishedProjects, installerReminders, currentUser]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+
+    const now = new Date();
+    const currentHour = now.getHours();
+    if (currentHour < 20) return;
+
+    const todayKey = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toDateString();
+
+    const missingReportProjects = myProjects.filter((project) => {
+      if (project.phase === 'completed' || project.phase === 'archived') return false;
+
+      const scheduledDate = project.scheduledWorkDate ? new Date(project.scheduledWorkDate) : null;
+      const isScheduledForToday = scheduledDate ? scheduledDate.toDateString() === todayKey : false;
+      const isActiveToday = project.phase === 'in-progress' || isScheduledForToday;
+      if (!isActiveToday) return false;
+
+      const hasDailyReportToday = (installerReports || []).some((report) => {
+        if (report.type !== 'daily') return false;
+        const isMine = report.installerId === currentUser.id || report.createdByNickname === currentUser.nickname;
+        if (!isMine) return false;
+        return new Date(report.date).toDateString() === todayKey;
+      });
+
+      return !hasDailyReportToday;
+    });
+
+    missingReportProjects.forEach((project) => {
+      const reminderId = `${currentUser.id}-${project.id}-${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
+      const exists = (installerReminders || []).some((item) => item.id === reminderId);
+      if (exists) return;
+
+      saveInstallerReminder({
+        id: reminderId,
+        installerId: currentUser.id,
+        installerNickname: currentUser.nickname,
+        quoteId: project.id,
+        quoteTitle: project.title || project.customerName,
+        reminderType: 'MISSING_DAILY_REPORT',
+        reminderDate: new Date(now.getFullYear(), now.getMonth(), now.getDate()),
+        createdAt: new Date(),
+        createdBy: 'SYSTEM',
+        message: `You still need a daily report for ${project.title || project.customerName} (${todayKey}).`,
+        isReadByInstaller: false,
+      }).catch((error) => {
+        console.error('Failed to create reminder:', error);
+      });
+    });
+  }, [currentUser, myProjects, installerReports, installerReminders, saveInstallerReminder]);
+
+  const handleAcknowledgeProject = async (project: Quote) => {
+    if (!currentUser) return;
+
+    setAckLoadingProjectId(project.id);
+    try {
+      const notes = (ackNotesByProjectId[project.id] || '').trim();
+      const currentHistory = project.phaseHistory || [];
+      const shouldMoveInProgress = project.phase === 'planning' || project.phase === 'pending-assignment';
+
+      await updateQuote(project.id, {
+        assignmentAcknowledgedAt: new Date(),
+        assignmentAcknowledgedBy: currentUser.nickname,
+        assignmentAcknowledgementNotes: notes || undefined,
+        phase: shouldMoveInProgress ? 'in-progress' : project.phase,
+        phaseHistory: shouldMoveInProgress
+          ? [
+              ...currentHistory,
+              {
+                phase: 'in-progress',
+                timestamp: new Date(),
+                changedBy: currentUser.nickname,
+              },
+            ]
+          : currentHistory,
+      });
+
+      setAckNotesByProjectId((prev) => ({ ...prev, [project.id]: '' }));
+    } catch (error) {
+      console.error('Failed to acknowledge project assignment:', error);
+    } finally {
+      setAckLoadingProjectId(null);
+    }
+  };
 
   const getNotificationIcon = (type: string) => {
     switch (type) {
       case 'PROJECT_ASSIGNED':
         return <Briefcase size={20} className="text-blue-400" />;
-      case 'ADMIN_MESSAGE':
-        return <Bell size={20} className="text-purple-400" />;
-      case 'PROJECT_UPDATE':
-        return <AlertCircle size={20} className="text-amber-400" />;
+      case 'REMINDER':
+        return <Clock size={20} className="text-red-400" />;
       default:
         return <Bell size={20} className="text-slate-400" />;
     }
@@ -174,10 +383,10 @@ export default function InstallerDashboard() {
               <div className="p-3 bg-green-500/10 rounded-lg">
                 <CheckCircle size={24} className="text-green-400" />
               </div>
-              <span className="text-3xl font-bold text-white">{completedThisMonth.length}</span>
+              <span className="text-3xl font-bold text-white">{completedProjects.length}</span>
             </div>
             <h3 className="text-sm font-semibold text-slate-400">Completed</h3>
-            <p className="text-xs text-slate-500 mt-1">This month</p>
+            <p className="text-xs text-slate-500 mt-1">This month: {completedThisMonth.length}</p>
           </div>
         </div>
 
@@ -200,8 +409,10 @@ export default function InstallerDashboard() {
                   key={notif.id}
                   className={`border-l-4 rounded-lg p-4 transition-all hover:bg-slate-700/50 cursor-pointer ${getPriorityColor(notif.priority)}`}
                   onClick={() => {
-                    if (notif.projectId) {
-                      router.push(`/installers/${currentUser?.nickname}`);
+                    if (notif.clientId) {
+                      router.push(`/installer/clients/${notif.clientId}`);
+                    } else {
+                      router.push('/installer/clients');
                     }
                   }}
                 >
@@ -227,6 +438,20 @@ export default function InstallerDashboard() {
                           minute: '2-digit'
                         })}
                       </p>
+                      {notif.type === 'REMINDER' && notif.id.startsWith('reminder-') && (
+                        <button
+                          className="mt-3 px-2.5 py-1 text-xs rounded bg-slate-700 hover:bg-slate-600 text-slate-200"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            const reminderId = notif.id.replace('reminder-', '');
+                            markInstallerReminderRead(reminderId).catch((error) => {
+                              console.error('Failed to mark reminder as read:', error);
+                            });
+                          }}
+                        >
+                          Mark as read
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -239,6 +464,135 @@ export default function InstallerDashboard() {
               <p className="text-sm text-slate-500 mt-1">You're all caught up!</p>
             </div>
           )}
+        </div>
+
+        {pendingAcknowledgements.length > 0 && (
+          <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <Clock size={22} className="text-amber-400" />
+              <h2 className="text-xl font-bold text-white">Job Acceptance Required</h2>
+            </div>
+            <p className="text-sm text-slate-400 mb-4">
+              Acknowledge scheduled jobs before starting work. You can include optional feedback for admin.
+            </p>
+
+            <div className="space-y-4">
+              {pendingAcknowledgements.map((project) => (
+                <div key={project.id} className="bg-slate-900/60 border border-slate-700 rounded-lg p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="font-semibold text-white">{project.title || project.customerName}</p>
+                      <p className="text-xs text-slate-400 mt-1">
+                        Scheduled for {new Date(project.scheduledWorkDate as Date).toLocaleDateString('ro-RO')}
+                      </p>
+                    </div>
+                    <span className="text-xs bg-amber-500/20 text-amber-300 px-2 py-1 rounded">
+                      Awaiting acknowledgment
+                    </span>
+                  </div>
+
+                  <textarea
+                    value={ackNotesByProjectId[project.id] || ''}
+                    onChange={(event) =>
+                      setAckNotesByProjectId((prev) => ({
+                        ...prev,
+                        [project.id]: event.target.value,
+                      }))
+                    }
+                    placeholder="Optional feedback for admin (constraints, ETA, dependencies)..."
+                    className="mt-3 w-full h-20 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-amber-500 outline-none resize-none"
+                  />
+
+                  <button
+                    onClick={() => handleAcknowledgeProject(project)}
+                    disabled={ackLoadingProjectId === project.id}
+                    className="mt-3 inline-flex items-center gap-2 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-700 text-white rounded-lg text-sm font-semibold"
+                  >
+                    {ackLoadingProjectId === project.id ? 'Saving...' : 'Acknowledge & Start'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
+          <div className="flex items-center gap-3 mb-4">
+            <MessageSquare size={24} className="text-blue-400" />
+            <h2 className="text-xl font-bold text-white">Admin Messages</h2>
+            {unreadAdminMessages > 0 && (
+              <span className="ml-auto px-3 py-1 bg-amber-500/20 text-amber-400 text-sm font-semibold rounded-full">
+                {unreadAdminMessages} unread
+              </span>
+            )}
+          </div>
+
+          <p className="text-sm text-slate-400 mb-4">
+            Messages from admin appear here. You can reply directly from this card.
+          </p>
+
+          <div ref={chatScrollRef} className="space-y-3 max-h-72 overflow-y-auto pr-1">
+            {timelineMessages.length === 0 ? (
+              <div className="text-center py-8 bg-slate-900/50 border border-slate-700 rounded-lg">
+                <p className="text-slate-400">No admin messages yet.</p>
+              </div>
+            ) : (
+              timelineMessages.map((message, index) => {
+                const currentDay = new Date(message.createdAt).toDateString();
+                const previousDay = index > 0 ? new Date(timelineMessages[index - 1].createdAt).toDateString() : null;
+                const showDaySeparator = currentDay !== previousDay;
+
+                return (
+                  <React.Fragment key={message.id}>
+                    {showDaySeparator && (
+                      <div className="flex justify-center">
+                        <span className="text-[11px] px-3 py-1 rounded-full bg-slate-700/70 text-slate-300 border border-slate-600">
+                          {getTimelineDayLabel(new Date(message.createdAt))}
+                        </span>
+                      </div>
+                    )}
+                    <div className={`flex ${message.senderRole === 'INSTALLER' ? 'justify-end' : 'justify-start'}`}>
+                      <div
+                        className={`max-w-[82%] rounded-2xl px-3 py-2 border ${
+                          message.senderRole === 'INSTALLER'
+                            ? 'bg-sky-200 border-sky-300 text-slate-900 rounded-br-sm'
+                            : 'bg-slate-900 border-slate-700 text-slate-100 rounded-bl-sm'
+                        }`}
+                      >
+                        <p className="text-sm whitespace-pre-wrap">{message.message}</p>
+                        <div className="mt-1.5 flex items-center justify-end gap-2">
+                          <span className="text-[11px] opacity-80">{message.senderName}</span>
+                          <span className="text-[11px] opacity-70">
+                            {new Date(message.createdAt).toLocaleTimeString('ro-RO', {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </React.Fragment>
+                );
+              })
+            )}
+          </div>
+
+          <div className="mt-4 border-t border-slate-700 pt-4">
+            <textarea
+              value={replyMessage}
+              onChange={(event) => setReplyMessage(event.target.value)}
+              placeholder="Reply to admin..."
+              className="w-full h-24 bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-blue-500 outline-none resize-none"
+            />
+            <button
+              onClick={handleReplyToAdmin}
+              disabled={isSendingReply || !replyMessage.trim()}
+              className="mt-3 inline-flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-700 disabled:text-slate-400 text-white rounded-lg font-semibold transition-colors"
+            >
+              <Send size={16} />
+              {isSendingReply ? 'Sending...' : 'Send Reply'}
+            </button>
+          </div>
         </div>
 
         {/* Quick Actions */}

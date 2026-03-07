@@ -1,9 +1,10 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Box, Sun, Battery, Settings, FileText, Users, FolderOpen, ChevronLeft, ChevronRight, Briefcase, BarChart3 } from 'lucide-react';
+import { Box, Sun, Moon, Battery, Settings, FileText, Users, FolderOpen, ChevronLeft, ChevronRight, UserCog, LayoutDashboard } from 'lucide-react';
 import { View } from '../types';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from '@/contexts/ThemeContext';
 
 interface SidebarProps {
   currentView: View;
@@ -11,11 +12,29 @@ interface SidebarProps {
   onLogout: () => void;
 }
 
+type NavLinkItem = {
+  id: View;
+  label: string;
+  icon: React.ElementType;
+};
+
+type NavSeparatorItem = {
+  type: 'separator';
+};
+
+type NavItem = NavLinkItem | NavSeparatorItem;
+
+function isSeparatorItem(item: NavItem): item is NavSeparatorItem {
+  return 'type' in item && item.type === 'separator';
+}
+
 export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, onLogout }) => {
   const { currentUser } = useAuth();
+  const { theme, toggleTheme } = useTheme();
   const [isCollapsed, setIsCollapsed] = useState(false);
   
-  const baseNavItems = [
+  const baseNavItems: NavItem[] = [
+    { id: 'DASHBOARD', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'CLIENTS', label: 'Clients', icon: Users },
     { id: 'INVENTORY', label: 'Inventory', icon: Box },
     { type: 'separator' },
@@ -24,10 +43,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, onL
   ];
 
   // Add super admin items
-  const superAdminItems = currentUser?.role === 'SUPER_ADMIN' ? [
+  const superAdminItems: NavItem[] = currentUser?.role === 'SUPER_ADMIN' ? [
     { type: 'separator' },
-    { id: 'SUPER_ADMIN', label: 'Admin Panel', icon: BarChart3, href: '/dashboard/installers' },
-    { id: 'PROJECTS_BY_INSTALLER', label: 'Projects Overview', icon: Briefcase, href: '/dashboard/projects-by-installer' },
+    { id: 'MANAGE_TEAM', label: 'Manage Team', icon: UserCog },
   ] : [];
 
   const navItems = [...baseNavItems, ...superAdminItems];
@@ -52,35 +70,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, onL
 
       <nav className="flex-1 px-4 py-4 space-y-2">
         {navItems.map((item, index) => {
-          if (item.type === 'separator') {
+          if (isSeparatorItem(item)) {
             return <div key={index} className="my-4 border-t border-slate-700/50 mx-2" />;
           }
           
-          const Icon = item.icon as React.ElementType;
+          const Icon = item.icon;
           const isActive = currentView === item.id;
-          
-          // For href items (like admin pages), use anchor navigation
-          if (item.href) {
-            return (
-              <a
-                key={item.id}
-                href={item.href}
-                className={`w-full flex items-center rounded-xl transition-all duration-200 group ${
-                  isActive 
-                    ? 'bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/50' 
-                    : 'text-slate-400 hover:bg-slate-700/50 hover:text-slate-100'
-                } ${isCollapsed ? 'justify-center px-0 py-3' : 'gap-3 px-4 py-3'}`}
-                title={isCollapsed ? item.label : ''}
-              >
-                <Icon size={20} className={`${isActive ? 'text-emerald-400' : 'text-slate-500 group-hover:text-slate-300'} ${isCollapsed ? '' : 'flex-shrink-0'}`} />
-                {!isCollapsed && (
-                  <span className="font-medium">
-                    {item.label}
-                  </span>
-                )}
-              </a>
-            );
-          }
 
           return (
             <button
@@ -128,6 +123,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, onL
           >
             <Settings size={18} />
             {!isCollapsed && <span className="text-xs font-bold">Settings</span>}
+          </button>
+          <button
+            onClick={toggleTheme}
+            className="flex items-center justify-center px-3 py-2 text-slate-400 hover:text-amber-400 transition-colors bg-slate-700/30 hover:bg-slate-700 rounded-lg"
+            title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          >
+            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
           </button>
           <button 
             onClick={onLogout}

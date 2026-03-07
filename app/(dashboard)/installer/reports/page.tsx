@@ -1,25 +1,18 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Plus, Eye, FileText, AlertCircle, Clock, Trash2, X } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
-
-interface DailyReport {
-  id: string;
-  date: Date;
-  type: 'daily' | 'incident' | 'time';
-  createdBy: string;
-  createdAt: Date;
-  data: any;
-}
+import { useData } from '@/contexts/DataContext';
+import { InstallerReport } from '@/types';
 
 export default function InstallerReportsPage() {
   const { currentUser } = useAuth();
+  const { installerReports, saveInstallerReport, deleteInstallerReport } = useData();
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
-  const [reports, setReports] = useState<DailyReport[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [showViewModal, setShowViewModal] = useState<DailyReport | null>(null);
+  const [showViewModal, setShowViewModal] = useState<InstallerReport | null>(null);
   const [reportType, setReportType] = useState<'daily' | 'incident' | 'time'>('daily');
 
   // Form states
@@ -52,6 +45,13 @@ export default function InstallerReportsPage() {
     notes: '',
   });
 
+  const myReports = useMemo(() => {
+    if (!currentUser) return [];
+    return (installerReports || []).filter(
+      (report) => report.installerId === currentUser.id || report.createdByNickname === currentUser.nickname
+    );
+  }, [installerReports, currentUser]);
+
   // Calendar logic
   const daysInMonth = useMemo(() => {
     const year = currentMonth.getFullYear();
@@ -73,13 +73,13 @@ export default function InstallerReportsPage() {
 
   const getReportsForDate = (date: Date | null) => {
     if (!date) return [];
-    return reports.filter(r => {
+    return myReports.filter(r => {
       const reportDate = new Date(r.date);
       return reportDate.toDateString() === date.toDateString();
     });
   };
 
-  const selectedDateReports = useMemo(() => getReportsForDate(selectedDate), [selectedDate, reports]);
+  const selectedDateReports = useMemo(() => getReportsForDate(selectedDate), [selectedDate, myReports]);
 
   const handlePrevMonth = () => {
     setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1));
@@ -93,7 +93,7 @@ export default function InstallerReportsPage() {
     setSelectedDate(date);
   };
 
-  const handleCreateReport = () => {
+  const handleCreateReport = async () => {
     if (!selectedDate || !currentUser) return;
 
     let reportData;
@@ -105,16 +105,17 @@ export default function InstallerReportsPage() {
       reportData = { ...timeForm };
     }
 
-    const newReport: DailyReport = {
+    const newReport: InstallerReport = {
       id: Date.now().toString(),
+      installerId: currentUser.id,
+      createdByNickname: currentUser.nickname,
       date: selectedDate,
       type: reportType,
-      createdBy: currentUser.nickname,
       createdAt: new Date(),
       data: reportData,
     };
 
-    setReports([...reports, newReport]);
+    await saveInstallerReport(newReport);
     setShowCreateModal(false);
     
     // Reset forms
@@ -150,7 +151,9 @@ export default function InstallerReportsPage() {
 
   const handleDeleteReport = (reportId: string) => {
     if (confirm('Are you sure you want to delete this report?')) {
-      setReports(reports.filter(r => r.id !== reportId));
+      deleteInstallerReport(reportId).catch((error) => {
+        console.error('Failed to delete report:', error);
+      });
     }
   };
 
@@ -524,7 +527,7 @@ export default function InstallerReportsPage() {
                           </div>
                         </div>
                         <p className="text-xs text-slate-400">
-                          Created by {report.createdBy} at {new Date(report.createdAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                          Created by {report.createdByNickname} at {new Date(report.createdAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
                         </p>
                       </div>
                     ))}
@@ -643,7 +646,7 @@ export default function InstallerReportsPage() {
               <div className="space-y-4">
                 <div className="bg-slate-900/50 rounded-lg p-4">
                   <p className="text-xs text-slate-500 mb-1">Created By</p>
-                  <p className="text-white font-semibold">{showViewModal.createdBy}</p>
+                  <p className="text-white font-semibold">{showViewModal.createdByNickname}</p>
                 </div>
                 <div className="bg-slate-900/50 rounded-lg p-4">
                   <p className="text-xs text-slate-500 mb-1">Date & Time</p>

@@ -24,7 +24,7 @@ export default function ClientQuotesPage() {
   const [openSerialPickerId, setOpenSerialPickerId] = useState<string | null>(null);
   const [selectedProjectForQuote, setSelectedProjectForQuote] = useState<string>('');
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
-  const [previewDoc, setPreviewDoc] = useState<{name: string, url: string, description?: string, date?: Date} | null>(null);
+  const [previewDoc, setPreviewDoc] = useState<{id?: string, name: string, url: string, description?: string, date?: Date} | null>(null);
   const [offerSent, setOfferSent] = useState(false);
   const [quoteWon, setQuoteWon] = useState(false);
   const [allocatedInstallerId, setAllocatedInstallerId] = useState<string | null>(null);
@@ -33,6 +33,13 @@ export default function ClientQuotesPage() {
   const [confirmDialog, setConfirmDialog] = useState<{message: string; onConfirm: () => void} | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [sendingEmailDocId, setSendingEmailDocId] = useState<string | null>(null);
+
+  // Table interaction state
+  const [focusedRowId, setFocusedRowId] = useState<string | null>(null);
+  const [serialSearchTerm, setSerialSearchTerm] = useState('');
+
+  // Save mode modal
+  const [saveModal, setSaveModal] = useState<{ show: boolean } >({ show: false });
 
   // Email preview modal state
   const [showEmailPreview, setShowEmailPreview] = useState(false);
@@ -161,15 +168,36 @@ export default function ClientQuotesPage() {
     showNotification('Quote loaded successfully', 'success');
   };
 
-  const saveClientQuote = () => {
+  const saveClientQuote = (forceNewVersion?: boolean, forceOverwrite?: boolean) => {
     if (!quoteProjectName.trim()) { 
       showNotification("Please enter a quote name", 'error');
       return; 
     }
     
+    // If editing an existing quote and we haven't been told what to do, ask
+    if (editingQuoteId && !forceNewVersion && !forceOverwrite) {
+      const existingQuote = clientQuotes.find(q => q.id === editingQuoteId);
+      if (existingQuote && existingQuote.title === quoteProjectName.trim()) {
+        setSaveModal({ show: true });
+        return;
+      }
+    }
+
     let targetId = editingQuoteId;
+    let finalName = quoteProjectName.trim();
+
+    if (forceNewVersion) {
+      // Generate a new ID and add version suffix
+      targetId = null;
+      const baseName = quoteProjectName.trim();
+      const escapedBase = baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const versionRegex = new RegExp(`^${escapedBase}(?:\\s+v\\d+)?$`);
+      const relatedCount = clientQuotes.filter(q => versionRegex.test(q.title)).length;
+      finalName = `${baseName} v${relatedCount + 1}`;
+    }
+
     if (!targetId) {
-      const existingByName = savedQuotes.find(q => q.clientId === client.id && q.title === quoteProjectName.trim());
+      const existingByName = savedQuotes.find(q => q.clientId === client.id && q.title === finalName);
       targetId = existingByName ? existingByName.id : Date.now().toString();
     }
     
@@ -177,7 +205,7 @@ export default function ClientQuotesPage() {
     const newQuote: Quote = { 
       id: targetId, 
       clientId: client.id, 
-      title: quoteProjectName.trim(), 
+      title: finalName, 
       customerName: client.name, 
       date: new Date(), 
       items: [...quoteItems], 
@@ -192,6 +220,7 @@ export default function ClientQuotesPage() {
     
     saveQuote(newQuote);
     setEditingQuoteId(targetId);
+    if (forceNewVersion) setQuoteProjectName(finalName);
     showNotification('Quote saved successfully' + (allocatedInstallerId ? ` - Allocated to installer` : ''), 'success');
   };
 
@@ -211,6 +240,23 @@ export default function ClientQuotesPage() {
   };
 
   const removeQuoteLine = (id: string) => setQuoteItems(quoteItems.filter(item => item.id !== id));
+
+  const formatCurrency = (val: number) =>
+    new Intl.NumberFormat('ro-RO', { style: 'currency', currency: 'RON' }).format(val);
+
+  const handleProductSelect = (itemId: string, product: { id: string; name: string; sellPrice: number }) => {
+    setQuoteItems(quoteItems.map(item =>
+      item.id === itemId ? {
+        ...item,
+        inventoryItemId: product.id,
+        description: product.name,
+        unit: 'pcs',
+        netPrice: product.sellPrice,
+        selectedSerialNumbers: []
+      } : item
+    ));
+    setFocusedRowId(null);
+  };
 
   const addMountingStructuresToQuote = (needsData?: ClientNeed | null) => {
     const totalPanels = Number(needsData?.panelCount);
@@ -846,7 +892,7 @@ export default function ClientQuotesPage() {
               <Plus size={18} /> New Quote
             </button>
             <button 
-              onClick={saveClientQuote}
+              onClick={() => saveClientQuote()}
               className="bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
             >
               <Save size={18} /> Save Quote
@@ -995,6 +1041,7 @@ export default function ClientQuotesPage() {
                 />
               </div>
 
+              {!editingQuoteId && (
               <div>
                 <label className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 block">Select from Saved Project</label>
                 <select
@@ -1023,6 +1070,7 @@ export default function ClientQuotesPage() {
                   ))}
                 </select>
               </div>
+              )}
             </div>
           </section>
 
@@ -1110,6 +1158,54 @@ export default function ClientQuotesPage() {
                           unit: 'piece',
                           quantity: 1,
                           netPrice: selectedBat.sellPrice,
+                          selectedSerialNumbers: []
+                        };
+                        addItemToQuote(newLine);
+                      }}
+                      className="ml-3 px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-lg text-xs transition-colors whitespace-nowrap"
+                    >
+                      Add to Quote
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Grounding Socket Suggestion */}
+            {selectedProjectData.groundingStatus === 'nu exista, face Solar Invest' && (() => {
+              const groundingProduct = inventory.find(i => i.sku?.toUpperCase() === 'R4');
+
+              if (!groundingProduct) {
+                return (
+                  <div className="bg-slate-800 border border-slate-700 rounded-xl p-4">
+                    <h4 className="text-xs font-bold text-slate-300 mb-3">Adauga priza de pamant</h4>
+                    <div className="bg-red-500/10 p-3 rounded-lg border border-red-500/40">
+                      <p className="text-xs text-red-300">
+                        Produsul cu SKU <span className="font-bold">R4</span> nu a fost gasit in inventar.
+                      </p>
+                    </div>
+                  </div>
+                );
+              }
+
+              return (
+                <div className="bg-slate-800 border border-slate-700 rounded-xl p-4">
+                  <h4 className="text-xs font-bold text-slate-300 mb-3">Adauga priza de pamant</h4>
+                  <div className="flex items-center justify-between bg-emerald-500/10 p-3 rounded-lg border border-emerald-500/50">
+                    <div className="flex-1">
+                      <p className="text-white font-bold text-sm">{groundingProduct.name}</p>
+                      <p className="text-xs text-slate-400 mt-1">SKU: {groundingProduct.sku} • {groundingProduct.quantity} in stock</p>
+                      <p className="text-sm text-emerald-400 font-bold mt-1">{groundingProduct.sellPrice} RON</p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        const newLine: QuoteLineItem = {
+                          id: Date.now().toString(),
+                          inventoryItemId: groundingProduct.id,
+                          description: `${groundingProduct.name} (${groundingProduct.sku})`,
+                          unit: 'piece',
+                          quantity: 1,
+                          netPrice: groundingProduct.sellPrice,
                           selectedSerialNumbers: []
                         };
                         addItemToQuote(newLine);
@@ -1229,41 +1325,110 @@ export default function ClientQuotesPage() {
                     const lineNet = item.quantity * item.netPrice;
                     const inventoryItem = inventory.find(i => i.id === item.inventoryItemId);
                     const hasTrackedSerials = inventoryItem?.serialNumbers && inventoryItem.serialNumbers.length > 0;
-                    const isSerialPickerOpen = openSerialPickerId === `serial-${item.id}`;
                     const selectedCount = item.selectedSerialNumbers?.length || 0;
+                    const isSerialPickerOpen = openSerialPickerId === `serial-${item.id}`;
+
+                    // Autocomplete suggestions
+                    const showSuggestions = focusedRowId === item.id && item.description.trim().length > 0;
+                    const suggestions = showSuggestions
+                      ? inventory.filter(p =>
+                          p.name.toLowerCase().includes(item.description.toLowerCase()) ||
+                          (p.sku || '').toLowerCase().includes(item.description.toLowerCase())
+                        ).slice(0, 5)
+                      : [];
+
+                    // Serials: filter out ones already used in other rows
+                    const serialsUsedElsewhere = quoteItems
+                      .filter(i => i.id !== item.id)
+                      .flatMap(i => i.selectedSerialNumbers || []);
+                    let availableSerials = inventoryItem?.serialNumbers?.filter(
+                      sn => !serialsUsedElsewhere.includes(sn)
+                    ) || [];
+                    if (serialSearchTerm) {
+                      availableSerials = availableSerials.filter(sn =>
+                        sn.toLowerCase().includes(serialSearchTerm.toLowerCase())
+                      );
+                    }
                     
                     return (
-                      <tr key={item.id} className="hover:bg-slate-700/30 border-b border-slate-700/50 last:border-0">
+                      <tr key={item.id} className="hover:bg-slate-700/30 group border-b border-slate-700/50 last:border-0">
                         <td className="p-3 text-center text-slate-500 text-sm align-top pt-4">{idx + 1}</td>
-                        <td className="p-3 align-top">
-                          <textarea 
-                            value={item.description}
-                            onChange={(e) => updateQuoteLine(item.id, 'description', e.target.value)}
-                            placeholder="Description..."
-                            rows={1}
-                            className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm text-white focus:ring-1 focus:ring-amber-500 outline-none resize-none"
-                          />
+                        <td className="p-3 align-top relative">
+                          <div className="relative">
+                            <textarea 
+                              value={item.description}
+                              onChange={(e) => updateQuoteLine(item.id, 'description', e.target.value)}
+                              onFocus={() => setFocusedRowId(item.id)}
+                              onBlur={() => setTimeout(() => setFocusedRowId(null), 200)}
+                              placeholder="Description or search inventory..."
+                              rows={1}
+                              className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm text-white focus:ring-1 focus:ring-amber-500 outline-none resize-none overflow-hidden placeholder-slate-600"
+                              onInput={(e) => {
+                                e.currentTarget.style.height = 'auto';
+                                e.currentTarget.style.height = e.currentTarget.scrollHeight + 'px';
+                              }}
+                            />
+                            {/* Autocomplete Dropdown */}
+                            {suggestions.length > 0 && (
+                              <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-slate-800 border border-slate-600 rounded-lg shadow-xl overflow-hidden w-full max-w-md">
+                                {suggestions.map(suggestion => (
+                                  <div
+                                    key={suggestion.id}
+                                    onMouseDown={(e) => { e.preventDefault(); handleProductSelect(item.id, suggestion); }}
+                                    className="p-2.5 hover:bg-slate-700 cursor-pointer flex justify-between items-center border-b border-slate-700/50 last:border-0"
+                                  >
+                                    <div>
+                                      <div className="text-sm text-white font-medium">{suggestion.name}</div>
+                                      <div className="text-xs text-slate-400">{suggestion.sku}</div>
+                                    </div>
+                                    <div className="text-xs font-bold text-emerald-400">
+                                      {formatCurrency(suggestion.sellPrice)}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          {/* Serial Number Picker */}
                           {hasTrackedSerials && (
-                            <div className="mt-2 relative">
-                              <button
-                                onClick={() => setOpenSerialPickerId(isSerialPickerOpen ? null : `serial-${item.id}`)}
-                                className={`px-2 py-1 rounded text-[10px] font-bold uppercase flex items-center gap-1 ${
-                                  selectedCount > 0 
-                                    ? 'bg-amber-500/10 text-amber-500 border border-amber-500/50' 
-                                    : 'bg-slate-900 text-slate-400 border border-slate-600'
-                                }`}
-                              >
-                                <Package size={10} />
-                                {selectedCount > 0 ? `${selectedCount} SNs` : 'Select SNs'}
-                                <ChevronDown size={10} />
-                              </button>
+                            <div className="mt-2 relative serial-picker-container">
+                              <div className="flex flex-wrap gap-1 items-center">
+                                <button
+                                  onClick={() => {
+                                    setOpenSerialPickerId(isSerialPickerOpen ? null : `serial-${item.id}`);
+                                    setSerialSearchTerm('');
+                                  }}
+                                  className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider border transition-colors flex items-center gap-1 ${
+                                    selectedCount > 0 
+                                      ? 'bg-amber-500/10 text-amber-500 border-amber-500/50' 
+                                      : 'bg-slate-900 text-slate-400 border-slate-600 hover:border-slate-500 hover:text-slate-300'
+                                  }`}
+                                >
+                                  <Package size={10} />
+                                  {selectedCount > 0 ? `${selectedCount} SNs` : 'Select SNs'}
+                                  <ChevronDown size={10} />
+                                </button>
+                                {(item.selectedSerialNumbers || []).map(sn => (
+                                  <span key={sn} className="text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded border border-slate-700 font-mono">
+                                    {sn}
+                                  </span>
+                                ))}
+                              </div>
                               {isSerialPickerOpen && (
-                                <div className="absolute top-full left-0 mt-2 w-64 bg-slate-800 border border-slate-600 rounded-lg shadow-2xl z-50 p-2">
+                                <div className="absolute top-full left-0 mt-2 w-64 bg-slate-800 border border-slate-600 rounded-lg shadow-2xl z-50 p-2 flex flex-col">
+                                  <input
+                                    type="text"
+                                    placeholder="Search serial..."
+                                    value={serialSearchTerm}
+                                    onChange={(e) => setSerialSearchTerm(e.target.value)}
+                                    className="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-xs text-white mb-2 outline-none"
+                                    autoFocus
+                                  />
                                   <div className="max-h-32 overflow-y-auto space-y-1">
-                                    {inventoryItem?.serialNumbers?.map(sn => {
+                                    {availableSerials.map(sn => {
                                       const isSelected = (item.selectedSerialNumbers || []).includes(sn);
                                       return (
-                                        <div 
+                                        <div
                                           key={sn}
                                           onClick={() => {
                                             const currentSerials = item.selectedSerialNumbers || [];
@@ -1284,6 +1449,9 @@ export default function ClientQuotesPage() {
                                         </div>
                                       );
                                     })}
+                                    {availableSerials.length === 0 && (
+                                      <div className="text-center text-[10px] text-slate-500 py-2">No serials found</div>
+                                    )}
                                   </div>
                                 </div>
                               )}
@@ -1295,15 +1463,21 @@ export default function ClientQuotesPage() {
                             type="text" 
                             value={item.unit}
                             onChange={(e) => updateQuoteLine(item.id, 'unit', e.target.value)}
-                            className="w-full bg-slate-900 border border-slate-600 rounded px-2 py-2 text-center text-sm text-white focus:ring-1 focus:ring-amber-500 outline-none"
+                            className="w-full bg-slate-900/50 border border-slate-600 rounded px-1 py-1.5 text-sm text-center text-white focus:ring-1 focus:ring-amber-500 outline-none"
                           />
                         </td>
                         <td className="p-3 align-top">
                           <input 
-                            type="number" 
+                            type="number"
+                            min="1"
+                            readOnly={selectedCount > 0}
                             value={item.quantity} 
                             onChange={(e) => updateQuoteLine(item.id, 'quantity', Number(e.target.value))} 
-                            className="w-full bg-slate-900 border border-slate-600 rounded px-2 py-2 text-center text-sm text-white focus:ring-1 focus:ring-amber-500 outline-none" 
+                            className={`w-full border rounded px-1 py-1.5 text-sm text-center text-white focus:ring-1 focus:ring-amber-500 outline-none ${
+                              selectedCount > 0
+                                ? 'bg-slate-800 border-slate-700 text-slate-500 cursor-not-allowed'
+                                : 'bg-slate-900/50 border-slate-600'
+                            }`}
                           />
                         </td>
                         <td className="p-3 align-top">
@@ -1311,16 +1485,16 @@ export default function ClientQuotesPage() {
                             type="number" 
                             value={item.netPrice} 
                             onChange={(e) => updateQuoteLine(item.id, 'netPrice', Number(e.target.value))} 
-                            className="w-full bg-slate-900 border border-slate-600 rounded px-2 py-2 text-right text-sm text-white focus:ring-1 focus:ring-amber-500 outline-none" 
+                            className="w-full bg-slate-900/50 border border-slate-600 rounded px-1 py-1.5 text-sm text-right text-white focus:ring-1 focus:ring-amber-500 outline-none" 
                           />
                         </td>
-                        <td className="p-3 align-top text-right text-sm font-bold text-emerald-400">
-                          {lineNet.toLocaleString('ro-RO', {style:'currency', currency:'RON'})}
+                        <td className="p-3 text-right font-medium text-emerald-400 align-top pt-3.5">
+                          {formatCurrency(lineNet)}
                         </td>
-                        <td className="p-3 align-top text-center">
+                        <td className="p-3 align-top text-center pt-2.5">
                           <button 
                             onClick={() => removeQuoteLine(item.id)} 
-                            className="text-slate-600 hover:text-red-400 transition-colors"
+                            className="text-slate-500 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
                           >
                             <Trash2 size={14}/>
                           </button>
@@ -1352,41 +1526,6 @@ export default function ClientQuotesPage() {
             </div>
           </div>
           </section>
-        )}
-
-        {/* Document Preview */}
-        {previewDoc && (
-          <div className="bg-slate-800 rounded-xl border border-slate-700 p-6 shadow-lg">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                <FileText size={20} className="text-blue-500" />
-                Document Preview: {previewDoc.name}
-              </h3>
-              <button
-                onClick={() => setPreviewDoc(null)}
-                className="text-slate-400 hover:text-white transition-colors"
-              >
-                <X size={20} />
-              </button>
-            </div>
-            <div className="bg-slate-900 rounded-lg border border-slate-600 overflow-hidden">
-              <iframe 
-                src={previewDoc.url} 
-                className="w-full h-[600px]"
-                title="Document Preview"
-              />
-            </div>
-            <div className="mt-4 flex gap-2">
-              <a
-                href={previewDoc.url}
-                download={previewDoc.name}
-                className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-semibold transition-colors flex items-center justify-center gap-2"
-              >
-                <Download size={18} />
-                Download
-              </a>
-            </div>
-          </div>
         )}
 
         {/* Quote Status Section */}
@@ -1451,7 +1590,7 @@ export default function ClientQuotesPage() {
             {/* Start Implementation Button */}
             {quoteWon && allocatedInstallerId && (
               <button
-                onClick={saveClientQuote}
+                onClick={() => saveClientQuote()}
                 className="w-full px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold transition-colors flex items-center justify-center gap-2 shadow-lg"
               >
                 <Sparkles size={18} />
@@ -1460,7 +1599,7 @@ export default function ClientQuotesPage() {
             )}
 
             <button
-              onClick={saveClientQuote}
+              onClick={() => saveClientQuote()}
               className="w-full px-6 py-3 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold transition-colors flex items-center justify-center gap-2"
             >
               <Save size={18} />
@@ -1537,7 +1676,7 @@ export default function ClientQuotesPage() {
                       <div className="flex items-center gap-2 ml-4">
                         <button
                           onClick={() => {
-                            setPreviewDoc({ name: doc.name, url: doc.url, date: new Date(doc.date) });
+                            setPreviewDoc({ id: doc.id, name: doc.name, url: doc.url, date: new Date(doc.date) });
                           }}
                           className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
                         >
@@ -1611,52 +1750,42 @@ export default function ClientQuotesPage() {
 
         {/* Document Preview Modal */}
         {previewDoc && (
-          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-6xl h-[90vh] shadow-2xl flex flex-col">
-              <div className="flex items-center justify-between p-6 border-b border-slate-700">
-                <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                  <FileText size={20} className="text-blue-500" />
-                  {previewDoc.name}
-                </h3>
-                <button
-                  onClick={() => setPreviewDoc(null)}
-                  className="text-slate-400 hover:text-white transition-colors p-2 hover:bg-slate-700 rounded"
-                >
-                  <X size={20} />
-                </button>
-              </div>
-              <div className="flex-1 overflow-hidden p-6">
-                <DocumentPreview 
-                  document={previewDoc as any}
-                  onClose={() => setPreviewDoc(null)}
-                  allowEdit={true}
-                  clientId={client.id}
-                  folder="quotes"
-                  onSave={async (newUrl) => {
-                    // Optionally update the document URL in the quote
-                    showNotification('Document saved successfully!', 'success');
-                  }}
-                  onPdfCreated={(pdfDoc) => {
-                    // Add the PDF to the generatedDocuments array
-                    if (currentQuote) {
-                      const updatedDocuments = [...generatedDocuments, pdfDoc];
-                      const updatedQuote: Quote = {
-                        ...currentQuote,
-                        generatedDocuments: updatedDocuments
-                      };
-                      saveQuote(updatedQuote);
-                      showNotification(`PDF created: ${pdfDoc.name}`, 'success');
-                    }
-                  }}
-                  onSendEmail={(doc) => {
-                    // Close preview and open email flow
-                    setPreviewDoc(null);
-                    handleSendEmail(doc);
-                  }}
-                />
-              </div>
-            </div>
-          </div>
+          <DocumentPreview 
+            document={previewDoc as any}
+            onClose={() => setPreviewDoc(null)}
+            allowEdit={true}
+            clientId={client.id}
+            folder="quotes"
+            onSave={async (newUrl) => {
+              if (newUrl && currentQuote && previewDoc?.id) {
+                const newName = previewDoc.name;
+                const updatedDocuments = (currentQuote.generatedDocuments || []).map(d =>
+                  d.id === previewDoc.id ? { ...d, url: newUrl, name: newName } : d
+                );
+                const updatedQuote: Quote = { ...currentQuote, generatedDocuments: updatedDocuments };
+                saveQuote(updatedQuote);
+                // Firebase issues a fresh download token on each getDownloadURL call,
+                // so newUrl is naturally different — this triggers DocxPreview to reload
+                setPreviewDoc(prev => prev ? { ...prev, url: newUrl, name: newName } : null);
+              }
+              showNotification('Document saved successfully!', 'success');
+            }}
+            onPdfCreated={(pdfDoc) => {
+              if (currentQuote) {
+                const updatedDocuments = [...generatedDocuments, pdfDoc];
+                const updatedQuote: Quote = {
+                  ...currentQuote,
+                  generatedDocuments: updatedDocuments
+                };
+                saveQuote(updatedQuote);
+                showNotification(`PDF created: ${pdfDoc.name}`, 'success');
+              }
+            }}
+            onSendEmail={(doc) => {
+              setPreviewDoc(null);
+              handleSendEmail(doc);
+            }}
+          />
         )}
 
         {/* Email Preview Modal */}
@@ -1676,6 +1805,54 @@ export default function ClientQuotesPage() {
             }}
             signature={smtpSettings?.signature || ''}
           />
+        )}
+
+        {/* Save Mode Modal (overwrite vs new version) */}
+        {saveModal.show && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+            <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-md shadow-2xl">
+              <div className="p-6">
+                <div className="flex items-start gap-4 mb-4">
+                  <div className="p-3 bg-amber-500/10 rounded-lg">
+                    <Save size={24} className="text-amber-400" />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="text-lg font-bold text-white mb-2">Save Quote</h3>
+                    <p className="text-slate-300 text-sm">
+                      A quote named <span className="font-bold text-amber-400">&ldquo;{quoteProjectName}&rdquo;</span> already exists.
+                      Do you want to overwrite it or save it as a new version?
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-3">
+                  <button
+                    onClick={() => {
+                      setSaveModal({ show: false });
+                      saveClientQuote(false, true);
+                    }}
+                    className="px-4 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-lg transition-colors"
+                  >
+                    Overwrite existing quote
+                  </button>
+                  <button
+                    onClick={() => {
+                      setSaveModal({ show: false });
+                      saveClientQuote(true, false);
+                    }}
+                    className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg transition-colors"
+                  >
+                    Save as new version
+                  </button>
+                  <button
+                    onClick={() => setSaveModal({ show: false })}
+                    className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white font-semibold rounded-lg transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
         )}
 
         {/* Document Format Warning Modal */}
@@ -1699,7 +1876,7 @@ export default function ClientQuotesPage() {
                   onClick={() => {
                     const doc = docFormatWarning.doc!;
                     setDocFormatWarning({ show: false, doc: null });
-                    setPreviewDoc({ name: doc.name, url: doc.url, date: doc.date });
+                    setPreviewDoc({ id: doc.id, name: doc.name, url: doc.url, date: doc.date });
                   }}
                   className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition-colors flex items-center justify-center gap-2"
                 >

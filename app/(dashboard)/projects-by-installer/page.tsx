@@ -1,33 +1,41 @@
 'use client';
 
 import React, { useMemo, useState } from 'react';
-import { AlertCircle, CheckCircle, Clock, Search, MapPin, User, Phone, TrendingDown, Filter, ChevronRight } from 'lucide-react';
+import { AlertCircle, CheckCircle, Clock, Search, MapPin, User, ChevronRight } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useData } from '@/contexts/DataContext';
 import { Quote } from '@/types';
 import Link from 'next/link';
 
-type ProjectFilter = 'all' | 'unassigned' | 'pending-ack' | 'active' | 'completed';
+type ProjectFilter = 'all' | 'unassigned' | 'active' | 'completed';
+
+const isCompletedProject = (quote: Quote) =>
+  Boolean(quote.completedAt || quote.phase === 'completed' || quote.phase === 'archived');
 
 export default function ProjectsByInstallerPage() {
   const { currentUser } = useAuth();
   const { savedQuotes, clients, users } = useData();
   const [searchTerm, setSearchTerm] = useState('');
   const [filter, setFilter] = useState<ProjectFilter>('all');
+  const [installerFilter, setInstallerFilter] = useState<string>('all');
+
+  const installerOptions = useMemo(() => {
+    return (users || [])
+      .filter(user => user.role === 'INSTALLER')
+      .sort((a, b) => a.nickname.localeCompare(b.nickname));
+  }, [users]);
 
   // Get all quotes and categorize them
   const categorizedProjects = useMemo(() => {
     const quotes = savedQuotes || [];
 
-    const unassigned = quotes.filter(q => !q.allocatedInstallerId);
-    const pendingAck = quotes.filter(q => q.allocatedInstallerId && !q.acknowledgedAt && !q.completedAt);
-    const active = quotes.filter(q => q.acknowledgedAt && !q.completedAt);
-    const completed = quotes.filter(q => q.completedAt);
+    const unassigned = quotes.filter(q => !q.allocatedInstallerId && !isCompletedProject(q));
+    const active = quotes.filter(q => q.allocatedInstallerId && !isCompletedProject(q));
+    const completed = quotes.filter(q => isCompletedProject(q));
 
     return {
       all: quotes,
       unassigned,
-      'pending-ack': pendingAck,
       active,
       completed,
     };
@@ -36,6 +44,12 @@ export default function ProjectsByInstallerPage() {
   // Filter projects based on selected filter and search term
   const filteredProjects = useMemo(() => {
     let projects = categorizedProjects[filter];
+
+    if (installerFilter === 'unassigned') {
+      projects = projects.filter(q => !q.allocatedInstallerId);
+    } else if (installerFilter !== 'all') {
+      projects = projects.filter(q => q.allocatedInstallerId === installerFilter);
+    }
 
     if (searchTerm.trim()) {
       const lower = searchTerm.toLowerCase();
@@ -51,14 +65,13 @@ export default function ProjectsByInstallerPage() {
     }
 
     return projects;
-  }, [categorizedProjects, filter, searchTerm, clients]);
+  }, [categorizedProjects, filter, installerFilter, searchTerm, clients]);
 
   // Stats
   const stats = useMemo(() => {
     return {
       total: categorizedProjects.all.length,
       unassigned: categorizedProjects.unassigned.length,
-      pendingAck: categorizedProjects['pending-ack'].length,
       active: categorizedProjects.active.length,
       completed: categorizedProjects.completed.length,
     };
@@ -90,14 +103,11 @@ export default function ProjectsByInstallerPage() {
     const variance = project.materialVariances?.reduce((sum, mv) => sum + mv.variance, 0) || 0;
 
     const getStatusBadge = () => {
-      if (project.completedAt) {
+      if (isCompletedProject(project)) {
         return <span className="text-xs bg-green-500/20 text-green-400 px-3 py-1 rounded-full font-semibold">Completed</span>;
       }
-      if (project.acknowledgedAt) {
-        return <span className="text-xs bg-blue-500/20 text-blue-400 px-3 py-1 rounded-full font-semibold">In Progress</span>;
-      }
       if (project.allocatedInstallerId) {
-        return <span className="text-xs bg-yellow-500/20 text-yellow-400 px-3 py-1 rounded-full font-semibold">Pending ACK</span>;
+        return <span className="text-xs bg-blue-500/20 text-blue-400 px-3 py-1 rounded-full font-semibold">Active</span>;
       }
       return <span className="text-xs bg-slate-500/20 text-slate-300 px-3 py-1 rounded-full font-semibold">Unassigned</span>;
     };
@@ -107,7 +117,7 @@ export default function ProjectsByInstallerPage() {
         <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-start">
           {/* Project Info */}
           <div className="md:col-span-3">
-            <Link href={`/dashboard/clients/${project.clientId}`}>
+            <Link href={`/clients/${project.clientId}`}>
               <div className="hover:cursor-pointer">
                 <h4 className="font-bold text-white hover:text-emerald-400 transition-colors truncate">
                   {project.title || 'Untitled'}
@@ -120,7 +130,7 @@ export default function ProjectsByInstallerPage() {
           {/* Installer Info */}
           <div className="md:col-span-2">
             {installer ? (
-              <Link href={`/dashboard/installers/${installer.id}`}>
+              <Link href={`/installers/${installer.id}`}>
                 <div className="hover:cursor-pointer">
                   <p className="text-sm font-semibold text-slate-300 hover:text-emerald-400 transition-colors flex items-center gap-2">
                     <User size={14} />
@@ -153,7 +163,7 @@ export default function ProjectsByInstallerPage() {
             <p className="text-sm font-semibold text-white">
               {project.totalGross?.toLocaleString('ro-RO', { maximumFractionDigits: 0 }) || '0'} RON
             </p>
-            {project.completedAt && variance !== 0 && (
+            {isCompletedProject(project) && variance !== 0 && (
               <p className={`text-xs mt-1 font-semibold ${variance > 0 ? 'text-red-400' : 'text-green-400'}`}>
                 {variance > 0 ? '+' : ''}{(variance / 1000).toFixed(1)}k variance
               </p>
@@ -163,7 +173,7 @@ export default function ProjectsByInstallerPage() {
           {/* Action */}
           <div className="md:col-span-1 flex justify-end">
             {installer ? (
-              <Link href={`/dashboard/installers/${installer.id}`}>
+              <Link href={`/installers/${installer.id}`}>
                 <button className="p-2 rounded-lg transition-colors hover:bg-slate-700 text-slate-400 hover:text-emerald-400">
                   <ChevronRight size={20} />
                 </button>
@@ -184,16 +194,10 @@ export default function ProjectsByInstallerPage() {
               No installer assigned
             </span>
           )}
-          {project.allocatedInstallerId && !project.acknowledgedAt && !project.completedAt && (
-            <span className="text-xs bg-yellow-500/20 text-yellow-400 px-2 py-1 rounded flex items-center gap-1">
-              <AlertCircle size={12} />
-              Waiting for acknowledgment
-            </span>
-          )}
-          {project.completedAt && (
+          {isCompletedProject(project) && (
             <span className="text-xs bg-green-500/20 text-green-400 px-2 py-1 rounded flex items-center gap-1">
               <CheckCircle size={12} />
-              Completed {new Date(project.completedAt).toLocaleDateString('ro-RO')}
+              Completed {project.completedAt ? new Date(project.completedAt).toLocaleDateString('ro-RO') : 'confirmed'}
             </span>
           )}
         </div>
@@ -214,7 +218,7 @@ export default function ProjectsByInstallerPage() {
         </div>
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div className={`rounded-lg p-4 border cursor-pointer transition-all ${filter === 'all' ? 'bg-slate-800 border-emerald-500' : 'bg-slate-800/50 border-slate-700 hover:border-slate-600'}`}
             onClick={() => setFilter('all')}>
             <p className="text-slate-400 text-xs font-semibold mb-1">Total</p>
@@ -225,12 +229,6 @@ export default function ProjectsByInstallerPage() {
             onClick={() => setFilter('unassigned')}>
             <p className="text-slate-400 text-xs font-semibold mb-1">Unassigned</p>
             <p className={`text-2xl font-bold ${stats.unassigned > 0 ? 'text-red-400' : 'text-white'}`}>{stats.unassigned}</p>
-          </div>
-
-          <div className={`rounded-lg p-4 border cursor-pointer transition-all ${filter === 'pending-ack' ? 'bg-slate-800 border-yellow-500' : 'bg-slate-800/50 border-slate-700 hover:border-slate-600'}`}
-            onClick={() => setFilter('pending-ack')}>
-            <p className="text-slate-400 text-xs font-semibold mb-1">Pending ACK</p>
-            <p className={`text-2xl font-bold ${stats.pendingAck > 0 ? 'text-yellow-400' : 'text-white'}`}>{stats.pendingAck}</p>
           </div>
 
           <div className={`rounded-lg p-4 border cursor-pointer transition-all ${filter === 'active' ? 'bg-slate-800 border-blue-500' : 'bg-slate-800/50 border-slate-700 hover:border-slate-600'}`}
@@ -257,16 +255,6 @@ export default function ProjectsByInstallerPage() {
           </div>
         )}
 
-        {stats.pendingAck > 0 && (
-          <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4 flex items-start gap-3">
-            <AlertCircle size={20} className="text-yellow-400 mt-0.5 flex-shrink-0" />
-            <div>
-              <p className="font-semibold text-yellow-400">{stats.pendingAck} Project(s) Awaiting Acknowledgment</p>
-              <p className="text-xs text-yellow-300">Installers need to review and acknowledge these assignments</p>
-            </div>
-          </div>
-        )}
-
         {/* Search & Filters */}
         <div className="flex gap-4 flex-col sm:flex-row">
           <div className="relative flex-1">
@@ -279,6 +267,21 @@ export default function ProjectsByInstallerPage() {
               className="w-full bg-slate-800 border border-slate-700 rounded-lg pl-12 pr-4 py-2 text-white focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
             />
           </div>
+          <div className="sm:w-72">
+            <select
+              value={installerFilter}
+              onChange={(e) => setInstallerFilter(e.target.value)}
+              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
+            >
+              <option value="all">All installers</option>
+              <option value="unassigned">Unassigned only</option>
+              {installerOptions.map(installer => (
+                <option key={installer.id} value={installer.nickname}>
+                  {installer.nickname}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         {/* Projects Table */}
@@ -287,7 +290,7 @@ export default function ProjectsByInstallerPage() {
             <div className="text-center py-12 bg-slate-800/50 border border-slate-700 rounded-lg">
               <AlertCircle size={48} className="text-slate-600 mx-auto mb-4" />
               <p className="text-slate-400 font-semibold">
-                {searchTerm ? 'No projects match your search' : 'No projects in this category'}
+                {searchTerm ? 'No projects match your search' : 'No projects match the selected filters'}
               </p>
             </div>
           ) : (

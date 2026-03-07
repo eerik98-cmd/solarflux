@@ -1,14 +1,14 @@
 'use client';
 
 import React, { useMemo, useState } from 'react';
-import { Users, Briefcase, DollarSign, CheckCircle, Clock, AlertCircle, ChevronRight, Search, Eye, Settings } from 'lucide-react';
+import { Users, Briefcase, CheckCircle, Clock, AlertCircle, ChevronRight, Search, MessageSquare } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useData } from '@/contexts/DataContext';
 import Link from 'next/link';
 
 export default function InstallersPage() {
   const { currentUser } = useAuth();
-  const { savedQuotes, users } = useData();
+  const { savedQuotes, users, teamMessageThreads } = useData();
   const [searchTerm, setSearchTerm] = useState('');
 
   // Get all installers
@@ -31,14 +31,6 @@ export default function InstallersPage() {
       // Completed projects (has completedAt timestamp)
       const completedProjects = allocatedProjects.filter(q => q.completedAt);
 
-      // Projects acknowledged by installer
-      const acknowledgedProjects = allocatedProjects.filter(q => q.acknowledgedAt);
-
-      // Pending acknowledgment (allocated but not acknowledged)
-      const pendingAcknowledgement = allocatedProjects.filter(
-        q => q.allocatedInstallerId && !q.acknowledgedAt
-      );
-
       // Total project value
       const totalProjectValue = allocatedProjects.reduce((sum, q) => sum + (q.totalGross || 0), 0);
 
@@ -57,14 +49,15 @@ export default function InstallersPage() {
         allocatedProjects: allocatedProjects.length,
         activeProjects: activeProjects.length,
         completedProjects: completedProjects.length,
-        acknowledgedProjects: acknowledgedProjects.length,
-        pendingAcknowledgement: pendingAcknowledgement.length,
         totalProjectValue,
         avgCostVariance,
-        status: activeProjects.length > 0 ? 'ASSIGNED' : completedProjects.length > 0 ? 'AVAILABLE' : 'AVAILABLE'
+        status: activeProjects.length > 0 ? 'ASSIGNED' : completedProjects.length > 0 ? 'AVAILABLE' : 'AVAILABLE',
+        unreadAdminMessages: (teamMessageThreads || [])
+          .find((thread) => thread.installerId === installer.id)
+          ?.messages.filter((message) => !message.readByAdmin && message.senderRole === 'INSTALLER').length || 0
       };
     });
-  }, [installers, savedQuotes]);
+  }, [installers, savedQuotes, teamMessageThreads]);
 
   if (!currentUser || currentUser.role !== 'SUPER_ADMIN') {
     return (
@@ -93,12 +86,14 @@ export default function InstallersPage() {
     const assignedInstallers = installerStats.filter(i => i.status === 'ASSIGNED').length;
     const totalActiveJobs = installerStats.reduce((sum, i) => sum + i.activeProjects, 0);
     const totalCompletedJobs = installerStats.reduce((sum, i) => sum + i.completedProjects, 0);
+    const unreadInstallerReplies = installerStats.reduce((sum, i) => sum + i.unreadAdminMessages, 0);
 
     return {
       totalInstallers,
       assignedInstallers,
       totalActiveJobs,
-      totalCompletedJobs
+      totalCompletedJobs,
+      unreadInstallerReplies
     };
   }, [installerStats]);
 
@@ -109,13 +104,13 @@ export default function InstallersPage() {
         <div>
           <h1 className="text-3xl font-bold text-white flex items-center gap-3 mb-2">
             <Users size={32} className="text-emerald-500" />
-            Installers Management
+            Manage Team
           </h1>
-          <p className="text-slate-400">Monitor all installers, their projects, and performance metrics</p>
+          <p className="text-slate-400">View all registered installers, assignments, performance, and replies to admin messages</p>
         </div>
 
         {/* Summary Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
           <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
             <div className="flex items-center justify-between">
               <div>
@@ -155,6 +150,16 @@ export default function InstallersPage() {
               <CheckCircle size={32} className="text-green-500 opacity-50" />
             </div>
           </div>
+
+          <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-slate-400 text-sm font-semibold mb-1">Unread Replies</p>
+                <p className="text-3xl font-bold text-blue-400">{summaryStats.unreadInstallerReplies}</p>
+              </div>
+              <MessageSquare size={32} className="text-blue-500 opacity-50" />
+            </div>
+          </div>
         </div>
 
         {/* Search */}
@@ -180,7 +185,7 @@ export default function InstallersPage() {
             filteredInstallers.map(installer => (
               <Link
                 key={installer.id}
-                href={`/dashboard/installers/${installer.id}`}
+                href={`/installers/${installer.id}`}
               >
                 <div className="bg-slate-800 border border-slate-700 rounded-lg p-6 hover:border-emerald-500/50 transition-colors cursor-pointer group">
                   <div className="flex items-start justify-between mb-4">
@@ -205,7 +210,7 @@ export default function InstallersPage() {
                   </div>
 
                   {/* Stats Grid */}
-                  <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <div className="bg-slate-900/50 rounded p-3">
                       <p className="text-xs text-slate-400 mb-1">Allocated</p>
                       <p className="text-xl font-bold text-white">{installer.allocatedProjects}</p>
@@ -222,32 +227,21 @@ export default function InstallersPage() {
                     </div>
 
                     <div className="bg-slate-900/50 rounded p-3">
-                      <p className="text-xs text-slate-400 mb-1">Pending ACK</p>
-                      <p className={`text-xl font-bold ${installer.pendingAcknowledgement > 0 ? 'text-red-400' : 'text-slate-400'}`}>
-                        {installer.pendingAcknowledgement}
-                      </p>
-                    </div>
-
-                    <div className="bg-slate-900/50 rounded p-3">
                       <p className="text-xs text-slate-400 mb-1">Total Value</p>
                       <p className="text-xl font-bold text-blue-400">
                         {(installer.totalProjectValue / 1000).toLocaleString('ro-RO', { maximumFractionDigits: 0 })}k
                       </p>
                     </div>
-                  </div>
 
-                  {/* Alerts */}
-                  {installer.pendingAcknowledgement > 0 && (
-                    <div className="mt-4 bg-red-500/10 border border-red-500/30 rounded p-3 flex items-start gap-2">
-                      <AlertCircle size={16} className="text-red-400 mt-0.5 flex-shrink-0" />
-                      <div>
-                        <p className="text-xs font-semibold text-red-400">
-                          {installer.pendingAcknowledgement} project(s) awaiting acknowledgment
-                        </p>
-                        <p className="text-xs text-red-300">Installer needs to review and acknowledge these assignments</p>
-                      </div>
+                    <div className="bg-slate-900/50 rounded p-3 col-span-2 md:col-span-4">
+                      <p className="text-xs text-slate-400 mb-1">Communication</p>
+                      <p className={`text-sm font-bold ${installer.unreadAdminMessages > 0 ? 'text-amber-400' : 'text-slate-300'}`}>
+                        {installer.unreadAdminMessages > 0
+                          ? `${installer.unreadAdminMessages} unread installer repl${installer.unreadAdminMessages === 1 ? 'y' : 'ies'}`
+                          : 'No unread replies'}
+                      </p>
                     </div>
-                  )}
+                  </div>
                 </div>
               </Link>
             ))

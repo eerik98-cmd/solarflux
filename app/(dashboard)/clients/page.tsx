@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Search, Building2, User, Plus, Trash2, Loader } from 'lucide-react';
+import { Search, Building2, User, Plus, Trash2, Loader, Bell, MessageSquare, CheckCircle2 } from 'lucide-react';
 import { Client, ClientType } from '@/types';
 import { useData } from '@/contexts/DataContext';
 import { useAuth } from '@/contexts/AuthContext';
@@ -11,7 +11,7 @@ import { FileSystem } from '@/services/fileSystemService';
 
 export default function ClientsListPage() {
   const router = useRouter();
-  const { clients } = useData();
+  const { clients, savedQuotes } = useData();
   const { currentUser } = useAuth();
   const [searchTerm, setSearchTerm] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -28,6 +28,33 @@ export default function ClientsListPage() {
       (client.companyName && client.companyName.toLowerCase().includes(searchLower))
     );
   });
+
+  const installerFinishNotifications = (() => {
+    const declared = (savedQuotes || []).filter((quote) => quote.installerDeclaredFinishedAt);
+    const latestByProject = new Map<string, typeof declared[number]>();
+
+    declared.forEach((quote) => {
+      const key = `${quote.clientId || 'no-client'}::${(quote.title || '').trim().toLowerCase()}`;
+      const existing = latestByProject.get(key);
+      if (!existing) {
+        latestByProject.set(key, quote);
+        return;
+      }
+
+      const existingTs = new Date(existing.installerDeclaredFinishedAt as any).getTime();
+      const currentTs = new Date(quote.installerDeclaredFinishedAt as any).getTime();
+      if (currentTs > existingTs) {
+        latestByProject.set(key, quote);
+      }
+    });
+
+    return Array.from(latestByProject.values())
+      .sort((a, b) => new Date(b.installerDeclaredFinishedAt as any).getTime() - new Date(a.installerDeclaredFinishedAt as any).getTime());
+  })();
+
+  const installerMentionNotifications = (savedQuotes || [])
+    .flatMap((quote) => (quote.installerMentions || []).map((mention) => ({ quote, mention })))
+    .sort((a, b) => new Date(b.mention.createdAt as any).getTime() - new Date(a.mention.createdAt as any).getTime());
 
   const getStatusColor = (status: string) => {
     switch(status) {
@@ -108,6 +135,81 @@ export default function ClientsListPage() {
           </button>
         )}
       </header>
+
+      {currentUser?.role === 'SUPER_ADMIN' && installerFinishNotifications.length > 0 && (
+        <div className="mb-6 bg-slate-800 border border-amber-500/40 rounded-xl p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Bell size={18} className="text-amber-400" />
+            <h2 className="text-sm font-bold text-amber-300">Installer Finish Notifications</h2>
+          </div>
+          <div className="space-y-2">
+            {installerFinishNotifications.slice(0, 8).map((quote) => {
+              const quoteClient = clients.find(c => c.id === quote.clientId);
+              const isConfirmed = !!quote.adminApprovedAt || quote.phase === 'completed';
+              return (
+                <button
+                  key={quote.id}
+                  onClick={() => router.push(`/clients/${quote.clientId}/installation`)}
+                  className={`w-full text-left rounded-lg border px-3 py-2 transition-colors ${
+                    isConfirmed
+                      ? 'border-green-500/40 bg-green-500/10 hover:border-green-500/70'
+                      : 'border-slate-700 bg-slate-900/70 hover:border-amber-500/50'
+                  }`}
+                >
+                  <p className="text-sm text-white">
+                    <span className="font-bold text-amber-300">{quote.installerDeclaredFinishedBy || quote.allocatedInstallerId || 'Installer'}</span>{' '}
+                    finished{' '}
+                    <span className="font-bold">{quote.title || 'Untitled Project'}</span>{' '}
+                    for{' '}
+                    <span className="font-bold">{quoteClient?.name || quote.customerName}</span>.
+                  </p>
+                  {isConfirmed && (
+                    <p className="text-xs text-green-300 mt-1 flex items-center gap-1">
+                      <CheckCircle2 size={12} /> Successfully installed (admin confirmed)
+                    </p>
+                  )}
+                  <p className="text-xs text-slate-500 mt-1">
+                    {quote.installerDeclaredFinishedAt ? new Date(quote.installerDeclaredFinishedAt).toLocaleString('ro-RO') : ''}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {currentUser?.role === 'SUPER_ADMIN' && installerMentionNotifications.length > 0 && (
+        <div className="mb-6 bg-slate-800 border border-blue-500/40 rounded-xl p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <MessageSquare size={18} className="text-blue-400" />
+            <h2 className="text-sm font-bold text-blue-300">Installer Mentions</h2>
+          </div>
+          <div className="space-y-2">
+            {installerMentionNotifications.slice(0, 8).map(({ quote, mention }) => {
+              const quoteClient = clients.find(c => c.id === quote.clientId);
+              return (
+                <button
+                  key={`${quote.id}-${mention.id}`}
+                  onClick={() => router.push(`/clients/${quote.clientId}/installation`)}
+                  className="w-full text-left rounded-lg border border-slate-700 bg-slate-900/70 hover:border-blue-500/50 px-3 py-2 transition-colors"
+                >
+                  <p className="text-sm text-white">
+                    <span className="font-bold text-blue-300">{mention.createdBy || quote.allocatedInstallerId || 'Installer'}</span>{' '}
+                    added a mention for project{' '}
+                    <span className="font-bold">{quote.title || 'Untitled Project'}</span>{' '}
+                    for{' '}
+                    <span className="font-bold">{quoteClient?.name || quote.customerName}</span>.
+                  </p>
+                  <p className="text-xs text-slate-400 mt-1">{mention.message}</p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    {mention.createdAt ? new Date(mention.createdAt).toLocaleString('ro-RO') : ''}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="bg-slate-800 rounded-2xl border border-slate-700 overflow-hidden flex flex-col flex-1">
         <div className="p-4 border-b border-slate-700 bg-slate-800/50">
