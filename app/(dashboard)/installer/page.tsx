@@ -5,7 +5,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useData } from '@/contexts/DataContext';
 import { Bell, CheckCircle, Clock, Briefcase, TrendingUp, MessageSquare, Send } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { Quote, TeamMessageThread } from '@/types';
+import { TeamMessageThread } from '@/types';
 
 const getTimelineDayLabel = (value: Date) => {
   const day = new Date(value);
@@ -27,14 +27,11 @@ export default function InstallerDashboard() {
     installerReports,
     installerReminders,
     saveInstallerReminder,
-    updateQuote,
     markInstallerReminderRead,
   } = useData();
   const router = useRouter();
   const [replyMessage, setReplyMessage] = useState('');
   const [isSendingReply, setIsSendingReply] = useState(false);
-  const [ackNotesByProjectId, setAckNotesByProjectId] = useState<Record<string, string>>({});
-  const [ackLoadingProjectId, setAckLoadingProjectId] = useState<string | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
 
   // Get projects assigned to current installer
@@ -51,16 +48,6 @@ export default function InstallerDashboard() {
   // In progress projects
   const inProgressProjects = useMemo(() => {
     return myProjects.filter(p => p.phase === 'in-progress');
-  }, [myProjects]);
-
-  const pendingAcknowledgements = useMemo(() => {
-    return myProjects
-      .filter((project) => {
-        if (project.phase === 'completed' || project.phase === 'archived') return false;
-        if (!project.scheduledWorkDate) return false;
-        return !project.assignmentAcknowledgedAt;
-      })
-      .sort((a, b) => new Date(a.scheduledWorkDate as Date).getTime() - new Date(b.scheduledWorkDate as Date).getTime());
   }, [myProjects]);
 
   // Completed this month
@@ -232,10 +219,7 @@ export default function InstallerDashboard() {
     const missingReportProjects = myProjects.filter((project) => {
       if (project.phase === 'completed' || project.phase === 'archived') return false;
 
-      const scheduledDate = project.scheduledWorkDate ? new Date(project.scheduledWorkDate) : null;
-      const isScheduledForToday = scheduledDate ? scheduledDate.toDateString() === todayKey : false;
-      const isActiveToday = project.phase === 'in-progress' || isScheduledForToday;
-      if (!isActiveToday) return false;
+      if (project.phase !== 'in-progress') return false;
 
       const hasDailyReportToday = (installerReports || []).some((report) => {
         if (report.type !== 'daily') return false;
@@ -269,40 +253,6 @@ export default function InstallerDashboard() {
       });
     });
   }, [currentUser, myProjects, installerReports, installerReminders, saveInstallerReminder]);
-
-  const handleAcknowledgeProject = async (project: Quote) => {
-    if (!currentUser) return;
-
-    setAckLoadingProjectId(project.id);
-    try {
-      const notes = (ackNotesByProjectId[project.id] || '').trim();
-      const currentHistory = project.phaseHistory || [];
-      const shouldMoveInProgress = project.phase === 'planning' || project.phase === 'pending-assignment';
-
-      await updateQuote(project.id, {
-        assignmentAcknowledgedAt: new Date(),
-        assignmentAcknowledgedBy: currentUser.nickname,
-        assignmentAcknowledgementNotes: notes || undefined,
-        phase: shouldMoveInProgress ? 'in-progress' : project.phase,
-        phaseHistory: shouldMoveInProgress
-          ? [
-              ...currentHistory,
-              {
-                phase: 'in-progress',
-                timestamp: new Date(),
-                changedBy: currentUser.nickname,
-              },
-            ]
-          : currentHistory,
-      });
-
-      setAckNotesByProjectId((prev) => ({ ...prev, [project.id]: '' }));
-    } catch (error) {
-      console.error('Failed to acknowledge project assignment:', error);
-    } finally {
-      setAckLoadingProjectId(null);
-    }
-  };
 
   const getNotificationIcon = (type: string) => {
     switch (type) {
@@ -465,56 +415,6 @@ export default function InstallerDashboard() {
             </div>
           )}
         </div>
-
-        {pendingAcknowledgements.length > 0 && (
-          <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
-            <div className="flex items-center gap-3 mb-4">
-              <Clock size={22} className="text-amber-400" />
-              <h2 className="text-xl font-bold text-white">Job Acceptance Required</h2>
-            </div>
-            <p className="text-sm text-slate-400 mb-4">
-              Acknowledge scheduled jobs before starting work. You can include optional feedback for admin.
-            </p>
-
-            <div className="space-y-4">
-              {pendingAcknowledgements.map((project) => (
-                <div key={project.id} className="bg-slate-900/60 border border-slate-700 rounded-lg p-4">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <p className="font-semibold text-white">{project.title || project.customerName}</p>
-                      <p className="text-xs text-slate-400 mt-1">
-                        Scheduled for {new Date(project.scheduledWorkDate as Date).toLocaleDateString('ro-RO')}
-                      </p>
-                    </div>
-                    <span className="text-xs bg-amber-500/20 text-amber-300 px-2 py-1 rounded">
-                      Awaiting acknowledgment
-                    </span>
-                  </div>
-
-                  <textarea
-                    value={ackNotesByProjectId[project.id] || ''}
-                    onChange={(event) =>
-                      setAckNotesByProjectId((prev) => ({
-                        ...prev,
-                        [project.id]: event.target.value,
-                      }))
-                    }
-                    placeholder="Optional feedback for admin (constraints, ETA, dependencies)..."
-                    className="mt-3 w-full h-20 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-amber-500 outline-none resize-none"
-                  />
-
-                  <button
-                    onClick={() => handleAcknowledgeProject(project)}
-                    disabled={ackLoadingProjectId === project.id}
-                    className="mt-3 inline-flex items-center gap-2 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-700 text-white rounded-lg text-sm font-semibold"
-                  >
-                    {ackLoadingProjectId === project.id ? 'Saving...' : 'Acknowledge & Start'}
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
 
         <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
           <div className="flex items-center gap-3 mb-4">

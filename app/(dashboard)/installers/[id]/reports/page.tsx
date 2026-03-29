@@ -5,22 +5,18 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { useData } from '@/contexts/DataContext';
-import { InstallerReport, Quote, TeamMessageThread } from '@/types';
+import { InstallerReport } from '@/types';
 import { AlertCircle, Calendar as CalendarIcon, ChevronLeft, ChevronRight, Eye, FileText, Clock, ArrowLeft, X } from 'lucide-react';
 
 export default function InstallerReportsAdminPage() {
   const params = useParams();
   const installerId = params?.id as string;
   const { currentUser } = useAuth();
-  const { users, installerReports, savedQuotes, updateQuote, teamMessageThreads, saveTeamMessageThread } = useData();
+  const { users, installerReports } = useData();
 
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [showViewModal, setShowViewModal] = useState<InstallerReport | null>(null);
-  const [selectedQuoteId, setSelectedQuoteId] = useState('');
-  const [schedulingNotes, setSchedulingNotes] = useState('');
-  const [assignmentError, setAssignmentError] = useState('');
-  const [isAssigning, setIsAssigning] = useState(false);
 
   const installer = useMemo(() => {
     return (users || []).find((u) => u.id === installerId && u.role === 'INSTALLER');
@@ -60,108 +56,6 @@ export default function InstallerReportsAdminPage() {
   };
 
   const selectedDateReports = useMemo(() => getReportsForDate(selectedDate), [selectedDate, reportsForInstaller]);
-
-  const availableQuotes = useMemo<Quote[]>(() => {
-    if (!installer) return [];
-    return (savedQuotes || [])
-      .filter((quote) => quote.phase !== 'completed' && quote.phase !== 'archived')
-      .filter((quote) => !quote.allocatedInstallerId || quote.allocatedInstallerId === installer.nickname)
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [savedQuotes, installer]);
-
-  const conflictingJobs = useMemo(() => {
-    if (!installer || !selectedDate) return [];
-    const selectedDay = selectedDate.toDateString();
-    return (savedQuotes || []).filter((quote) => {
-      if (quote.allocatedInstallerId !== installer.nickname) return false;
-      if (!quote.scheduledWorkDate) return false;
-      if (quote.phase === 'completed' || quote.phase === 'archived') return false;
-      return new Date(quote.scheduledWorkDate).toDateString() === selectedDay;
-    });
-  }, [savedQuotes, installer, selectedDate]);
-
-  const handleAssignJob = async () => {
-    if (!installer || !selectedDate || !currentUser) return;
-    if (!selectedQuoteId) {
-      setAssignmentError('Select a project before assigning.');
-      return;
-    }
-
-    const selectedQuote = availableQuotes.find((quote) => quote.id === selectedQuoteId);
-    if (!selectedQuote) {
-      setAssignmentError('Selected project is not available anymore.');
-      return;
-    }
-
-    const dayConflicts = conflictingJobs.filter((quote) => quote.id !== selectedQuote.id);
-    if (dayConflicts.length > 0) {
-      setAssignmentError('Conflict detected: installer already has another active job on this day.');
-      return;
-    }
-
-    setAssignmentError('');
-    setIsAssigning(true);
-    try {
-      const history = selectedQuote.phaseHistory || [];
-      await updateQuote(selectedQuote.id, {
-        allocatedInstallerId: installer.nickname,
-        allocatedAt: selectedQuote.allocatedAt || new Date(),
-        scheduledWorkDate: selectedDate,
-        scheduledAt: new Date(),
-        scheduledBy: currentUser.nickname,
-        schedulingNotes: schedulingNotes.trim() || undefined,
-        assignmentAcknowledgedAt: undefined,
-        assignmentAcknowledgedBy: undefined,
-        assignmentAcknowledgementNotes: undefined,
-        phase: 'pending-assignment',
-        phaseHistory: [
-          ...history,
-          {
-            phase: 'pending-assignment',
-            timestamp: new Date(),
-            changedBy: currentUser.nickname,
-          },
-        ],
-      });
-
-      const baseThread: TeamMessageThread =
-        teamMessageThreads.find((thread) => thread.installerId === installer.id) || {
-          id: `team-${installer.id}`,
-          installerId: installer.id,
-          installerNickname: installer.nickname,
-          updatedAt: new Date(),
-          messages: [],
-        };
-
-      await saveTeamMessageThread({
-        ...baseThread,
-        updatedAt: new Date(),
-        messages: [
-          {
-            id: `${Date.now()}`,
-            senderRole: 'SUPER_ADMIN',
-            senderName: currentUser.nickname,
-            message: `New job scheduled for ${selectedDate.toLocaleDateString('ro-RO')}: ${selectedQuote.title || selectedQuote.customerName}${
-              schedulingNotes.trim() ? `\nNotes: ${schedulingNotes.trim()}` : ''
-            }. Please acknowledge this assignment from your dashboard before starting.`,
-            createdAt: new Date(),
-            readByAdmin: true,
-            readByInstaller: false,
-            quoteId: selectedQuote.id,
-          },
-          ...baseThread.messages,
-        ],
-      });
-
-      setSelectedQuoteId('');
-      setSchedulingNotes('');
-    } catch (error) {
-      console.error('Failed to assign job:', error);
-      setAssignmentError('Failed to assign job. Please retry.');
-    } finally {
-      setIsAssigning(false);
-    }
-  };
 
   const getReportIcon = (type: string) => {
     switch (type) {
@@ -325,65 +219,6 @@ export default function InstallerReportsAdminPage() {
               )}
             </div>
 
-            <div className="bg-slate-800 border border-slate-700 rounded-lg p-6 mt-6">
-              <h3 className="text-lg font-bold text-white mb-2">Schedule Job</h3>
-              <p className="text-xs text-slate-400 mb-4">
-                Pick a project and assign it to the selected date. Installer must acknowledge before work starts.
-              </p>
-
-              {!selectedDate ? (
-                <p className="text-sm text-slate-500">Select a date in calendar first.</p>
-              ) : (
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-xs text-slate-400 mb-1">Project</label>
-                    <select
-                      value={selectedQuoteId}
-                      onChange={(event) => setSelectedQuoteId(event.target.value)}
-                      className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-blue-500 outline-none"
-                    >
-                      <option value="">Select project</option>
-                      {availableQuotes.map((quote) => (
-                        <option key={quote.id} value={quote.id}>
-                          {quote.title || quote.customerName}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs text-slate-400 mb-1">Notes (optional)</label>
-                    <textarea
-                      value={schedulingNotes}
-                      onChange={(event) => setSchedulingNotes(event.target.value)}
-                      className="w-full h-20 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-blue-500 outline-none resize-none"
-                      placeholder="Preparation details, access notes, dependencies..."
-                    />
-                  </div>
-
-                  {conflictingJobs.length > 0 && (
-                    <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
-                      <p className="text-xs font-semibold text-red-300 mb-1">Conflict detected on selected day</p>
-                      <div className="text-xs text-red-200 space-y-1">
-                        {conflictingJobs.map((job) => (
-                          <p key={job.id}>- {job.title || job.customerName}</p>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {assignmentError && <p className="text-xs text-red-400">{assignmentError}</p>}
-
-                  <button
-                    onClick={handleAssignJob}
-                    disabled={isAssigning || !selectedDate || !selectedQuoteId}
-                    className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-700 disabled:text-slate-400 text-white font-semibold rounded-lg transition-colors"
-                  >
-                    {isAssigning ? 'Assigning...' : `Assign for ${selectedDate.toLocaleDateString('ro-RO')}`}
-                  </button>
-                </div>
-              )}
-            </div>
           </div>
         </div>
 

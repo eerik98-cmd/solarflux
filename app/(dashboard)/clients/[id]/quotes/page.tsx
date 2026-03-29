@@ -214,7 +214,7 @@ export default function ClientQuotesPage() {
       ...(quoteWon && allocatedInstallerId ? {
         allocatedInstallerId,
         allocatedAt: new Date(),
-        phase: 'pending-assignment'
+        phase: 'in-progress'
       } : {})
     };
     

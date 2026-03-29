@@ -10,7 +10,6 @@ import { InstallerReport, Quote, ProjectPhase, TeamMessageThread } from '@/types
 
 const phaseLabels: Record<ProjectPhase | '', string> = {
   'planning': 'Planning',
-  'pending-assignment': 'Pending Assignment',
   'in-progress': 'In Progress',
   'pending-inspection': 'Pending Inspection',
   'completed': 'Completed',
@@ -20,7 +19,6 @@ const phaseLabels: Record<ProjectPhase | '', string> = {
 
 const phaseColors: Record<ProjectPhase | '', string> = {
   'planning': 'bg-slate-500/20 text-slate-300',
-  'pending-assignment': 'bg-yellow-500/20 text-yellow-300',
   'in-progress': 'bg-purple-500/20 text-purple-300',
   'pending-inspection': 'bg-orange-500/20 text-orange-300',
   'completed': 'bg-green-500/20 text-green-300',

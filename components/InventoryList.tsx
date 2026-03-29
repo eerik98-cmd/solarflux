@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { InventoryItem, Category, User } from '../types';
-import { Search, Plus, Filter, AlertCircle, Edit2, Trash2, ScanBarcode, FileText, CheckCircle2, ShieldCheck, Hash, X, Zap } from 'lucide-react';
+import { Search, Plus, AlertCircle, Edit2, Trash2, ScanBarcode, FileText, CheckCircle2, ShieldCheck, Hash, X, Zap } from 'lucide-react';
 import { DocumentPreview } from './DocumentPreview';
 
 interface InventoryListProps {
@@ -59,8 +59,8 @@ export const InventoryList: React.FC<InventoryListProps> = ({
       </header>
 
       {/* Controls */}
-      <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 mb-6 flex flex-col md:flex-row gap-4">
-        <div className="relative flex-1">
+      <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 mb-6 flex flex-col gap-4">
+        <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={20} />
           <input 
             type="text" 
@@ -70,18 +70,33 @@ export const InventoryList: React.FC<InventoryListProps> = ({
             className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-10 pr-4 py-2.5 text-white placeholder-slate-500 focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none"
           />
         </div>
-        <div className="relative min-w-[200px]">
-          <Filter className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={20} />
-          <select 
-            value={filterCategory}
-            onChange={(e) => setFilterCategory(e.target.value as Category | 'All')}
-            className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-10 pr-4 py-2.5 text-white focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none appearance-none"
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setFilterCategory('All')}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
+              filterCategory === 'All'
+                ? 'bg-amber-500 text-slate-900 border-amber-500'
+                : 'bg-slate-900 text-slate-300 border-slate-700 hover:border-amber-500/50 hover:text-white'
+            }`}
           >
-            <option value="All">All Categories</option>
-            {Object.values(Category).map(cat => (
-              <option key={cat} value={cat}>{cat}</option>
-            ))}
-          </select>
+            All Categories
+          </button>
+          {Object.values(Category).map((cat) => (
+            <button
+              key={cat}
+              type="button"
+              onClick={() => setFilterCategory(cat)}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
+                filterCategory === cat
+                  ? 'bg-amber-500 text-slate-900 border-amber-500'
+                  : 'bg-slate-900 text-slate-300 border-slate-700 hover:border-amber-500/50 hover:text-white'
+              }`}
+            >
+              {cat}
+            </button>
+          ))}
         </div>
       </div>
 

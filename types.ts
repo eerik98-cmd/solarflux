@@ -58,7 +58,6 @@ export interface QuoteLineItem {
 
 export type ProjectPhase = 
   | 'planning' 
-  | 'pending-assignment' 
   | 'in-progress' 
   | 'pending-inspection' 
   | 'completed' 
@@ -106,15 +105,6 @@ export interface Quote {
   // Installer Allocation & Status
   allocatedInstallerId?: string; // Installer nickname who is assigned
   allocatedAt?: Date;
-  scheduledWorkDate?: Date; // Planned work day assigned by admin
-  scheduledBy?: string;
-  scheduledAt?: Date;
-  schedulingNotes?: string;
-
-  // Assignment acknowledgment workflow
-  assignmentAcknowledgedAt?: Date;
-  assignmentAcknowledgedBy?: string;
-  assignmentAcknowledgementNotes?: string;
   
   // Project Phase Tracking
   phase?: ProjectPhase; // Current phase of the project
