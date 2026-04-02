@@ -2,17 +2,43 @@
 
 import React, { useState } from 'react';
 import { useParams } from 'next/navigation';
+import { useAuth } from '@/contexts/AuthContext';
 import { useData } from '@/contexts/DataContext';
 import {
   Hammer, Package, AlertCircle, User, Calendar, CheckCircle2, Camera, Download, Trash2,
-  X, ChevronLeft, ChevronRight, FileText, TrendingUp, TrendingDown, ChevronDown, ChevronUp, RotateCcw, MessageSquare
+  X, ChevronLeft, ChevronRight, FileText, TrendingUp, TrendingDown, ChevronDown, ChevronUp, RotateCcw, MessageSquare, Plus, Save
 } from 'lucide-react';
-import { InstallationPhoto } from '@/types';
+import { EquipmentTrackingEntry, InstallationPhoto } from '@/types';
+import { aggregateEquipmentTrackingEntries, toWorkDateKey } from '@/lib/equipmentTracking';
+import { applyAssignedInstallersToQuote, getAssignedInstallerNames, getAssignedInstallers, getPrimaryAssignedInstallerName } from '@/lib/installerAssignments';
 
 interface ProjectGroup {
   projectName: string;
   quotes: any[];
   status: 'in-progress' | 'pending-approval' | 'completed';
+}
+
+function calculateProjectTrackingSummary(quotes: any[], entries: EquipmentTrackingEntry[]) {
+  return quotes.reduce(
+    (totals, quote) => {
+      const aggregate = aggregateEquipmentTrackingEntries(
+        quote,
+        entries.filter((entry) => entry.quoteId === quote.id)
+      );
+      const equipmentVariance = aggregate.materialVariances.reduce((sum, item) => sum + item.variance, 0);
+      const extraItemsTotal = aggregate.extraItems.reduce(
+        (sum, item) => sum + ((item.consumedQty || item.actuallyUsed || 0) * item.netPrice),
+        0
+      );
+
+      return {
+        equipmentVariance: totals.equipmentVariance + equipmentVariance,
+        extraItemsTotal: totals.extraItemsTotal + extraItemsTotal,
+        totalVariance: totals.totalVariance + equipmentVariance + extraItemsTotal,
+      };
+    },
+    { equipmentVariance: 0, extraItemsTotal: 0, totalVariance: 0 }
+  );
 }
 
 function generateConsumptionSummary(quotes: any[]) {
@@ -67,13 +93,19 @@ function generateConsumptionSummary(quotes: any[]) {
 
 export default function InstallationPage() {
   const params = useParams();
-  const { clients, savedQuotes, updateQuote } = useData();
+  const { currentUser } = useAuth();
+  const { clients, savedQuotes, updateQuote, equipmentTrackingEntries, users } = useData();
   const clientId = params.id as string;
   const [previewImageIndex, setPreviewImageIndex] = useState<number | null>(null);
   const [completionModal, setCompletionModal] = useState<{ isOpen: boolean; quoteId: string | null; notes: string }>({ isOpen: false, quoteId: null, notes: '' });
   const [reopenModal, setReopenModal] = useState<{ isOpen: boolean; quoteId: string | null; reason: string }>({ isOpen: false, quoteId: null, reason: '' });
+  const [assignmentDrafts, setAssignmentDrafts] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
+
+  const installerOptions = (users || [])
+    .filter((user) => user.role === 'INSTALLER')
+    .sort((a, b) => a.nickname.localeCompare(b.nickname));
 
   const handleCompleteProject = async (quoteId: string) => {
     setIsSubmitting(true);
@@ -121,7 +153,8 @@ export default function InstallationPage() {
   };
 
   const client = clients.find(c => c.id === clientId);
-  const allocatedQuotes = savedQuotes.filter(q => q.clientId === clientId && q.allocatedInstallerId);
+  const installationQuotes = savedQuotes.filter(q => q.clientId === clientId);
+  const clientTrackingEntries = equipmentTrackingEntries.filter((entry) => entry.clientId === clientId);
 
   if (!client) {
     return (
@@ -134,7 +167,7 @@ export default function InstallationPage() {
     );
   }
 
-  if (allocatedQuotes.length === 0) {
+  if (installationQuotes.length === 0) {
     return (
       <div className="h-full flex items-center justify-center bg-slate-900 p-8">
         <div className="text-center">
@@ -148,7 +181,7 @@ export default function InstallationPage() {
 
   // Group projects by project name
   const projectMap = new Map<string, any[]>();
-  allocatedQuotes.forEach(quote => {
+  installationQuotes.forEach(quote => {
     const projectName = client.needs?.projectName || quote.title || 'Unnamed Project';
     if (!projectMap.has(projectName)) {
       projectMap.set(projectName, []);
@@ -170,7 +203,78 @@ export default function InstallationPage() {
   });
 
   // Collect all photos
-  const allPhotos = allocatedQuotes.flatMap(q => q.installationPhotos || []);
+  const allPhotos = installationQuotes.flatMap(q => q.installationPhotos || []);
+
+  const updateInstallersForQuote = async (quote: any, nextAssignments: ReturnType<typeof getAssignedInstallers>) => {
+    const nextQuote = applyAssignedInstallersToQuote(quote, nextAssignments);
+    await updateQuote(quote.id, {
+      assignedInstallers: nextQuote.assignedInstallers,
+      allocatedInstallerId: nextQuote.allocatedInstallerId,
+      allocatedAt: nextQuote.allocatedAt,
+      phase: nextAssignments.length > 0 && (!quote.phase || quote.phase === 'planning') ? 'in-progress' : quote.phase,
+    });
+  };
+
+  const handleAddInstaller = async (quote: any) => {
+    const installerId = assignmentDrafts[quote.id];
+    const installer = installerOptions.find((user) => user.id === installerId);
+    if (!installer) return;
+
+    const existingAssignments = getAssignedInstallers(quote);
+    if (existingAssignments.some((assignment) => assignment.installerId === installer.id)) {
+      return;
+    }
+
+    await updateInstallersForQuote(quote, [
+      ...existingAssignments,
+      {
+        installerId: installer.id,
+        installerNickname: installer.nickname,
+        assignedAt: new Date(),
+        assignedBy: currentUser?.nickname || currentUser?.username || 'Admin',
+      },
+    ]);
+
+    setAssignmentDrafts((prev) => ({ ...prev, [quote.id]: '' }));
+  };
+
+  const handleChangeInstaller = async (quote: any, assignmentIndex: number, installerId: string) => {
+    const installer = installerOptions.find((user) => user.id === installerId);
+    if (!installer) return;
+
+    const existingAssignments = getAssignedInstallers(quote);
+    const currentAssignment = existingAssignments[assignmentIndex];
+    if (!currentAssignment) return;
+    if (existingAssignments.some((assignment, index) => index !== assignmentIndex && assignment.installerId === installer.id)) {
+      return;
+    }
+
+    const nextAssignments = existingAssignments.map((assignment, index) =>
+      index === assignmentIndex
+        ? {
+            ...assignment,
+            installerId: installer.id,
+            installerNickname: installer.nickname,
+          }
+        : assignment
+    );
+
+    await updateInstallersForQuote(quote, nextAssignments);
+  };
+
+  const handleRemoveInstaller = async (quote: any, assignmentIndex: number) => {
+    const existingAssignments = getAssignedInstallers(quote);
+    const nextAssignments = existingAssignments.filter((_, index) => index !== assignmentIndex);
+    await updateInstallersForQuote(quote, nextAssignments);
+  };
+
+  const handleSetLeadInstaller = async (quote: any, assignmentIndex: number) => {
+    const existingAssignments = getAssignedInstallers(quote);
+    if (assignmentIndex < 0 || assignmentIndex >= existingAssignments.length) return;
+    const leadAssignment = existingAssignments[assignmentIndex];
+    const nextAssignments = [leadAssignment, ...existingAssignments.filter((_, index) => index !== assignmentIndex)];
+    await updateInstallersForQuote(quote, nextAssignments);
+  };
 
   const handleDownloadPhoto = (photo: InstallationPhoto) => {
     const link = document.createElement('a');
@@ -221,6 +325,19 @@ export default function InstallationPage() {
           <h2 className="text-2xl font-bold text-white mb-4">Projects</h2>
           {projectGroups.map(group => {
             const isExpanded = expandedProjects.has(group.projectName);
+            const groupEntries = clientTrackingEntries
+              .filter((entry) => group.quotes.some((quote) => quote.id === entry.quoteId))
+              .sort((a, b) => {
+                const dateDiff = new Date(b.workDate).getTime() - new Date(a.workDate).getTime();
+                if (dateDiff !== 0) return dateDiff;
+                return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+              });
+            const entriesByDate: Record<string, EquipmentTrackingEntry[]> = groupEntries.reduce((acc, entry) => {
+              const key = toWorkDateKey(new Date(entry.workDate));
+              acc[key] = [...(acc[key] || []), entry].sort((a, b) => a.installerNickname.localeCompare(b.installerNickname));
+              return acc;
+            }, {} as Record<string, EquipmentTrackingEntry[]>);
+            const projectTrackingSummary = calculateProjectTrackingSummary(group.quotes, groupEntries);
             const statusColor =
               group.status === 'completed'
                 ? 'bg-green-500/20 text-green-400'
@@ -272,7 +389,7 @@ export default function InstallationPage() {
                               <div>
                                 <h5 className="font-semibold text-white">{quote.title || 'Untitled'}</h5>
                                 <p className="text-xs text-slate-400 mt-1 flex items-center gap-1">
-                                  <User size={12} /> {quote.allocatedInstallerId || 'Unassigned'}
+                                  <User size={12} /> {getAssignedInstallerNames(quote).join(', ') || 'Unassigned'}
                                 </p>
                               </div>
                               {quote.adminApprovedAt ? (
@@ -293,7 +410,7 @@ export default function InstallationPage() {
                               {quote.allocatedAt && (
                                 <p className="flex items-center gap-2">
                                   <Calendar size={12} />
-                                  Allocated: {new Date(quote.allocatedAt).toLocaleDateString()}
+                                  Lead assigned: {new Date(quote.allocatedAt).toLocaleDateString()}
                                 </p>
                               )}
                               {quote.completedAt && (
@@ -315,13 +432,290 @@ export default function InstallationPage() {
                                 </p>
                               )}
                             </div>
+
+                            <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
+                              <div className="flex items-center justify-between gap-4 mb-3">
+                                <h6 className="text-xs font-bold uppercase text-slate-400">Installers Working On This Project</h6>
+                                <span className="text-xs text-slate-500">Lead installer is shown first and kept in legacy project fields for compatibility.</span>
+                              </div>
+
+                              <div className="space-y-3">
+                                {getAssignedInstallers(quote).length > 0 ? (
+                                  getAssignedInstallers(quote).map((assignment, index) => (
+                                    <div key={`${quote.id}-${assignment.installerId}-${index}`} className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_auto_auto] gap-3 items-center rounded-lg border border-slate-700 bg-slate-800/70 p-3">
+                                      <div>
+                                        <select
+                                          value={assignment.installerId}
+                                          onChange={(e) => handleChangeInstaller(quote, index, e.target.value)}
+                                          className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                                        >
+                                          {installerOptions.map((installer) => (
+                                            <option key={installer.id} value={installer.id}>
+                                              {installer.nickname} (@{installer.username})
+                                            </option>
+                                          ))}
+                                        </select>
+                                        <p className="mt-1 text-xs text-slate-500">
+                                          Assigned {new Date(assignment.assignedAt).toLocaleString('ro-RO')}
+                                          {assignment.assignedBy ? ` by ${assignment.assignedBy}` : ''}
+                                        </p>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleSetLeadInstaller(quote, index)}
+                                        className={`rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${index === 0 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'}`}
+                                      >
+                                        {index === 0 ? 'Lead Installer' : 'Make Lead'}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleRemoveInstaller(quote, index)}
+                                        className="rounded-lg bg-red-500/15 px-3 py-2 text-xs font-semibold text-red-300 transition-colors hover:bg-red-500/25"
+                                      >
+                                        Remove
+                                      </button>
+                                    </div>
+                                  ))
+                                ) : (
+                                  <p className="text-sm text-slate-500">No installers assigned yet.</p>
+                                )}
+
+                                <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_auto] gap-3 items-center rounded-lg border border-dashed border-slate-700 p-3">
+                                  <select
+                                    value={assignmentDrafts[quote.id] || ''}
+                                    onChange={(e) => setAssignmentDrafts((prev) => ({ ...prev, [quote.id]: e.target.value }))}
+                                    className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                                  >
+                                    <option value="">Select installer to add</option>
+                                    {installerOptions
+                                      .filter((installer) => !getAssignedInstallers(quote).some((assignment) => assignment.installerId === installer.id))
+                                      .map((installer) => (
+                                        <option key={installer.id} value={installer.id}>
+                                          {installer.nickname} (@{installer.username})
+                                        </option>
+                                      ))}
+                                  </select>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAddInstaller(quote)}
+                                    disabled={!assignmentDrafts[quote.id]}
+                                    className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+                                  >
+                                    <Plus size={16} />
+                                    Add Installer
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+
+                            {quote.items && quote.items.length > 0 && (
+                              <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4 mt-4">
+                                <div className="flex items-center justify-between gap-4 mb-3">
+                                  <h6 className="text-xs font-bold uppercase text-slate-400">Original Quote Table</h6>
+                                  <span className="text-xs text-slate-500">
+                                    {quote.items.length} line item{quote.items.length === 1 ? '' : 's'}
+                                  </span>
+                                </div>
+
+                                <div className="overflow-x-auto">
+                                  <table className="w-full text-sm">
+                                    <thead className="border-b border-slate-700">
+                                      <tr>
+                                        <th className="py-2 px-3 text-left text-slate-400">Item</th>
+                                        <th className="py-2 px-3 text-center text-slate-400">Qty</th>
+                                        <th className="py-2 px-3 text-center text-slate-400">Unit</th>
+                                        <th className="py-2 px-3 text-right text-slate-400">Unit Price</th>
+                                        <th className="py-2 px-3 text-right text-slate-400">Line Total</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-700/60">
+                                      {quote.items.map((item: any) => (
+                                        <tr key={item.id}>
+                                          <td className="py-2 px-3 text-slate-200">{item.description}</td>
+                                          <td className="py-2 px-3 text-center text-white">{item.quantity}</td>
+                                          <td className="py-2 px-3 text-center text-slate-300">{item.unit}</td>
+                                          <td className="py-2 px-3 text-right text-slate-300">
+                                            {item.netPrice.toLocaleString('ro-RO', { style: 'currency', currency: 'RON' })}
+                                          </td>
+                                          <td className="py-2 px-3 text-right font-semibold text-white">
+                                            {(item.quantity * item.netPrice).toLocaleString('ro-RO', { style: 'currency', currency: 'RON' })}
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                    <tfoot className="border-t border-slate-700">
+                                      <tr>
+                                        <td colSpan={4} className="py-3 px-3 text-right text-xs font-bold uppercase text-slate-500">
+                                          Quote Total
+                                        </td>
+                                        <td className="py-3 px-3 text-right font-bold text-emerald-300">
+                                          {quote.totalGross.toLocaleString('ro-RO', { style: 'currency', currency: 'RON' })}
+                                        </td>
+                                      </tr>
+                                    </tfoot>
+                                  </table>
+                                </div>
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>
                     </div>
 
                     {/* Equipment & Usage Tracking (for single installer projects) */}
-                    {group.quotes.length === 1 && (
+                    {groupEntries.length > 0 ? (
+                      <div>
+                        <div className="flex items-center justify-between mb-4">
+                          <h4 className="text-sm font-bold text-slate-300 uppercase">Equipment Tracking History</h4>
+                          <span className="text-xs text-slate-400">
+                            {groupEntries.length} entr{groupEntries.length === 1 ? 'y' : 'ies'}
+                          </span>
+                        </div>
+
+                        <div className="mb-5 grid grid-cols-1 md:grid-cols-3 gap-3">
+                          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+                            <p className="text-xs text-slate-500 mb-1">Equipment Variance</p>
+                            <p className={`text-lg font-bold ${projectTrackingSummary.equipmentVariance > 0 ? 'text-red-400' : projectTrackingSummary.equipmentVariance < 0 ? 'text-green-400' : 'text-white'}`}>
+                              {projectTrackingSummary.equipmentVariance > 0 ? '+' : ''}
+                              {projectTrackingSummary.equipmentVariance.toFixed(2)} RON
+                            </p>
+                          </div>
+                          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+                            <p className="text-xs text-slate-500 mb-1">Extra Materials</p>
+                            <p className="text-lg font-bold text-emerald-400">{projectTrackingSummary.extraItemsTotal.toFixed(2)} RON</p>
+                          </div>
+                          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+                            <p className="text-xs text-slate-500 mb-1">Project Total Difference</p>
+                            <p className={`text-lg font-bold ${projectTrackingSummary.totalVariance > 0 ? 'text-red-400' : projectTrackingSummary.totalVariance < 0 ? 'text-green-400' : 'text-white'}`}>
+                              {projectTrackingSummary.totalVariance > 0 ? '+' : ''}
+                              {projectTrackingSummary.totalVariance.toFixed(2)} RON
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="space-y-4">
+                          {Object.entries(entriesByDate).map(([dateKey, dateEntries]) => (
+                            <div key={dateKey} className="rounded-lg border border-slate-700 bg-slate-900/30 p-4">
+                              <div className="flex items-center justify-between mb-3">
+                                <h5 className="text-sm font-bold text-white">
+                                  {new Date(dateEntries[0].workDate).toLocaleDateString('ro-RO', {
+                                    weekday: 'long',
+                                    year: 'numeric',
+                                    month: 'long',
+                                    day: 'numeric',
+                                  })}
+                                </h5>
+                                <span className="text-xs text-slate-400">{dateEntries.length} installer submission{dateEntries.length === 1 ? '' : 's'}</span>
+                              </div>
+
+                              <div className="space-y-3">
+                                {dateEntries.map((entry) => {
+                                  const entryExtraTotal = entry.extraItems.reduce(
+                                    (sum, item) => sum + ((item.consumedQty || item.actuallyUsed || 0) * item.netPrice),
+                                    0
+                                  );
+
+                                  return (
+                                    <details key={entry.id} className="rounded-lg border border-slate-700 bg-slate-800/70 p-4">
+                                      <summary className="cursor-pointer list-none">
+                                        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                                          <div>
+                                            <div className="flex items-center gap-2">
+                                              <span className="font-semibold text-white">{entry.installerNickname}</span>
+                                              <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${entry.status === 'submitted' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/20 text-amber-300'}`}>
+                                                {entry.status}
+                                              </span>
+                                            </div>
+                                            <p className="text-xs text-slate-400 mt-1">
+                                              Updated {new Date(entry.updatedAt).toLocaleString('ro-RO')}
+                                              {entry.projectTitle ? ` • ${entry.projectTitle}` : ''}
+                                            </p>
+                                          </div>
+                                          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs text-slate-300">
+                                            <div>
+                                              <p className="text-slate-500">Items</p>
+                                              <p className="font-semibold text-white">{entry.items.length}</p>
+                                            </div>
+                                            <div>
+                                              <p className="text-slate-500">Extras</p>
+                                              <p className="font-semibold text-white">{entry.extraItems.length}</p>
+                                            </div>
+                                            <div>
+                                              <p className="text-slate-500">Photos</p>
+                                              <p className="font-semibold text-white">{entry.installationPhotos.length}</p>
+                                            </div>
+                                            <div>
+                                              <p className="text-slate-500">Extra value</p>
+                                              <p className="font-semibold text-white">{entryExtraTotal.toFixed(2)} RON</p>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      </summary>
+
+                                      <div className="mt-4 space-y-4 border-t border-slate-700 pt-4">
+                                        {(entry.notes || entry.groundingValue || entry.lowVoltageCableCheck) && (
+                                          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3 text-sm text-slate-300">
+                                            {entry.notes && (
+                                              <div className="mb-2">
+                                                <p className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-500">Installation Report</p>
+                                                <p className="whitespace-pre-wrap">{entry.notes}</p>
+                                              </div>
+                                            )}
+                                            <div className="flex flex-wrap gap-4 text-xs text-slate-400">
+                                              {entry.groundingValue && <span>Grounding: {entry.groundingValue}</span>}
+                                              {entry.lowVoltageCableCheck && <span>LV check: {entry.lowVoltageCableCheck}</span>}
+                                            </div>
+                                          </div>
+                                        )}
+
+                                        <div className="overflow-x-auto">
+                                          <table className="w-full text-sm">
+                                            <thead className="border-b border-slate-700">
+                                              <tr>
+                                                <th className="py-2 px-3 text-left text-slate-400">Item</th>
+                                                <th className="py-2 px-3 text-center text-slate-400">Quoted</th>
+                                                <th className="py-2 px-3 text-center text-slate-400">Used</th>
+                                                <th className="py-2 px-3 text-center text-slate-400">Variance</th>
+                                                <th className="py-2 px-3 text-right text-slate-400">Value</th>
+                                              </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-slate-700/60">
+                                              {entry.items.map((item) => {
+                                                const diff = (item.consumedQty || item.actuallyUsed || 0) - item.quotedQty;
+                                                return (
+                                                  <tr key={item.id}>
+                                                    <td className="py-2 px-3 text-slate-200">{item.description}</td>
+                                                    <td className="py-2 px-3 text-center text-slate-300">{item.quotedQty} {item.unit}</td>
+                                                    <td className="py-2 px-3 text-center text-white">{item.consumedQty || item.actuallyUsed || 0} {item.unit}</td>
+                                                    <td className={`py-2 px-3 text-center font-semibold ${diff > 0 ? 'text-red-400' : diff < 0 ? 'text-green-400' : 'text-slate-300'}`}>
+                                                      {diff > 0 ? '+' : ''}{diff} {item.unit}
+                                                    </td>
+                                                    <td className="py-2 px-3 text-right text-slate-300">{(diff * item.netPrice).toFixed(2)} RON</td>
+                                                  </tr>
+                                                );
+                                              })}
+                                              {entry.extraItems.map((item) => (
+                                                <tr key={item.id} className="bg-emerald-500/5">
+                                                  <td className="py-2 px-3 text-emerald-300">EXTRA: {item.description}</td>
+                                                  <td className="py-2 px-3 text-center text-slate-500">-</td>
+                                                  <td className="py-2 px-3 text-center text-white">{item.consumedQty || item.actuallyUsed || 0} {item.unit}</td>
+                                                  <td className="py-2 px-3 text-center font-semibold text-red-400">+{item.consumedQty || item.actuallyUsed || 0} {item.unit}</td>
+                                                  <td className="py-2 px-3 text-right text-slate-300">{(((item.consumedQty || item.actuallyUsed || 0) * item.netPrice)).toFixed(2)} RON</td>
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      </div>
+                                    </details>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : group.quotes.length === 1 && (
                       <div>
                         <h4 className="text-sm font-bold text-slate-300 uppercase mb-4">Equipment & Usage Tracking</h4>
                         <div className="overflow-x-auto">
@@ -525,28 +919,6 @@ export default function InstallationPage() {
                               </div>
                             </div>
                           ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Installation Reports */}
-                    {group.quotes.some(q => (q as any).completionNotes) && (
-                      <div>
-                        <h4 className="text-sm font-bold text-slate-300 uppercase mb-4">Installation Reports</h4>
-                        <div className="space-y-4">
-                          {group.quotes.map(q => {
-                            const notes = (q as any).completionNotes;
-                            if (!notes) return null;
-                            return (
-                              <div key={q.id} className="bg-slate-900/50 rounded-lg p-4 border border-slate-600">
-                                <h5 className="text-white font-semibold mb-2">{q.title || 'Installation Report'}</h5>
-                                <p className="text-slate-300 text-sm whitespace-pre-wrap">{notes}</p>
-                                <p className="text-xs text-slate-400 mt-3">
-                                  Updated: {q.completedAt ? new Date(q.completedAt).toLocaleDateString('ro-RO') : 'Recently'}
-                                </p>
-                              </div>
-                            );
-                          })}
                         </div>
                       </div>
                     )}

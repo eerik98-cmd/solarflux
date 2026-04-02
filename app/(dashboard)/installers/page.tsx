@@ -5,6 +5,7 @@ import { Users, Briefcase, CheckCircle, Clock, AlertCircle, ChevronRight, Search
 import { useAuth } from '@/contexts/AuthContext';
 import { useData } from '@/contexts/DataContext';
 import Link from 'next/link';
+import { isInstallerAssignedToQuote } from '@/lib/installerAssignments';
 
 export default function InstallersPage() {
   const { currentUser } = useAuth();
@@ -22,7 +23,7 @@ export default function InstallersPage() {
     return installers.map(installer => {
       // Projects allocated to this installer
       const allocatedProjects = (savedQuotes || []).filter(
-        q => q.allocatedInstallerId === installer.nickname
+        (quote) => isInstallerAssignedToQuote(quote, installer)
       );
 
       // Active projects (allocated but not completed)

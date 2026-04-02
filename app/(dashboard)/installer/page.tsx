@@ -6,6 +6,7 @@ import { useData } from '@/contexts/DataContext';
 import { Bell, CheckCircle, Clock, Briefcase, TrendingUp, MessageSquare, Send } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { TeamMessageThread } from '@/types';
+import { isInstallerAssignedToQuote } from '@/lib/installerAssignments';
 
 const getTimelineDayLabel = (value: Date) => {
   const day = new Date(value);
@@ -37,7 +38,7 @@ export default function InstallerDashboard() {
   // Get projects assigned to current installer
   const myProjects = useMemo(() => {
     if (!currentUser) return [];
-    return savedQuotes.filter(q => q.allocatedInstallerId === currentUser.nickname);
+    return savedQuotes.filter((quote) => isInstallerAssignedToQuote(quote, currentUser));
   }, [savedQuotes, currentUser]);
 
   // Unfinished projects (not completed)

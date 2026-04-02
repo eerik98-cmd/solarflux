@@ -6,6 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useData } from '@/contexts/DataContext';
 import { Quote } from '@/types';
 import Link from 'next/link';
+import { getAssignedInstallerNames, getPrimaryAssignedInstallerName } from '@/lib/installerAssignments';
 
 type ProjectFilter = 'all' | 'unassigned' | 'active' | 'completed';
 
@@ -29,8 +30,8 @@ export default function ProjectsByInstallerPage() {
   const categorizedProjects = useMemo(() => {
     const quotes = savedQuotes || [];
 
-    const unassigned = quotes.filter(q => !q.allocatedInstallerId && !isCompletedProject(q));
-    const active = quotes.filter(q => q.allocatedInstallerId && !isCompletedProject(q));
+    const unassigned = quotes.filter(q => getAssignedInstallerNames(q).length === 0 && !isCompletedProject(q));
+    const active = quotes.filter(q => getAssignedInstallerNames(q).length > 0 && !isCompletedProject(q));
     const completed = quotes.filter(q => isCompletedProject(q));
 
     return {
@@ -46,9 +47,9 @@ export default function ProjectsByInstallerPage() {
     let projects = categorizedProjects[filter];
 
     if (installerFilter === 'unassigned') {
-      projects = projects.filter(q => !q.allocatedInstallerId);
+      projects = projects.filter(q => getAssignedInstallerNames(q).length === 0);
     } else if (installerFilter !== 'all') {
-      projects = projects.filter(q => q.allocatedInstallerId === installerFilter);
+      projects = projects.filter(q => getAssignedInstallerNames(q).includes(installerFilter));
     }
 
     if (searchTerm.trim()) {
@@ -58,7 +59,7 @@ export default function ProjectsByInstallerPage() {
         return (
           q.title?.toLowerCase().includes(lower) ||
           clientName.toLowerCase().includes(lower) ||
-          q.allocatedInstallerId?.toLowerCase().includes(lower) ||
+          getAssignedInstallerNames(q).some((installerName) => installerName.toLowerCase().includes(lower)) ||
           q.customerName.toLowerCase().includes(lower)
         );
       });
@@ -99,14 +100,16 @@ export default function ProjectsByInstallerPage() {
 
   const renderProjectRow = (project: Quote) => {
     const client = getClientInfo(project.clientId);
-    const installer = getInstallerInfo(project.allocatedInstallerId);
+    const primaryInstallerName = getPrimaryAssignedInstallerName(project);
+    const installer = getInstallerInfo(primaryInstallerName);
+    const assignedInstallers = getAssignedInstallerNames(project);
     const variance = project.materialVariances?.reduce((sum, mv) => sum + mv.variance, 0) || 0;
 
     const getStatusBadge = () => {
       if (isCompletedProject(project)) {
         return <span className="text-xs bg-green-500/20 text-green-400 px-3 py-1 rounded-full font-semibold">Completed</span>;
       }
-      if (project.allocatedInstallerId) {
+      if (assignedInstallers.length > 0) {
         return <span className="text-xs bg-blue-500/20 text-blue-400 px-3 py-1 rounded-full font-semibold">Active</span>;
       }
       return <span className="text-xs bg-slate-500/20 text-slate-300 px-3 py-1 rounded-full font-semibold">Unassigned</span>;
@@ -134,13 +137,13 @@ export default function ProjectsByInstallerPage() {
                 <div className="hover:cursor-pointer">
                   <p className="text-sm font-semibold text-slate-300 hover:text-emerald-400 transition-colors flex items-center gap-2">
                     <User size={14} />
-                    {installer.nickname}
+                    {assignedInstallers.join(', ')}
                   </p>
                   <p className="text-xs text-slate-500 mt-1">@{installer.username}</p>
                 </div>
               </Link>
             ) : (
-              <div className="text-xs text-slate-500 italic">Not assigned</div>
+              <div className="text-xs text-slate-500 italic">{assignedInstallers.join(', ') || 'Not assigned'}</div>
             )}
           </div>
 
@@ -188,7 +191,7 @@ export default function ProjectsByInstallerPage() {
 
         {/* Alerts */}
         <div className="mt-3 pt-3 border-t border-slate-700 flex gap-2 flex-wrap">
-          {!project.allocatedInstallerId && (
+          {assignedInstallers.length === 0 && (
             <span className="text-xs bg-red-500/20 text-red-400 px-2 py-1 rounded flex items-center gap-1">
               <AlertCircle size={12} />
               No installer assigned

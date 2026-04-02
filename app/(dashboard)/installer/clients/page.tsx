@@ -3,8 +3,10 @@
 import React, { useState, useMemo } from 'react';
 import { useData } from '@/contexts/DataContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { ClientType } from '@/types';
 import { Search, User, MapPin, Phone, Mail, FileText, Eye, Briefcase } from 'lucide-react';
 import Link from 'next/link';
+import { isInstallerAssignedToQuote } from '@/lib/installerAssignments';
 
 export default function InstallerClientsPage() {
   const { clients, savedQuotes } = useData();
@@ -15,7 +17,7 @@ export default function InstallerClientsPage() {
   const hasJobForClient = (clientId: string) => {
     return savedQuotes.some(quote => 
       quote.clientId === clientId && 
-      quote.allocatedInstallerId === currentUser?.nickname &&
+      isInstallerAssignedToQuote(quote, currentUser) &&
       quote.phase !== 'completed' &&
       quote.phase !== 'archived'
     );
@@ -81,7 +83,7 @@ export default function InstallerClientsPage() {
                           {client.name}
                         </h3>
                         <span className={`text-xs px-2 py-1 rounded-full font-semibold ${
-                          client.type === 'PRIVATE' 
+                          client.type === ClientType.PRIVATE
                             ? 'bg-blue-500/20 text-blue-300'
                             : 'bg-purple-500/20 text-purple-300'
                         }`}>

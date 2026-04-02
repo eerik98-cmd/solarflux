@@ -1,7 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { InventoryItem, Client, Quote, User, DocTemplate, TeamMessageThread, InstallerReport, InstallerReminder } from '@/types';
+import { InventoryItem, Client, Quote, User, DocTemplate, TeamMessageThread, InstallerReport, InstallerReminder, EquipmentTrackingEntry } from '@/types';
 import { StorageService } from '@/services/storageService';
 import { MOCK_USERS } from '@/constants';
 
@@ -13,6 +13,7 @@ interface DataContextType {
   teamMessageThreads: TeamMessageThread[];
   installerReports: InstallerReport[];
   installerReminders: InstallerReminder[];
+  equipmentTrackingEntries: EquipmentTrackingEntry[];
   docTemplates: DocTemplate[];
   companyDocuments: Record<string, unknown>[];
   dbConnectionError: boolean;
@@ -23,6 +24,7 @@ interface DataContextType {
   setTeamMessageThreads: (threads: TeamMessageThread[]) => void;
   setInstallerReports: (reports: InstallerReport[]) => void;
   setInstallerReminders: (reminders: InstallerReminder[]) => void;
+  setEquipmentTrackingEntries: (entries: EquipmentTrackingEntry[]) => void;
   setDocTemplates: (templates: DocTemplate[]) => void;
   setCompanyDocuments: (docs: Record<string, unknown>[]) => void;
   saveQuote: (quote: Quote) => Promise<void>;
@@ -32,6 +34,8 @@ interface DataContextType {
   saveTeamMessageThread: (thread: TeamMessageThread) => Promise<void>;
   saveInstallerReport: (report: InstallerReport) => Promise<void>;
   deleteInstallerReport: (reportId: string) => Promise<void>;
+  saveEquipmentTrackingEntry: (entry: EquipmentTrackingEntry) => Promise<void>;
+  deleteEquipmentTrackingEntry: (entryId: string) => Promise<void>;
   saveInstallerReminder: (reminder: InstallerReminder) => Promise<void>;
   markInstallerReminderRead: (reminderId: string) => Promise<void>;
 }
@@ -46,6 +50,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   const [teamMessageThreads, setTeamMessageThreads] = useState<TeamMessageThread[]>([]);
   const [installerReports, setInstallerReports] = useState<InstallerReport[]>([]);
   const [installerReminders, setInstallerReminders] = useState<InstallerReminder[]>([]);
+  const [equipmentTrackingEntries, setEquipmentTrackingEntries] = useState<EquipmentTrackingEntry[]>([]);
   const [docTemplates, setDocTemplates] = useState<DocTemplate[]>([]);
   const [companyDocuments, setCompanyDocuments] = useState<Record<string, unknown>[]>([]);
   const [dbConnectionError, setDbConnectionError] = useState(false);
@@ -73,6 +78,9 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     const unsubInstallerReminders = StorageService.subscribe('installerReminders', (data) =>
       setInstallerReminders(data as InstallerReminder[])
     );
+    const unsubEquipmentTrackingEntries = StorageService.subscribe('equipmentTrackingEntries', (data) =>
+      setEquipmentTrackingEntries(data as EquipmentTrackingEntry[])
+    );
     const unsubTemplates = StorageService.subscribe('templates', (data) => 
       setDocTemplates(data as DocTemplate[])
     );
@@ -98,6 +106,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       unsubTeamMessages();
       unsubInstallerReports();
       unsubInstallerReminders();
+      unsubEquipmentTrackingEntries();
       unsubTemplates();
       unsubCompanyDocuments();
     };
@@ -134,6 +143,14 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     await StorageService.deleteItem('installerReports', reportId);
   };
 
+  const saveEquipmentTrackingEntry = async (entry: EquipmentTrackingEntry) => {
+    await StorageService.saveItem('equipmentTrackingEntries', entry);
+  };
+
+  const deleteEquipmentTrackingEntry = async (entryId: string) => {
+    await StorageService.deleteItem('equipmentTrackingEntries', entryId);
+  };
+
   const saveInstallerReminder = async (reminder: InstallerReminder) => {
     await StorageService.saveItem('installerReminders', reminder);
   };
@@ -157,6 +174,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         teamMessageThreads,
         installerReports,
         installerReminders,
+        equipmentTrackingEntries,
         docTemplates,
         companyDocuments,
         dbConnectionError,
@@ -167,6 +185,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         setTeamMessageThreads,
         setInstallerReports,
         setInstallerReminders,
+        setEquipmentTrackingEntries,
         setDocTemplates,
         setCompanyDocuments,
         saveQuote,
@@ -176,6 +195,8 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         saveTeamMessageThread,
         saveInstallerReport,
         deleteInstallerReport,
+        saveEquipmentTrackingEntry,
+        deleteEquipmentTrackingEntry,
         saveInstallerReminder,
         markInstallerReminderRead,
       }}

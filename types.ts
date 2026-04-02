@@ -105,6 +105,12 @@ export interface Quote {
   // Installer Allocation & Status
   allocatedInstallerId?: string; // Installer nickname who is assigned
   allocatedAt?: Date;
+  assignedInstallers?: Array<{
+    installerId: string;
+    installerNickname: string;
+    assignedAt: Date;
+    assignedBy?: string;
+  }>;
   
   // Project Phase Tracking
   phase?: ProjectPhase; // Current phase of the project
@@ -407,6 +413,13 @@ export interface User {
   role: UserRole;
 }
 
+export interface AssignedInstaller {
+  installerId: string;
+  installerNickname: string;
+  assignedAt: Date;
+  assignedBy?: string;
+}
+
 // Session data stored in encrypted cookie
 export interface SessionData {
   userId: string;
@@ -473,6 +486,28 @@ export interface InstallerReport {
   type: 'daily' | 'incident' | 'time';
   createdAt: Date;
   data: Record<string, unknown>;
+}
+
+export type EquipmentTrackingEntryStatus = 'draft' | 'submitted';
+
+export interface EquipmentTrackingEntry {
+  id: string;
+  quoteId: string;
+  clientId: string;
+  projectTitle?: string;
+  workDate: Date;
+  installerId: string;
+  installerNickname: string;
+  status: EquipmentTrackingEntryStatus;
+  items: ConsumptionItem[];
+  extraItems: ConsumptionItem[];
+  installationPhotos: InstallationPhoto[];
+  notes?: string;
+  groundingValue?: string;
+  lowVoltageCableCheck?: 'Corespunde' | 'Nu corespunde';
+  createdAt: Date;
+  updatedAt: Date;
+  submittedAt?: Date;
 }
 
 export type View = 'DASHBOARD' | 'INVENTORY' | 'AI_ASSISTANT' | 'QUOTE_GENERATOR' | 'CLIENTS' | 'SETTINGS' | 'FILE_MANAGER' | 'MANAGE_TEAM';

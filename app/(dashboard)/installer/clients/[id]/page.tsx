@@ -9,34 +9,71 @@ import {
   X, Image as ImageIcon, Plus, Minus, Save, Camera, TrendingUp, ListChecks,
   FolderOpen, ChevronDown, ChevronUp, CheckCircle
 } from 'lucide-react';
-import { ClientDocument, QuoteLineItem } from '@/types';
+import { ClientDocument, EquipmentTrackingEntry, QuoteLineItem } from '@/types';
+import {
+  aggregateEquipmentTrackingEntries,
+  buildEquipmentTrackingEntryId,
+  findMatchingQuoteLineItem,
+  startOfLocalDay,
+  toWorkDateKey,
+} from '@/lib/equipmentTracking';
+import { getAssignedInstallerNames, isInstallerAssignedToQuote } from '@/lib/installerAssignments';
 
 interface EnhancedQuoteItem extends QuoteLineItem {
   actuallyUsed?: number;
   quotedQuantity?: number;
   barcode?: string;
   hasBarcode?: boolean;
+  originalLineItemId?: string;
 }
 
 const SERIAL_REQUIRED_REGEX = /(inverter|invertor|battery|baterie|acumulator)/i;
 
+const normalizeInventoryName = (value?: string) => (value || '').trim().toLocaleLowerCase();
+
+const createBlankTrackingRow = (): EnhancedQuoteItem => ({
+  id: `row-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  description: '',
+  unit: 'buc',
+  quantity: 0,
+  quotedQuantity: 0,
+  netPrice: 0,
+  actuallyUsed: 0,
+  selectedSerialNumbers: [],
+});
+
+const isMeaningfulTrackingRow = (item: EnhancedQuoteItem) => {
+  return Boolean(
+    item.description.trim() ||
+      item.inventoryItemId ||
+      item.actuallyUsed ||
+      item.netPrice ||
+      (item.selectedSerialNumbers && item.selectedSerialNumbers.length > 0)
+  );
+};
+
 export default function InstallerClientDetailPage() {
   const params = useParams();
   const router = useRouter();
-  const { clients, updateClient, savedQuotes, inventory, saveQuote } = useData();
+  const { clients, updateClient, savedQuotes, inventory, saveQuote, equipmentTrackingEntries, saveEquipmentTrackingEntry } = useData();
   const { currentUser } = useAuth();
   const clientId = params?.id as string;
+  const todayWorkDate = useMemo(() => startOfLocalDay(new Date()), []);
 
   const [uploading, setUploading] = useState(false);
   const [uploadType, setUploadType] = useState<'CI' | 'CF' | 'Fact' | 'CUI' | 'Other'>('Other');
   const [uploadDescription, setUploadDescription] = useState('');
   const [previewDoc, setPreviewDoc] = useState<ClientDocument | null>(null);
   const [showImages, setShowImages] = useState(false);
+  const [mainEquipmentData, setMainEquipmentData] = useState<EnhancedQuoteItem[]>([]);
+  const [mainExtraItems, setMainExtraItems] = useState<EnhancedQuoteItem[]>([]);
   const [equipmentData, setEquipmentData] = useState<EnhancedQuoteItem[]>([]);
-  const [extraItems, setExtraItems] = useState<EnhancedQuoteItem[]>([]);
   const [installationPhotos, setInstallationPhotos] = useState<Array<{id: string, url: string, description: string, timestamp: Date, uploadedBy?: string, uploadedAt?: Date}>>([]);
   const [finalReport, setFinalReport] = useState<string>('');
   const [selectedProjectId, setSelectedProjectId] = useState<string>('');
+  const [isTrackingEntryOpen, setIsTrackingEntryOpen] = useState(false);
+  const [openedTrackingEntryId, setOpenedTrackingEntryId] = useState<string | null>(null);
+  const [editingWorkDate, setEditingWorkDate] = useState<Date | null>(null);
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
   const [isInitialized, setIsInitialized] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -70,6 +107,36 @@ export default function InstallerClientDetailPage() {
     [selectedProject]
   );
 
+  const currentInstallerId = currentUser?.id || currentUser?.nickname || 'unknown-installer';
+
+  const projectTrackingEntries = useMemo(() => {
+    if (!selectedProject) return [];
+    return equipmentTrackingEntries
+      .filter((entry) => entry.quoteId === selectedProject.id)
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  }, [equipmentTrackingEntries, selectedProject]);
+
+  const installerProjectEntries = useMemo(() => {
+    if (!currentUser) return [];
+    return projectTrackingEntries.filter(
+      (entry) => entry.installerId === currentUser.id || entry.installerNickname === currentUser.nickname
+    );
+  }, [projectTrackingEntries, currentUser]);
+
+  const activeTrackingEntry = useMemo(() => {
+    return installerProjectEntries.find(
+      (entry) => toWorkDateKey(new Date(entry.workDate)) === toWorkDateKey(todayWorkDate)
+    ) || null;
+  }, [installerProjectEntries, todayWorkDate]);
+
+  const openedTrackingEntry = useMemo(() => {
+    if (!openedTrackingEntryId) {
+      return null;
+    }
+
+    return installerProjectEntries.find((entry) => entry.id === openedTrackingEntryId) || null;
+  }, [installerProjectEntries, openedTrackingEntryId]);
+
   useEffect(() => {
     if (clientQuotes.length === 0) {
       setSelectedProjectId('');
@@ -80,6 +147,45 @@ export default function InstallerClientDetailPage() {
       setSelectedProjectId('');
     }
   }, [clientQuotes, selectedProjectId]);
+
+  useEffect(() => {
+    setIsTrackingEntryOpen(false);
+    setOpenedTrackingEntryId(null);
+    setEditingWorkDate(null);
+  }, [selectedProjectId]);
+
+  useEffect(() => {
+    if (!selectedProject) {
+      setMainEquipmentData([]);
+      setMainExtraItems([]);
+      return;
+    }
+
+    const enhanced: EnhancedQuoteItem[] = allQuoteItems.map((item) => {
+      const inventoryItem = inventory.find((inv) => inv.id === item.inventoryItemId);
+      const savedConsumptionData = (selectedProject.consumptionData || []).find((cd) => cd.id === item.id);
+
+      return {
+        ...item,
+        actuallyUsed: savedConsumptionData?.actuallyUsed ?? savedConsumptionData?.consumedQty ?? item.quantity,
+        selectedSerialNumbers: savedConsumptionData?.selectedSerialNumbers ?? item.selectedSerialNumbers ?? [],
+        quotedQuantity: item.quantity,
+        barcode: inventoryItem?.barcode,
+        hasBarcode: !!inventoryItem?.barcode,
+      };
+    });
+
+    const savedExtraItems = (selectedProject.extraItems || [])
+      .filter((item) => item.isExtra)
+      .map((item) => ({
+        ...item,
+        quantity: item.actuallyUsed ?? item.consumedQty,
+        actuallyUsed: item.actuallyUsed ?? item.consumedQty,
+      } as EnhancedQuoteItem));
+
+    setMainEquipmentData(enhanced);
+    setMainExtraItems(savedExtraItems);
+  }, [selectedProject, allQuoteItems, inventory]);
 
   const toggleProjectExpanded = (quoteId: string) => {
     setExpandedProjects((prev) => {
@@ -95,9 +201,8 @@ export default function InstallerClientDetailPage() {
 
   // Initialize data for selected project
   useEffect(() => {
-    if (!selectedProject) {
+    if (!selectedProject || !isTrackingEntryOpen) {
       setEquipmentData([]);
-      setExtraItems([]);
       setInstallationPhotos([]);
       setFinalReport('');
       setGroundingValue('');
@@ -107,49 +212,60 @@ export default function InstallerClientDetailPage() {
       return;
     }
 
-    const enhanced: EnhancedQuoteItem[] = allQuoteItems.map(item => {
-      const existingLocal = equipmentData.find(local => local.id === item.id);
-      const inventoryItem = inventory.find(inv => inv.id === item.inventoryItemId);
-      const savedConsumptionData = (selectedProject.consumptionData || []).find(cd => cd.id === item.id);
+    const entryToLoad = openedTrackingEntry || (
+      editingWorkDate && toWorkDateKey(editingWorkDate) === toWorkDateKey(todayWorkDate)
+        ? activeTrackingEntry
+        : null
+    );
+
+    if (!entryToLoad) {
+      setEquipmentData([createBlankTrackingRow()]);
+      setInstallationPhotos([]);
+      setFinalReport('');
+      setGroundingValue('');
+      setLowVoltageCableCheck('');
+      setLockedProjectMention('');
+      setHasUnsavedChanges(false);
+      setIsInitialized(true);
+      return;
+    }
+
+    const trackedRows = [...entryToLoad.items, ...entryToLoad.extraItems].map((item) => {
+      const matchedQuoteItem = findMatchingQuoteLineItem(selectedProject, item);
+      const inventoryItem = inventory.find((inv) => inv.id === (item.inventoryItemId || matchedQuoteItem?.inventoryItemId));
 
       return {
-        ...item,
-        actuallyUsed: savedConsumptionData?.actuallyUsed ?? savedConsumptionData?.consumedQty ?? item.quantity,
-        selectedSerialNumbers:
-          savedConsumptionData?.selectedSerialNumbers ??
-          existingLocal?.selectedSerialNumbers ??
-          item.selectedSerialNumbers ??
-          [],
-        quotedQuantity: item.quantity,
-        barcode: inventoryItem?.barcode,
-        hasBarcode: !!inventoryItem?.barcode,
-      };
+        id: item.id,
+        description: item.description,
+        unit: item.unit,
+        quantity: matchedQuoteItem?.quantity || item.quotedQty || 0,
+        quotedQuantity: matchedQuoteItem?.quantity || item.quotedQty || 0,
+        netPrice: item.netPrice,
+        actuallyUsed: item.consumedQty || item.actuallyUsed || 0,
+        selectedSerialNumbers: item.selectedSerialNumbers || [],
+        inventoryItemId: item.inventoryItemId || matchedQuoteItem?.inventoryItemId,
+        originalLineItemId: matchedQuoteItem?.id || item.originalLineItemId,
+        barcode: item.barcode || inventoryItem?.barcode,
+        hasBarcode: item.hasBarcode || !!inventoryItem?.barcode,
+      } as EnhancedQuoteItem;
     });
 
-    const savedExtraItems = (selectedProject.extraItems || [])
-      .filter(item => item.isExtra)
-      .map(item => ({
-        ...item,
-        quantity: item.actuallyUsed ?? item.consumedQty,
-        actuallyUsed: item.actuallyUsed ?? item.consumedQty,
-      } as EnhancedQuoteItem));
-
-    const projectPhotos = (selectedProject.installationPhotos || []).map(photo => ({
+    const projectPhotos = (entryToLoad.installationPhotos || []).map(photo => ({
       ...photo,
+      description: photo.description || '',
       timestamp: new Date(photo.timestamp),
       uploadedAt: photo.uploadedAt ? new Date(photo.uploadedAt) : undefined,
     }));
 
-    setEquipmentData(enhanced);
-    setExtraItems(savedExtraItems);
+    setEquipmentData(trackedRows.length > 0 ? trackedRows : [createBlankTrackingRow()]);
     setInstallationPhotos(projectPhotos);
-    setFinalReport(selectedProject.completionNotes || '');
-    setGroundingValue(selectedProject.groundingValue || '');
-    setLowVoltageCableCheck(selectedProject.lowVoltageCableCheck || '');
+    setFinalReport(entryToLoad.notes || '');
+    setGroundingValue(entryToLoad.groundingValue || '');
+    setLowVoltageCableCheck(entryToLoad.lowVoltageCableCheck || '');
     setLockedProjectMention('');
     setHasUnsavedChanges(false);
     setIsInitialized(true);
-  }, [selectedProject, allQuoteItems, inventory]);
+  }, [selectedProject, inventory, isTrackingEntryOpen, openedTrackingEntry, activeTrackingEntry, editingWorkDate, todayWorkDate]);
 
   const isProjectLocked = !!selectedProject?.adminApprovedAt;
 
@@ -250,6 +366,14 @@ export default function InstallerClientDetailPage() {
     setHasUnsavedChanges(true);
   };
 
+  const handleMainQuantityChange = (itemId: string, value: number) => {
+    if (isProjectLocked) return;
+    setMainEquipmentData((prev) =>
+      prev.map((item) => (item.id === itemId ? { ...item, actuallyUsed: value } : item))
+    );
+    setHasUnsavedChanges(true);
+  };
+
   const showNotification = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
     setNotification({ message, type });
     window.setTimeout(() => setNotification(null), 3500);
@@ -279,11 +403,28 @@ export default function InstallerClientDetailPage() {
   };
 
   const getRequiredSerialItems = () => {
-    return equipmentData.filter((item) => isSerialRequiredItem(item));
+    return equipmentData.filter((item) => isMeaningfulTrackingRow(item) && isSerialRequiredItem(item));
   };
 
   const getMissingRequiredSerialItems = () => {
     return getRequiredSerialItems().filter(item => !(item.selectedSerialNumbers && item.selectedSerialNumbers.length > 0));
+  };
+
+  const updateMainSerialInput = (itemId: string, raw: string) => {
+    if (isProjectLocked) return;
+    const serials = parseSerialInput(raw);
+    setMainEquipmentData((prev) => prev.map((item) =>
+      item.id === itemId ? { ...item, selectedSerialNumbers: serials } : item
+    ));
+    setHasUnsavedChanges(true);
+  };
+
+  const getMainRequiredSerialItems = () => {
+    return mainEquipmentData.filter((item) => isSerialRequiredItem(item));
+  };
+
+  const getMissingMainRequiredSerialItems = () => {
+    return getMainRequiredSerialItems().filter((item) => !(item.selectedSerialNumbers && item.selectedSerialNumbers.length > 0));
   };
 
   function stopScanner() {
@@ -316,6 +457,257 @@ export default function InstallerClientDetailPage() {
     setHasUnsavedChanges(true);
     showNotification('Serial number scanned and added.', 'success');
     closeScanner();
+  };
+
+  const handleCreateDailyTracking = () => {
+    if (!selectedProject) {
+      showNotification('Please select a project first.', 'error');
+      return;
+    }
+    if (hasUnsavedChanges && !confirm('You have unsaved changes in the current daily entry. Continue anyway?')) {
+      return;
+    }
+
+    setEditingWorkDate(todayWorkDate);
+    setOpenedTrackingEntryId(activeTrackingEntry?.id || null);
+    setIsTrackingEntryOpen(true);
+  };
+
+  const handleOpenTrackingHistoryEntry = (entry: EquipmentTrackingEntry) => {
+    if (hasUnsavedChanges && !confirm('You have unsaved changes in the current daily entry. Continue anyway?')) {
+      return;
+    }
+
+    setEditingWorkDate(new Date(entry.workDate));
+    setOpenedTrackingEntryId(entry.id);
+    setIsTrackingEntryOpen(true);
+  };
+
+  const handleCloseTrackingEntry = () => {
+    if (hasUnsavedChanges && !confirm('You have unsaved changes in the current daily entry. Close it anyway?')) {
+      return;
+    }
+
+    setIsTrackingEntryOpen(false);
+    setOpenedTrackingEntryId(null);
+    setEditingWorkDate(null);
+  };
+
+  const handleAddTrackingRow = () => {
+    if (isProjectLocked) return;
+    setEquipmentData((prev) => [...prev, createBlankTrackingRow()]);
+    setHasUnsavedChanges(true);
+  };
+
+  const handleRemoveTrackingRow = (itemId: string) => {
+    if (isProjectLocked) return;
+    setEquipmentData((prev) => {
+      if (prev.length === 1) {
+        return [createBlankTrackingRow()];
+      }
+
+      return prev.filter((item) => item.id !== itemId);
+    });
+    setHasUnsavedChanges(true);
+  };
+
+  const handleTrackingRowChange = (
+    itemId: string,
+    field: keyof EnhancedQuoteItem,
+    value: string | number | string[] | undefined
+  ) => {
+    if (isProjectLocked) return;
+
+    setEquipmentData((prev) =>
+      prev.map((item) => {
+        if (item.id !== itemId) {
+          return item;
+        }
+
+        const nextItem = { ...item, [field]: value };
+
+        if (field === 'description') {
+          const matchedInventoryItem = inventory.find(
+            (inventoryItem) => normalizeInventoryName(inventoryItem.name) === normalizeInventoryName(String(value))
+          );
+          if (matchedInventoryItem) {
+            nextItem.inventoryItemId = matchedInventoryItem.id;
+            nextItem.unit = nextItem.unit || 'buc';
+            nextItem.netPrice = nextItem.netPrice || matchedInventoryItem.buyPrice;
+            nextItem.barcode = matchedInventoryItem.barcode;
+            nextItem.hasBarcode = !!matchedInventoryItem.barcode;
+          }
+
+          const matchedQuoteItem = selectedProject ? findMatchingQuoteLineItem(selectedProject, nextItem) : undefined;
+          nextItem.originalLineItemId = matchedQuoteItem?.id;
+          nextItem.quotedQuantity = matchedQuoteItem?.quantity || 0;
+          nextItem.quantity = matchedQuoteItem?.quantity || 0;
+          if (matchedQuoteItem && !nextItem.netPrice) {
+            nextItem.netPrice = matchedQuoteItem.netPrice;
+          }
+        }
+
+        return nextItem;
+      })
+    );
+    setHasUnsavedChanges(true);
+  };
+
+  const handleInventorySelectionChange = (itemId: string, inventoryItemId: string) => {
+    if (isProjectLocked) return;
+
+    const inventoryItem = inventory.find((inv) => inv.id === inventoryItemId);
+    setEquipmentData((prev) =>
+      prev.map((item) => {
+        if (item.id !== itemId) {
+          return item;
+        }
+
+        const nextItem: EnhancedQuoteItem = {
+          ...item,
+          inventoryItemId: inventoryItemId || undefined,
+          description: inventoryItem ? inventoryItem.name : item.description,
+          unit: inventoryItem ? 'buc' : item.unit,
+          netPrice: inventoryItem ? inventoryItem.buyPrice : item.netPrice,
+          barcode: inventoryItem?.barcode,
+          hasBarcode: !!inventoryItem?.barcode,
+        };
+
+        const matchedQuoteItem = selectedProject ? findMatchingQuoteLineItem(selectedProject, nextItem) : undefined;
+        nextItem.originalLineItemId = matchedQuoteItem?.id;
+        nextItem.quotedQuantity = matchedQuoteItem?.quantity || 0;
+        nextItem.quantity = matchedQuoteItem?.quantity || 0;
+
+        return nextItem;
+      })
+    );
+    setHasUnsavedChanges(true);
+  };
+
+  const handleMainAddExtraItem = () => {
+    if (isProjectLocked) return;
+    setMainExtraItems((prev) => [
+      ...prev,
+      {
+        id: `extra-${Date.now()}`,
+        description: '',
+        unit: 'buc',
+        quantity: 0,
+        netPrice: 0,
+        actuallyUsed: 0,
+      },
+    ]);
+    setHasUnsavedChanges(true);
+  };
+
+  const handleMainRemoveExtraItem = (itemId: string) => {
+    if (isProjectLocked) return;
+    setMainExtraItems((prev) => prev.filter((item) => item.id !== itemId));
+    setHasUnsavedChanges(true);
+  };
+
+  const handleMainExtraItemChange = (itemId: string, field: keyof EnhancedQuoteItem, value: string | number) => {
+    if (isProjectLocked) return;
+    setMainExtraItems((prev) =>
+      prev.map((item) => {
+        if (item.id !== itemId) {
+          return item;
+        }
+
+        const nextItem = { ...item, [field]: value };
+        if (field === 'description') {
+          const matchedInventoryItem = inventory.find(
+            (inventoryItem) => normalizeInventoryName(inventoryItem.name) === normalizeInventoryName(String(value))
+          );
+          if (matchedInventoryItem) {
+            nextItem.inventoryItemId = matchedInventoryItem.id;
+            nextItem.netPrice = nextItem.netPrice || matchedInventoryItem.buyPrice;
+            nextItem.barcode = matchedInventoryItem.barcode;
+            nextItem.hasBarcode = !!matchedInventoryItem.barcode;
+          }
+        }
+
+        return nextItem;
+      })
+    );
+    setHasUnsavedChanges(true);
+  };
+
+  const calculateMainVariance = (item: EnhancedQuoteItem) => {
+    const quoted = item.quotedQuantity || item.quantity;
+    const actual = item.actuallyUsed || 0;
+    const diff = actual - quoted;
+    const valueDiff = diff * item.netPrice;
+    return { diff, valueDiff };
+  };
+
+  const calculateMainSummary = () => {
+    const originalQuoteTotal = mainEquipmentData.reduce((sum, item) => sum + (item.quantity * item.netPrice), 0);
+    const actualConsumptionTotal = mainEquipmentData.reduce((sum, item) => sum + ((item.actuallyUsed || 0) * item.netPrice), 0);
+    const equipmentVariance = actualConsumptionTotal - originalQuoteTotal;
+    const extraItemsTotal = mainExtraItems.reduce((sum, item) => sum + (((item.quantity || 0)) * (item.netPrice || 0)), 0);
+    const totalVariance = equipmentVariance + extraItemsTotal;
+
+    return {
+      originalQuoteTotal,
+      actualConsumptionTotal,
+      equipmentVariance,
+      extraItemsTotal,
+      totalVariance,
+    };
+  };
+
+  const handleSaveMainEquipment = async () => {
+    try {
+      if (!selectedProject) {
+        alert('Please select a project first.');
+        return;
+      }
+      if (isProjectLocked) {
+        showNotification('Project is closed by admin. Editing is locked until reopen.', 'error');
+        return;
+      }
+
+      const consumptionData = mainEquipmentData.map((item) => ({
+        id: item.id,
+        description: item.description,
+        quotedQty: item.quotedQuantity || item.quantity,
+        consumedQty: item.actuallyUsed || 0,
+        actuallyUsed: item.actuallyUsed,
+        selectedSerialNumbers: item.selectedSerialNumbers || [],
+        unit: item.unit,
+        netPrice: item.netPrice,
+        inventoryItemId: item.inventoryItemId,
+        barcode: item.barcode,
+        hasBarcode: item.hasBarcode,
+      }));
+
+      await saveQuote({
+        ...selectedProject,
+        consumptionData,
+        consumptionDataUpdatedAt: new Date(),
+        consumptionDataUpdatedBy: currentUser?.nickname || 'Unknown',
+        groundingValue,
+        lowVoltageCableCheck: lowVoltageCableCheck || undefined,
+        extraItems: mainExtraItems.map((item) => ({
+          id: item.id,
+          description: item.description,
+          quotedQty: 0,
+          consumedQty: item.quantity || 0,
+          actuallyUsed: item.quantity,
+          unit: item.unit,
+          netPrice: item.netPrice,
+          isExtra: true,
+        })),
+        phase: 'in-progress' as const,
+      });
+
+      setHasUnsavedChanges(false);
+      alert('✓ Equipment data saved successfully!');
+    } catch (error) {
+      console.error('Error saving equipment data:', error);
+      alert('Failed to save equipment data');
+    }
   };
 
   const startScanner = async (itemId: string) => {
@@ -362,37 +754,154 @@ export default function InstallerClientDetailPage() {
     }
   };
 
-  const handleAddExtraItem = () => {
-    if (isProjectLocked) return;
-    const newItem: EnhancedQuoteItem = {
-      id: `extra-${Date.now()}`,
-      description: '',
-      unit: 'buc',
-      quantity: 0,
-      netPrice: 0,
-      actuallyUsed: 0,
-    };
-    setExtraItems([...extraItems, newItem]);
-  };
+  const currentEntrySummary = useMemo(() => {
+    if (!selectedProject) {
+      return {
+        mainRows: [] as Array<{ row: EnhancedQuoteItem; matchedQuoteItem: { id: string; description: string; quantity: number; unit: string; netPrice: number; inventoryItemId?: string } }>,
+        extraRows: [] as EnhancedQuoteItem[],
+        mainRowsTotal: 0,
+        extraRowsTotal: 0,
+        quotedRowsTotal: 0,
+        totalVariance: 0,
+      };
+    }
 
-  const handleRemoveExtraItem = (itemId: string) => {
-    if (isProjectLocked) return;
-    setExtraItems(prev => prev.filter(item => item.id !== itemId));
-  };
+    const meaningfulRows = equipmentData.filter(isMeaningfulTrackingRow);
+    const mainRows: Array<{ row: EnhancedQuoteItem; matchedQuoteItem: { id: string; description: string; quantity: number; unit: string; netPrice: number; inventoryItemId?: string } }> = [];
+    const extraRows: EnhancedQuoteItem[] = [];
 
-  const handleExtraItemChange = (itemId: string, field: string, value: any) => {
-    if (isProjectLocked) return;
-    setExtraItems(prev =>
-      prev.map(item => item.id === itemId ? { ...item, [field]: value } : item)
+    meaningfulRows.forEach((row) => {
+      const matchedQuoteItem = findMatchingQuoteLineItem(selectedProject, row);
+      if (matchedQuoteItem) {
+        mainRows.push({ row, matchedQuoteItem });
+      } else {
+        extraRows.push(row);
+      }
+    });
+
+    const mainRowsTotal = mainRows.reduce(
+      (sum, item) => sum + ((item.row.actuallyUsed || 0) * (item.row.netPrice || item.matchedQuoteItem.netPrice || 0)),
+      0
     );
-  };
+    const quotedRowsTotal = mainRows.reduce(
+      (sum, item) => sum + ((item.row.actuallyUsed || 0) * item.matchedQuoteItem.netPrice),
+      0
+    );
+    const extraRowsTotal = extraRows.reduce((sum, item) => sum + ((item.actuallyUsed || 0) * (item.netPrice || 0)), 0);
 
-  const calculateVariance = (item: EnhancedQuoteItem) => {
-    const quoted = item.quotedQuantity || item.quantity;
-    const actual = item.actuallyUsed || 0;
-    const diff = actual - quoted;
-    const valueDiff = diff * item.netPrice;
-    return { diff, valueDiff };
+    return {
+      mainRows,
+      extraRows,
+      mainRowsTotal,
+      extraRowsTotal,
+      quotedRowsTotal,
+      totalVariance: (mainRowsTotal - quotedRowsTotal) + extraRowsTotal,
+    };
+  }, [equipmentData, selectedProject]);
+
+  const persistTrackingEntry = async ({
+    status,
+    phase,
+    installerDeclaredFinishedAt,
+  }: {
+    status: EquipmentTrackingEntry['status'];
+    phase?: 'planning' | 'in-progress' | 'pending-inspection' | 'completed' | 'archived';
+    installerDeclaredFinishedAt?: Date;
+  }) => {
+    if (!selectedProject) {
+      throw new Error('Please select a project first.');
+    }
+
+    const workDate = editingWorkDate || todayWorkDate;
+    const now = new Date();
+    const entryId = buildEquipmentTrackingEntryId(selectedProject.id, currentInstallerId, workDate);
+    const meaningfulRows = equipmentData.filter(isMeaningfulTrackingRow);
+    const entryItems = meaningfulRows.flatMap((item) => {
+      const matchedQuoteItem = findMatchingQuoteLineItem(selectedProject, item);
+      if (!matchedQuoteItem) {
+        return [];
+      }
+
+      return [{
+        id: item.id,
+        description: item.description || matchedQuoteItem.description,
+        quotedQty: matchedQuoteItem.quantity,
+        consumedQty: item.actuallyUsed || 0,
+        actuallyUsed: item.actuallyUsed || 0,
+        selectedSerialNumbers: item.selectedSerialNumbers || [],
+        unit: item.unit || matchedQuoteItem.unit,
+        netPrice: item.netPrice || matchedQuoteItem.netPrice,
+        originalLineItemId: matchedQuoteItem.id,
+        inventoryItemId: item.inventoryItemId || matchedQuoteItem.inventoryItemId,
+        barcode: item.barcode,
+        hasBarcode: item.hasBarcode,
+      }];
+    });
+
+    const entryExtraItems = meaningfulRows.flatMap((item) => {
+      const matchedQuoteItem = findMatchingQuoteLineItem(selectedProject, item);
+      if (matchedQuoteItem) {
+        return [];
+      }
+
+      return [{
+        id: item.id,
+        description: item.description,
+        quotedQty: 0,
+        consumedQty: item.actuallyUsed || 0,
+        actuallyUsed: item.actuallyUsed || 0,
+        selectedSerialNumbers: item.selectedSerialNumbers || [],
+        unit: item.unit,
+        netPrice: item.netPrice,
+        isExtra: true,
+        inventoryItemId: item.inventoryItemId,
+        barcode: item.barcode,
+        hasBarcode: item.hasBarcode,
+      }];
+    });
+
+    const nextEntry: EquipmentTrackingEntry = {
+      id: openedTrackingEntry?.id || activeTrackingEntry?.id || entryId,
+      quoteId: selectedProject.id,
+      clientId,
+      projectTitle: selectedProject.title,
+      workDate,
+      installerId: currentInstallerId,
+      installerNickname: currentUser?.nickname || 'Unknown',
+      status,
+      items: entryItems,
+      extraItems: entryExtraItems,
+      installationPhotos,
+      notes: finalReport || undefined,
+      groundingValue: groundingValue || undefined,
+      lowVoltageCableCheck: lowVoltageCableCheck || undefined,
+      createdAt: openedTrackingEntry?.createdAt || activeTrackingEntry?.createdAt || now,
+      updatedAt: now,
+      submittedAt:
+        status === 'submitted'
+          ? openedTrackingEntry?.submittedAt || activeTrackingEntry?.submittedAt || now
+          : openedTrackingEntry?.submittedAt || activeTrackingEntry?.submittedAt,
+    };
+
+    await saveEquipmentTrackingEntry(nextEntry);
+    setOpenedTrackingEntryId(nextEntry.id);
+    setEditingWorkDate(workDate);
+    setIsTrackingEntryOpen(true);
+
+    const aggregatedEntries = projectTrackingEntries
+      .filter((entry) => entry.id !== nextEntry.id)
+      .concat(nextEntry);
+    const aggregate = aggregateEquipmentTrackingEntries(selectedProject, aggregatedEntries);
+
+    await saveQuote({
+      ...selectedProject,
+      ...aggregate,
+      phase: phase || selectedProject.phase || 'in-progress',
+      installerDeclaredFinishedAt: installerDeclaredFinishedAt || selectedProject.installerDeclaredFinishedAt,
+      installerDeclaredFinishedBy: installerDeclaredFinishedAt
+        ? currentUser?.nickname || 'Unknown'
+        : selectedProject.installerDeclaredFinishedBy,
+    });
   };
 
   const handleSaveEquipment = async () => {
@@ -401,50 +910,20 @@ export default function InstallerClientDetailPage() {
         alert('Please select a project first.');
         return;
       }
+      if (!isTrackingEntryOpen) {
+        showNotification('Create or open a daily tracking entry first.', 'error');
+        return;
+      }
       if (isProjectLocked) {
         showNotification('Project is closed by admin. Editing is locked until reopen.', 'error');
         return;
       }
 
-      const consumptionData = equipmentData.map(item => ({
-        id: item.id,
-        description: item.description,
-        quotedQty: item.quotedQuantity || item.quantity,
-        consumedQty: item.actuallyUsed || 0,
-        actuallyUsed: item.actuallyUsed,
-        selectedSerialNumbers: item.selectedSerialNumbers || [],
-        unit: item.unit,
-        netPrice: item.netPrice,
-        inventoryItemId: item.inventoryItemId,
-        barcode: item.barcode,
-        hasBarcode: item.hasBarcode,
-      }));
-
-      const updatedQuote = {
-        ...selectedProject,
-        consumptionData,
-        consumptionDataUpdatedAt: new Date(),
-        consumptionDataUpdatedBy: currentUser?.nickname || 'Unknown',
-        groundingValue,
-        lowVoltageCableCheck: lowVoltageCableCheck || undefined,
-        extraItems: extraItems.map(item => ({
-          id: item.id,
-          description: item.description,
-          quotedQty: 0,
-          consumedQty: item.quantity || 0,
-          actuallyUsed: item.quantity,
-          unit: item.unit,
-          netPrice: item.netPrice,
-          isExtra: true,
-        })),
-        phase: 'in-progress' as const,
-      };
-
-      await saveQuote(updatedQuote);
-  setHasUnsavedChanges(false);
+      await persistTrackingEntry({ status: 'draft', phase: 'in-progress' });
+      setHasUnsavedChanges(false);
 
       alert('✓ Equipment data saved successfully!');
-      console.log('Saved consumption data:', { equipmentData, extraItems });
+      console.log('Saved consumption data:', { equipmentData });
     } catch (error) {
       console.error('Error saving equipment data:', error);
       alert('Failed to save equipment data');
@@ -506,6 +985,10 @@ export default function InstallerClientDetailPage() {
         alert('Please select a project first.');
         return;
       }
+      if (!isTrackingEntryOpen) {
+        showNotification('Create or open a daily tracking entry first.', 'error');
+        return;
+      }
       if (isProjectLocked) {
         showNotification('Project is closed by admin. Editing is locked until reopen.', 'error');
         return;
@@ -513,32 +996,7 @@ export default function InstallerClientDetailPage() {
 
       setIsSaving(true);
 
-      const consumptionData = equipmentData.map(item => ({
-        id: item.id,
-        description: item.description,
-        quotedQty: item.quotedQuantity || item.quantity,
-        consumedQty: item.actuallyUsed || 0,
-        actuallyUsed: item.actuallyUsed,
-        selectedSerialNumbers: item.selectedSerialNumbers || [],
-        unit: item.unit,
-        netPrice: item.netPrice,
-        inventoryItemId: item.inventoryItemId,
-        barcode: item.barcode,
-        hasBarcode: item.hasBarcode,
-      }));
-
-      const updatedQuote = {
-        ...selectedProject,
-        consumptionData,
-        installationPhotos,
-        completionNotes: finalReport,
-        consumptionDataUpdatedAt: new Date(),
-        consumptionDataUpdatedBy: currentUser?.nickname || 'Unknown',
-        groundingValue,
-        lowVoltageCableCheck: lowVoltageCableCheck || undefined,
-      };
-
-      await saveQuote(updatedQuote);
+      await persistTrackingEntry({ status: 'draft', phase: selectedProject.phase || 'in-progress' });
 
       setHasUnsavedChanges(false);
       alert('✓ Installation photos and report saved successfully!');
@@ -555,6 +1013,10 @@ export default function InstallerClientDetailPage() {
       showNotification('Please select a project first.', 'error');
       return;
     }
+    if (!isTrackingEntryOpen) {
+      showNotification('Create or open a daily tracking entry first.', 'error');
+      return;
+    }
     if (isProjectLocked) {
       showNotification('Project is already closed by admin.', 'info');
       return;
@@ -567,67 +1029,17 @@ export default function InstallerClientDetailPage() {
     }
 
     try {
-      const consumptionData = equipmentData.map(item => ({
-        id: item.id,
-        description: item.description,
-        quotedQty: item.quotedQuantity || item.quantity,
-        consumedQty: item.actuallyUsed || 0,
-        actuallyUsed: item.actuallyUsed,
-        selectedSerialNumbers: item.selectedSerialNumbers || [],
-        unit: item.unit,
-        netPrice: item.netPrice,
-        inventoryItemId: item.inventoryItemId,
-        barcode: item.barcode,
-        hasBarcode: item.hasBarcode,
-      }));
-
-      const updatedQuote = {
-        ...selectedProject,
-        consumptionData,
-        extraItems: extraItems.map(item => ({
-          id: item.id,
-          description: item.description,
-          quotedQty: 0,
-          consumedQty: item.quantity || 0,
-          actuallyUsed: item.quantity,
-          unit: item.unit,
-          netPrice: item.netPrice,
-          isExtra: true,
-        })),
-        installationPhotos,
-        completionNotes: finalReport,
-        groundingValue,
-        lowVoltageCableCheck: lowVoltageCableCheck || undefined,
-        phase: 'pending-inspection' as const,
+      await persistTrackingEntry({
+        status: 'submitted',
+        phase: 'pending-inspection',
         installerDeclaredFinishedAt: new Date(),
-        installerDeclaredFinishedBy: currentUser?.nickname || 'Unknown',
-      };
-
-      await saveQuote(updatedQuote);
+      });
       setHasUnsavedChanges(false);
       showNotification('Project declared finished. Admin has been notified for review.', 'success');
     } catch (error) {
       console.error('Error declaring project finish:', error);
       showNotification('Failed to declare finish. Please try again.', 'error');
     }
-  };
-
-  // Calculate summary
-  const calculateSummary = () => {
-    const originalQuoteTotal = equipmentData.reduce((sum, item) => sum + (item.quantity * item.netPrice), 0);
-    const actualConsumptionTotal = equipmentData.reduce((sum, item) => sum + ((item.actuallyUsed || 0) * item.netPrice), 0);
-    const equipmentVariance = actualConsumptionTotal - originalQuoteTotal;
-    
-    const extraItemsTotal = extraItems.reduce((sum, item) => sum + ((item.quantity || 0) * (item.netPrice || 0)), 0);
-    const totalVariance = equipmentVariance + extraItemsTotal;
-    
-    return {
-      originalQuoteTotal,
-      actualConsumptionTotal,
-      equipmentVariance,
-      extraItemsTotal,
-      totalVariance,
-    };
   };
 
   const missingRequiredSerialItems = getMissingRequiredSerialItems();
@@ -774,7 +1186,7 @@ export default function InstallerClientDetailPage() {
               {clientQuotes.map((quote) => {
                 const isSelected = quote.id === selectedProjectId;
                 const isExpanded = expandedProjects.has(quote.id);
-                const isAssignedToCurrentInstaller = quote.allocatedInstallerId === currentUser?.nickname;
+                const isAssignedToCurrentInstaller = isInstallerAssignedToQuote(quote, currentUser);
 
                 return (
                   <div key={quote.id} className="bg-slate-800">
@@ -845,7 +1257,7 @@ export default function InstallerClientDetailPage() {
                           </div>
                           <div>
                             <span className="text-slate-500">Installer:</span>
-                            <span className="ml-2 text-white font-semibold">{quote.allocatedInstallerId || '-'}</span>
+                            <span className="ml-2 text-white font-semibold">{getAssignedInstallerNames(quote).join(', ') || '-'}</span>
                           </div>
                         </div>
 
@@ -925,6 +1337,7 @@ export default function InstallerClientDetailPage() {
                     setGroundingValue(e.target.value);
                     setHasUnsavedChanges(true);
                   }}
+                  disabled={isProjectLocked}
                   placeholder="Introdu valoarea masurata"
                   className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white focus:ring-2 focus:ring-emerald-500 outline-none"
                 />
@@ -936,9 +1349,11 @@ export default function InstallerClientDetailPage() {
                   <button
                     type="button"
                     onClick={() => {
+                      if (isProjectLocked) return;
                       setLowVoltageCableCheck('Corespunde');
                       setHasUnsavedChanges(true);
                     }}
+                    disabled={isProjectLocked}
                     className={`px-4 py-2 rounded-lg font-semibold text-sm transition-colors ${
                       lowVoltageCableCheck === 'Corespunde'
                         ? 'bg-green-500 text-white'
@@ -950,9 +1365,11 @@ export default function InstallerClientDetailPage() {
                   <button
                     type="button"
                     onClick={() => {
+                      if (isProjectLocked) return;
                       setLowVoltageCableCheck('Nu corespunde');
                       setHasUnsavedChanges(true);
                     }}
+                    disabled={isProjectLocked}
                     className={`px-4 py-2 rounded-lg font-semibold text-sm transition-colors ${
                       lowVoltageCableCheck === 'Nu corespunde'
                         ? 'bg-red-500 text-white'
@@ -971,6 +1388,280 @@ export default function InstallerClientDetailPage() {
                 <p className="text-sm text-slate-300">{client.needs.technicalNotes}</p>
               </div>
             )}
+          </div>
+        )}
+
+        {selectedProject && (
+          <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 space-y-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <p className="text-sm font-semibold text-blue-200">Daily tracking</p>
+                <p className="text-xs text-blue-100/80 mt-1">
+                  Start today&apos;s daily tracking explicitly and record only what was used today in a blank editable table.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2 lg:justify-end">
+                <button
+                  type="button"
+                  onClick={handleCreateDailyTracking}
+                  className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-emerald-700"
+                >
+                  <Plus size={16} />
+                  {activeTrackingEntry ? "Open Today's Daily Tracking" : 'Create New Daily Tracking'}
+                </button>
+                {isTrackingEntryOpen && (
+                  <button
+                    type="button"
+                    onClick={handleCloseTrackingEntry}
+                    className="rounded-lg bg-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 transition-colors hover:bg-slate-600"
+                  >
+                    Close Daily Tracking
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs text-blue-100/80">
+              <div className="rounded-lg border border-blue-500/20 bg-slate-900/40 p-3">
+                <p className="text-blue-100/60 mb-1">Today</p>
+                <p className="font-semibold text-blue-100">{todayWorkDate.toLocaleDateString('ro-RO')}</p>
+              </div>
+              <div className="rounded-lg border border-blue-500/20 bg-slate-900/40 p-3">
+                <p className="text-blue-100/60 mb-1">Project entries</p>
+                <p className="font-semibold text-blue-100">{projectTrackingEntries.length}</p>
+              </div>
+              <div className="rounded-lg border border-blue-500/20 bg-slate-900/40 p-3">
+                <p className="text-blue-100/60 mb-1">Your entries</p>
+                <p className="font-semibold text-blue-100">{installerProjectEntries.length}</p>
+              </div>
+            </div>
+
+            {installerProjectEntries.length > 0 && (
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-blue-100/70 mb-2">Your daily entries</p>
+                <div className="flex flex-wrap gap-2">
+                  {installerProjectEntries.map((entry) => (
+                    <button
+                      key={entry.id}
+                      type="button"
+                      onClick={() => handleOpenTrackingHistoryEntry(entry)}
+                      className={`rounded-lg border px-3 py-2 text-xs font-semibold transition-colors ${openedTrackingEntryId === entry.id ? 'border-emerald-400 bg-emerald-500/20 text-emerald-200' : 'border-slate-600 bg-slate-900/50 text-slate-200 hover:border-slate-500 hover:bg-slate-800'}`}
+                    >
+                      {new Date(entry.workDate).toLocaleDateString('ro-RO')} • {entry.status}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {isTrackingEntryOpen && (
+              <>
+                <div className="bg-slate-800 border border-slate-700 rounded-lg p-6 space-y-5">
+                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                        <ListChecks size={24} className="text-emerald-500" />
+                        Daily Summary
+                      </h2>
+                      <p className="text-sm text-slate-400 mt-1">
+                        Summary for {new Date(editingWorkDate || todayWorkDate).toLocaleDateString('ro-RO')} based only on this daily entry.
+                      </p>
+                    </div>
+                    <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-bold ${openedTrackingEntry?.status === 'submitted' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/20 text-amber-300'}`}>
+                      {openedTrackingEntry?.status || activeTrackingEntry?.status || 'draft'}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
+                      <p className="text-xs uppercase tracking-wide text-slate-500 mb-1">Main Quote Rows</p>
+                      <p className="text-2xl font-bold text-white">{currentEntrySummary.mainRows.length}</p>
+                      <p className="text-sm text-slate-400 mt-1">{currentEntrySummary.mainRowsTotal.toFixed(2)} RON used today</p>
+                    </div>
+                    <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
+                      <p className="text-xs uppercase tracking-wide text-slate-500 mb-1">Extra Rows</p>
+                      <p className="text-2xl font-bold text-white">{currentEntrySummary.extraRows.length}</p>
+                      <p className="text-sm text-slate-400 mt-1">{currentEntrySummary.extraRowsTotal.toFixed(2)} RON added today</p>
+                    </div>
+                    <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
+                      <p className="text-xs uppercase tracking-wide text-slate-500 mb-1">Daily Difference</p>
+                      <p className={`text-2xl font-bold ${currentEntrySummary.totalVariance > 0 ? 'text-red-400' : currentEntrySummary.totalVariance < 0 ? 'text-green-400' : 'text-white'}`}>
+                        {currentEntrySummary.totalVariance > 0 ? '+' : ''}{currentEntrySummary.totalVariance.toFixed(2)} RON
+                      </p>
+                      <p className="text-sm text-slate-400 mt-1">Compared with matched quote pricing</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between mb-5">
+                    <div>
+                      <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                        <Package size={24} className="text-emerald-500" />
+                        Daily Tracking Table
+                      </h2>
+                      <p className="text-sm text-slate-400 mt-1">
+                        Enter today&apos;s used materials manually. Pick from inventory when available, or type freely when not.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={handleAddTrackingRow}
+                        disabled={isProjectLocked}
+                        className="inline-flex items-center gap-2 rounded-lg bg-slate-700 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-slate-600 disabled:opacity-60"
+                      >
+                        <Plus size={16} />
+                        Add Row
+                      </button>
+                      <button
+                        onClick={handleSaveEquipment}
+                        disabled={isProjectLocked}
+                        className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 disabled:bg-slate-600 disabled:opacity-60"
+                      >
+                        <Save size={16} />
+                        Save Daily Tracking
+                      </button>
+                    </div>
+                  </div>
+
+                  {missingRequiredSerialItems.length > 0 && (
+                    <div className="mb-4 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-300">
+                      Serial numbers are mandatory for inverter and battery rows before finishing the project.
+                    </div>
+                  )}
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[1100px]">
+                      <thead className="border-b border-slate-700">
+                        <tr>
+                          <th className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">Inventory</th>
+                          <th className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">Description</th>
+                          <th className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">Unit</th>
+                          <th className="px-3 py-3 text-center text-xs font-semibold uppercase tracking-wide text-slate-400">Used Today</th>
+                          <th className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">Main / Extra</th>
+                          <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-400">Net Price</th>
+                          <th className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">Serials</th>
+                          <th className="px-3 py-3 text-center text-xs font-semibold uppercase tracking-wide text-slate-400">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-700/60">
+                        {equipmentData.map((item) => {
+                          const matchedQuoteItem = selectedProject ? findMatchingQuoteLineItem(selectedProject, item) : undefined;
+                          const inventoryItem = inventory.find((inv) => inv.id === item.inventoryItemId);
+                          const serialRequired = isMeaningfulTrackingRow(item) && isSerialRequiredItem(item);
+                          const canShowSerialControls = serialRequired || item.hasBarcode || Boolean(item.selectedSerialNumbers?.length);
+                          return (
+                            <tr key={item.id} className="align-top hover:bg-slate-700/20">
+                              <td className="px-3 py-3">
+                                <select
+                                  value={item.inventoryItemId || ''}
+                                  onChange={(e) => handleInventorySelectionChange(item.id, e.target.value)}
+                                  disabled={isProjectLocked}
+                                  className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                                >
+                                  <option value="">Manual item</option>
+                                  {inventory.map((inventoryRow) => (
+                                    <option key={inventoryRow.id} value={inventoryRow.id}>
+                                      {inventoryRow.name}
+                                    </option>
+                                  ))}
+                                </select>
+                              </td>
+                              <td className="px-3 py-3">
+                                <input
+                                  type="text"
+                                  value={item.description}
+                                  onChange={(e) => handleTrackingRowChange(item.id, 'description', e.target.value)}
+                                  disabled={isProjectLocked}
+                                  placeholder="Enter item name"
+                                  list="inventory-item-suggestions"
+                                  className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                                />
+                              </td>
+                              <td className="px-3 py-3">
+                                <input type="text" value={item.unit} onChange={(e) => handleTrackingRowChange(item.id, 'unit', e.target.value)} disabled={isProjectLocked} placeholder="buc / m" className="w-24 rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                              </td>
+                              <td className="px-3 py-3 text-center">
+                                <input type="number" value={item.actuallyUsed || 0} onChange={(e) => handleQuantityChange(item.id, Number(e.target.value))} disabled={isProjectLocked} min="0" step="0.01" className="w-24 rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-center text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                              </td>
+                              <td className="px-3 py-3">
+                                {matchedQuoteItem ? (
+                                  <div>
+                                    <span className="inline-flex rounded-full bg-emerald-500/20 px-2 py-1 text-xs font-semibold text-emerald-300">Main quote item</span>
+                                    <p className="mt-1 text-xs text-slate-400">Quoted {matchedQuoteItem.quantity} {matchedQuoteItem.unit}</p>
+                                  </div>
+                                ) : (
+                                  <div>
+                                    <span className="inline-flex rounded-full bg-amber-500/20 px-2 py-1 text-xs font-semibold text-amber-300">Extra material</span>
+                                    <p className="mt-1 text-xs text-slate-500">Will be listed outside the main quote.</p>
+                                  </div>
+                                )}
+                              </td>
+                              <td className="px-3 py-3 text-right">
+                                <input type="number" value={item.netPrice || 0} onChange={(e) => handleTrackingRowChange(item.id, 'netPrice', Number(e.target.value))} disabled={isProjectLocked} min="0" step="0.01" className="w-28 rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-right text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                                <p className="mt-1 text-xs text-slate-500">RON</p>
+                              </td>
+                              <td className="px-3 py-3">
+                                {canShowSerialControls ? (
+                                  <div className="space-y-2">
+                                    <input
+                                      type="text"
+                                      value={(item.selectedSerialNumbers || []).join(', ')}
+                                      onChange={(e) => updateSerialInput(item.id, e.target.value)}
+                                      disabled={isProjectLocked}
+                                      placeholder={serialRequired ? 'Serial number required' : 'Serial number optional'}
+                                      className={`w-full rounded-lg border bg-slate-900 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 ${serialRequired && (!item.selectedSerialNumbers || item.selectedSerialNumbers.length === 0) ? 'border-red-500/70' : 'border-slate-600'}`}
+                                    />
+                                    <div className="flex items-center gap-2">
+                                      <button type="button" onClick={() => handleBarcodeScan(item.id)} disabled={isProjectLocked} className="inline-flex items-center gap-2 rounded-lg bg-blue-500/15 px-3 py-2 text-xs font-semibold text-blue-300 transition-colors hover:bg-blue-500/25">
+                                        <Camera size={14} />
+                                        Scan
+                                      </button>
+                                      {serialRequired && <span className="text-[11px] font-semibold text-red-300">Required</span>}
+                                      {!inventoryItem?.barcode && <span className="text-[11px] text-slate-500">Manual entry allowed</span>}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <span className="text-xs text-slate-500">No serials needed</span>
+                                )}
+                              </td>
+                              <td className="px-3 py-3 text-center">
+                                <button type="button" onClick={() => handleRemoveTrackingRow(item.id)} disabled={isProjectLocked} className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-red-500/15 text-red-300 transition-colors hover:bg-red-500/25 disabled:opacity-60" title="Remove row">
+                                  <Minus size={16} />
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="mt-5 rounded-lg border border-slate-700 bg-slate-900/50 p-4">
+                    <h3 className="text-sm font-semibold text-slate-200 mb-2">Daily Tracking Notes</h3>
+                    <textarea
+                      value={finalReport}
+                      onChange={(e) => {
+                        if (isProjectLocked) return;
+                        setFinalReport(e.target.value);
+                        setHasUnsavedChanges(true);
+                      }}
+                      disabled={isProjectLocked}
+                      placeholder="Add notes or mention what happened during this daily tracking..."
+                      className="w-full h-28 rounded-lg border border-slate-600 bg-slate-900 px-4 py-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none"
+                    />
+                    <p className="mt-2 text-xs text-slate-500">These notes are saved with this daily entry and visible in admin history.</p>
+                  </div>
+                </div>
+              </>
+            )}
+
+            <datalist id="inventory-item-suggestions">
+              {inventory.map((inventoryItem) => (
+                <option key={inventoryItem.id} value={inventoryItem.name} />
+              ))}
+            </datalist>
           </div>
         )}
 
@@ -1018,15 +1709,15 @@ export default function InstallerClientDetailPage() {
           </div>
         )}
 
-        {/* Equipment List with Quantity Tracking */}
-        {selectedProject && equipmentData.length > 0 && (
+        {/* Main Equipment List with Quantity Tracking */}
+        {selectedProject && mainEquipmentData.length > 0 && (
           <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
             <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
               <Package size={24} className="text-emerald-500" />
               Equipment List & Usage Tracking
             </h2>
 
-            {missingRequiredSerialItems.length > 0 && (
+            {getMissingMainRequiredSerialItems().length > 0 && (
               <div className="mb-4 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-300">
                 Serial numbers are mandatory for inverter and battery. Add them before any save or finish action.
               </div>
@@ -1045,9 +1736,9 @@ export default function InstallerClientDetailPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {equipmentData.map((item) => {
-                    const { diff, valueDiff } = calculateVariance(item);
-                    const invItem = inventory.find(inv => inv.id === item.inventoryItemId);
+                  {mainEquipmentData.map((item) => {
+                    const { diff, valueDiff } = calculateMainVariance(item);
+                    const invItem = inventory.find((inv) => inv.id === item.inventoryItemId);
                     const serialRequired = isSerialRequiredItem(item);
                     const canShowSerialControls = serialRequired || item.hasBarcode;
                     const serialInputValue = (item.selectedSerialNumbers || []).join(', ');
@@ -1060,7 +1751,7 @@ export default function InstallerClientDetailPage() {
                             <input
                               type="number"
                               value={item.actuallyUsed || 0}
-                              onChange={(e) => handleQuantityChange(item.id, Number(e.target.value))}
+                              onChange={(e) => handleMainQuantityChange(item.id, Number(e.target.value))}
                               disabled={isProjectLocked}
                               min="0"
                               step="1"
@@ -1068,14 +1759,10 @@ export default function InstallerClientDetailPage() {
                             />
                           </div>
                         </td>
-                        <td className={`py-3 px-4 text-center font-bold ${
-                          diff > 0 ? 'text-red-400' : diff < 0 ? 'text-green-400' : 'text-slate-400'
-                        }`}>
+                        <td className={`py-3 px-4 text-center font-bold ${diff > 0 ? 'text-red-400' : diff < 0 ? 'text-green-400' : 'text-slate-400'}`}>
                           {diff > 0 ? '+' : ''}{diff} {item.unit}
                         </td>
-                        <td className={`py-3 px-4 text-right font-bold ${
-                          valueDiff > 0 ? 'text-red-400' : valueDiff < 0 ? 'text-green-400' : 'text-slate-400'
-                        }`}>
+                        <td className={`py-3 px-4 text-right font-bold ${valueDiff > 0 ? 'text-red-400' : valueDiff < 0 ? 'text-green-400' : 'text-slate-400'}`}>
                           {valueDiff > 0 ? '+' : ''}{valueDiff.toFixed(2)} RON
                         </td>
                         <td className="py-3 px-4 text-center">
@@ -1084,23 +1771,12 @@ export default function InstallerClientDetailPage() {
                               <input
                                 type="text"
                                 value={serialInputValue}
-                                onChange={(e) => updateSerialInput(item.id, e.target.value)}
+                                onChange={(e) => updateMainSerialInput(item.id, e.target.value)}
                                 disabled={isProjectLocked}
                                 placeholder={serialRequired ? 'Serial number (required)' : 'Serial number (optional)'}
-                                className={`w-56 bg-slate-900 border rounded px-2 py-1.5 text-white text-xs focus:ring-2 focus:ring-emerald-500 outline-none ${
-                                  serialRequired && (!item.selectedSerialNumbers || item.selectedSerialNumbers.length === 0)
-                                    ? 'border-red-500/70'
-                                    : 'border-slate-600'
-                                } disabled:opacity-60`}
+                                className={`w-56 bg-slate-900 border rounded px-2 py-1.5 text-white text-xs focus:ring-2 focus:ring-emerald-500 outline-none ${serialRequired && (!item.selectedSerialNumbers || item.selectedSerialNumbers.length === 0) ? 'border-red-500/70' : 'border-slate-600'} disabled:opacity-60`}
                               />
-                              <button
-                                onClick={() => handleBarcodeScan(item.id)}
-                                disabled={isProjectLocked}
-                                className="p-2 bg-blue-500/20 hover:bg-blue-500/30 rounded-lg transition-colors text-blue-400"
-                                title="Open camera to scan serial"
-                              >
-                                <Camera size={18} />
-                              </button>
+                              <span className="text-[10px] text-slate-500">Main tracker keeps the original project workflow.</span>
                               {serialRequired && (
                                 <span className="text-[10px] text-red-300 font-semibold">MUST for inverter/battery</span>
                               )}
@@ -1119,12 +1795,11 @@ export default function InstallerClientDetailPage() {
               </table>
             </div>
 
-            {/* Extra Items Section */}
             <div className="mt-6 pt-6 border-t border-slate-700">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-bold text-white">Extra Materials Used</h3>
                 <button
-                  onClick={handleAddExtraItem}
+                  onClick={handleMainAddExtraItem}
                   disabled={isProjectLocked}
                   className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors text-sm font-semibold"
                 >
@@ -1133,24 +1808,25 @@ export default function InstallerClientDetailPage() {
                 </button>
               </div>
 
-              {extraItems.length > 0 ? (
+              {mainExtraItems.length > 0 ? (
                 <div className="space-y-3">
-                  {extraItems.map((item) => (
+                  {mainExtraItems.map((item) => (
                     <div key={item.id} className="bg-slate-900/50 rounded-lg p-4 border border-slate-600">
                       <div className="grid grid-cols-12 gap-3 items-center">
                         <input
                           type="text"
                           placeholder="Item description"
                           value={item.description}
-                          onChange={(e) => handleExtraItemChange(item.id, 'description', e.target.value)}
+                          onChange={(e) => handleMainExtraItemChange(item.id, 'description', e.target.value)}
                           disabled={isProjectLocked}
+                          list="inventory-item-suggestions"
                           className="col-span-5 bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white focus:ring-2 focus:ring-emerald-500 outline-none"
                         />
                         <input
                           type="number"
                           placeholder="Qty"
                           value={item.quantity}
-                          onChange={(e) => handleExtraItemChange(item.id, 'quantity', Number(e.target.value))}
+                          onChange={(e) => handleMainExtraItemChange(item.id, 'quantity', Number(e.target.value))}
                           disabled={isProjectLocked}
                           className="col-span-2 bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white focus:ring-2 focus:ring-emerald-500 outline-none"
                         />
@@ -1158,7 +1834,7 @@ export default function InstallerClientDetailPage() {
                           type="text"
                           placeholder="Unit"
                           value={item.unit}
-                          onChange={(e) => handleExtraItemChange(item.id, 'unit', e.target.value)}
+                          onChange={(e) => handleMainExtraItemChange(item.id, 'unit', e.target.value)}
                           disabled={isProjectLocked}
                           className="col-span-2 bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white focus:ring-2 focus:ring-emerald-500 outline-none"
                         />
@@ -1166,12 +1842,12 @@ export default function InstallerClientDetailPage() {
                           type="number"
                           placeholder="Price"
                           value={item.netPrice}
-                          onChange={(e) => handleExtraItemChange(item.id, 'netPrice', Number(e.target.value))}
+                          onChange={(e) => handleMainExtraItemChange(item.id, 'netPrice', Number(e.target.value))}
                           disabled={isProjectLocked}
                           className="col-span-2 bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white focus:ring-2 focus:ring-emerald-500 outline-none"
                         />
                         <button
-                          onClick={() => handleRemoveExtraItem(item.id)}
+                          onClick={() => handleMainRemoveExtraItem(item.id)}
                           disabled={isProjectLocked}
                           className="col-span-1 p-2 bg-red-500/20 hover:bg-red-500/30 rounded-lg transition-colors text-red-400"
                         >
@@ -1186,10 +1862,9 @@ export default function InstallerClientDetailPage() {
               )}
             </div>
 
-            {/* Save Button */}
             <div className="mt-6 flex justify-end">
               <button
-                onClick={handleSaveEquipment}
+                onClick={handleSaveMainEquipment}
                 disabled={isProjectLocked}
                 className="flex items-center gap-2 px-6 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-600 disabled:opacity-60 text-white rounded-lg transition-colors font-semibold"
               >
@@ -1200,9 +1875,9 @@ export default function InstallerClientDetailPage() {
           </div>
         )}
 
-        {/* Summary Section */}
-        {selectedProject && (equipmentData.length > 0 || extraItems.length > 0) && (() => {
-          const summary = calculateSummary();
+        {/* Main Summary Section */}
+        {selectedProject && (mainEquipmentData.length > 0 || mainExtraItems.length > 0) && (() => {
+          const summary = calculateMainSummary();
           return (
             <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
               <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
@@ -1210,7 +1885,6 @@ export default function InstallerClientDetailPage() {
                 Project Summary
               </h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Equipment Summary */}
                 <div className="bg-slate-900/50 rounded-lg p-4">
                   <h3 className="text-sm font-semibold text-slate-400 mb-3">Equipment Usage</h3>
                   <div className="space-y-2">
@@ -1224,25 +1898,18 @@ export default function InstallerClientDetailPage() {
                     </div>
                     <div className="border-t border-slate-700 pt-2 flex justify-between items-center">
                       <span className="text-slate-300">Equipment Variance:</span>
-                      <span className={`font-bold ${
-                        summary.equipmentVariance > 0 
-                          ? 'text-red-400' 
-                          : summary.equipmentVariance < 0 
-                          ? 'text-green-400' 
-                          : 'text-white'
-                      }`}>
+                      <span className={`font-bold ${summary.equipmentVariance > 0 ? 'text-red-400' : summary.equipmentVariance < 0 ? 'text-green-400' : 'text-white'}`}>
                         {summary.equipmentVariance > 0 ? '+' : ''}{summary.equipmentVariance.toFixed(2)} RON
                       </span>
                     </div>
                   </div>
                 </div>
 
-                {/* Extra Materials Summary */}
-                {extraItems.length > 0 && (
+                {mainExtraItems.length > 0 && (
                   <div className="bg-slate-900/50 rounded-lg p-4">
                     <h3 className="text-sm font-semibold text-slate-400 mb-3">Extra Materials</h3>
                     <div className="space-y-2">
-                      {extraItems.map((item) => (
+                      {mainExtraItems.map((item) => (
                         <div key={item.id} className="flex justify-between text-sm">
                           <span className="text-slate-300 truncate">{item.description}</span>
                           <span className="font-semibold text-white whitespace-nowrap ml-2">
@@ -1259,29 +1926,18 @@ export default function InstallerClientDetailPage() {
                 )}
               </div>
 
-              {/* Total Variance */}
               <div className="mt-4 bg-gradient-to-r from-emerald-500/10 to-emerald-500/5 border border-emerald-500/30 rounded-lg p-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <TrendingUp size={20} className={summary.totalVariance > 0 ? 'text-red-400' : 'text-green-400'} />
                     <span className="font-semibold text-white">Total Price Difference:</span>
                   </div>
-                  <span className={`text-2xl font-bold ${
-                    summary.totalVariance > 0 
-                      ? 'text-red-400' 
-                      : summary.totalVariance < 0 
-                      ? 'text-green-400' 
-                      : 'text-white'
-                  }`}>
+                  <span className={`text-2xl font-bold ${summary.totalVariance > 0 ? 'text-red-400' : summary.totalVariance < 0 ? 'text-green-400' : 'text-white'}`}>
                     {summary.totalVariance > 0 ? '+' : ''}{summary.totalVariance.toFixed(2)} RON
                   </span>
                 </div>
                 <p className="text-xs text-slate-400 mt-2">
-                  {summary.totalVariance > 0 
-                    ? 'Additional cost above original quote' 
-                    : summary.totalVariance < 0 
-                    ? 'Savings from original quote' 
-                    : 'No variance from original quote'}
+                  {summary.totalVariance > 0 ? 'Additional cost above original quote' : summary.totalVariance < 0 ? 'Savings from original quote' : 'No variance from original quote'}
                 </p>
               </div>
             </div>
@@ -1289,7 +1945,7 @@ export default function InstallerClientDetailPage() {
         })()}
 
         {/* Installation Pictures Section */}
-        {selectedProject && (
+        {selectedProject && isTrackingEntryOpen && (
         <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
           <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
             <Camera size={24} className="text-emerald-500" />
@@ -1379,7 +2035,7 @@ export default function InstallerClientDetailPage() {
         )}
 
         {/* Final Report Section */}
-        {selectedProject && (
+        {selectedProject && isTrackingEntryOpen && (
         <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
           <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
             <FileText size={24} className="text-emerald-500" />
@@ -1418,7 +2074,7 @@ export default function InstallerClientDetailPage() {
                 const reportData = {
                   clientName: client?.name,
                   date: new Date().toLocaleDateString('ro-RO'),
-                  summary: calculateSummary(),
+                  summary: currentEntrySummary,
                   report: finalReport,
                   photosCount: installationPhotos.length,
                 };

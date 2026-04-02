@@ -4,6 +4,13 @@
  */
 
 import { describe, it, expect, beforeEach } from '@jest/globals';
+import {
+  aggregateEquipmentTrackingEntries,
+  buildEquipmentTrackingEntryId,
+  findMatchingQuoteLineItem,
+  toWorkDateKey,
+} from '../lib/equipmentTracking';
+import { EquipmentTrackingEntry, Quote } from '../types';
 
 // Mock data for testing
 const mockEquipmentItems = [
@@ -303,6 +310,228 @@ describe('Equipment List & Usage Tracking', () => {
       expect(message).toBe('No variance from original quote');
     });
     
+  });
+
+  describe('Daily Entry Model', () => {
+    const quote: Quote = {
+      id: 'quote-1',
+      clientId: 'client-1',
+      title: 'Large rooftop project',
+      customerName: 'Test Client',
+      date: new Date('2026-04-01T08:00:00Z'),
+      items: [
+        {
+          id: 'item-1',
+          description: 'Solar Panel 400W',
+          unit: 'pcs',
+          quantity: 10,
+          netPrice: 2000,
+        },
+        {
+          id: 'item-2',
+          description: 'Mounting Rails 6m',
+          unit: 'pcs',
+          quantity: 20,
+          netPrice: 150,
+        },
+      ],
+      subtotalNet: 0,
+      vatTotal: 0,
+      totalGross: 0,
+    };
+
+    const buildEntry = (overrides: Partial<EquipmentTrackingEntry>): EquipmentTrackingEntry => ({
+      id: 'entry-default',
+      quoteId: quote.id,
+      clientId: 'client-1',
+      projectTitle: quote.title,
+      workDate: new Date('2026-04-01T00:00:00'),
+      installerId: 'installer-1',
+      installerNickname: 'Nick',
+      status: 'draft',
+      items: [
+        {
+          id: 'item-1',
+          description: 'Solar Panel 400W',
+          quotedQty: 10,
+          consumedQty: 6,
+          unit: 'pcs',
+          netPrice: 2000,
+          selectedSerialNumbers: ['SN-1'],
+        },
+        {
+          id: 'item-2',
+          description: 'Mounting Rails 6m',
+          quotedQty: 20,
+          consumedQty: 8,
+          unit: 'pcs',
+          netPrice: 150,
+        },
+      ],
+      extraItems: [],
+      installationPhotos: [],
+      createdAt: new Date('2026-04-01T08:00:00'),
+      updatedAt: new Date('2026-04-01T09:00:00'),
+      ...overrides,
+    });
+
+    it('should create a stable one-entry-per-installer-per-day id', () => {
+      const workDate = new Date('2026-04-02T15:45:00');
+      expect(buildEquipmentTrackingEntryId('quote-1', 'installer-1', workDate)).toBe('quote-1__installer-1__2026-04-02');
+      expect(toWorkDateKey(workDate)).toBe('2026-04-02');
+    });
+
+    it('should aggregate multiple days for the same installer without overwriting', () => {
+      const dayOne = buildEntry({
+        id: 'entry-day-1',
+        workDate: new Date('2026-04-01T00:00:00'),
+      });
+      const dayTwo = buildEntry({
+        id: 'entry-day-2',
+        workDate: new Date('2026-04-02T00:00:00'),
+        updatedAt: new Date('2026-04-02T18:00:00'),
+        items: [
+          {
+            id: 'item-1',
+            description: 'Solar Panel 400W',
+            quotedQty: 10,
+            consumedQty: 4,
+            unit: 'pcs',
+            netPrice: 2000,
+            selectedSerialNumbers: ['SN-2'],
+          },
+          {
+            id: 'item-2',
+            description: 'Mounting Rails 6m',
+            quotedQty: 20,
+            consumedQty: 12,
+            unit: 'pcs',
+            netPrice: 150,
+          },
+        ],
+        notes: 'Finished roof side B',
+      });
+
+      const aggregate = aggregateEquipmentTrackingEntries(quote, [dayOne, dayTwo]);
+
+      expect(aggregate.consumptionData.find((item) => item.id === 'item-1')?.consumedQty).toBe(10);
+      expect(aggregate.consumptionData.find((item) => item.id === 'item-2')?.consumedQty).toBe(20);
+      expect(aggregate.consumptionData.find((item) => item.id === 'item-1')?.selectedSerialNumbers).toEqual(['SN-1', 'SN-2']);
+      expect(aggregate.completionNotes).toBe('Finished roof side B');
+      expect(aggregate.consumptionDataUpdatedBy).toBe('Nick');
+    });
+
+    it('should aggregate multiple installers on the same project and day', () => {
+      const installerOne = buildEntry({
+        id: 'entry-installer-1',
+        installerId: 'installer-1',
+        installerNickname: 'Nick',
+        items: [
+          {
+            id: 'item-1',
+            description: 'Solar Panel 400W',
+            quotedQty: 10,
+            consumedQty: 5,
+            unit: 'pcs',
+            netPrice: 2000,
+          },
+          {
+            id: 'item-2',
+            description: 'Mounting Rails 6m',
+            quotedQty: 20,
+            consumedQty: 10,
+            unit: 'pcs',
+            netPrice: 150,
+          },
+        ],
+      });
+      const installerTwo = buildEntry({
+        id: 'entry-installer-2',
+        installerId: 'installer-2',
+        installerNickname: 'Alex',
+        updatedAt: new Date('2026-04-01T12:00:00'),
+        items: [
+          {
+            id: 'item-1',
+            description: 'Solar Panel 400W',
+            quotedQty: 10,
+            consumedQty: 5,
+            unit: 'pcs',
+            netPrice: 2000,
+          },
+          {
+            id: 'item-2',
+            description: 'Mounting Rails 6m',
+            quotedQty: 20,
+            consumedQty: 10,
+            unit: 'pcs',
+            netPrice: 150,
+          },
+        ],
+        extraItems: [
+          {
+            id: 'extra-1',
+            description: 'Extra connector pack',
+            quotedQty: 0,
+            consumedQty: 2,
+            unit: 'pcs',
+            netPrice: 50,
+            isExtra: true,
+          },
+        ],
+      });
+
+      const aggregate = aggregateEquipmentTrackingEntries(quote, [installerOne, installerTwo]);
+
+      expect(aggregate.consumptionData.find((item) => item.id === 'item-1')?.consumedQty).toBe(10);
+      expect(aggregate.consumptionData.find((item) => item.id === 'item-2')?.consumedQty).toBe(20);
+      expect(aggregate.extraItems).toHaveLength(1);
+      expect(aggregate.extraItems[0].consumedQty).toBe(2);
+      expect(aggregate.materialVariances.reduce((sum, item) => sum + item.variance, 0)).toBe(0);
+    });
+
+    it('should match blank-table manual rows back to quote items by description or original id', () => {
+      const byDescription = findMatchingQuoteLineItem(quote, {
+        id: 'manual-row-1',
+        description: 'Solar Panel 400W',
+        inventoryItemId: undefined,
+        originalLineItemId: undefined,
+      });
+
+      const byOriginalLineItemId = findMatchingQuoteLineItem(quote, {
+        id: 'manual-row-2',
+        description: 'Custom renamed row',
+        inventoryItemId: undefined,
+        originalLineItemId: 'item-2',
+      });
+
+      expect(byDescription?.id).toBe('item-1');
+      expect(byOriginalLineItemId?.id).toBe('item-2');
+    });
+
+    it('should classify unmatched manual rows as extra items during aggregation', () => {
+      const manualEntry = buildEntry({
+        id: 'entry-manual-extra',
+        items: [
+          {
+            id: 'manual-extra-row',
+            description: 'Copper grounding clamp',
+            quotedQty: 0,
+            consumedQty: 3,
+            unit: 'pcs',
+            netPrice: 25,
+          },
+        ],
+        extraItems: [],
+      });
+
+      const aggregate = aggregateEquipmentTrackingEntries(quote, [manualEntry]);
+
+      expect(aggregate.extraItems).toHaveLength(1);
+      expect(aggregate.extraItems[0].description).toBe('Copper grounding clamp');
+      expect(aggregate.extraItems[0].consumedQty).toBe(3);
+      expect(aggregate.extraItems[0].isExtra).toBe(true);
+    });
   });
   
 });

@@ -7,6 +7,7 @@ import { useData } from '@/contexts/DataContext';
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import { InstallerReport, Quote, ProjectPhase, TeamMessageThread } from '@/types';
+import { isInstallerAssignedToQuote } from '@/lib/installerAssignments';
 
 const phaseLabels: Record<ProjectPhase | '', string> = {
   'planning': 'Planning',
@@ -54,7 +55,7 @@ export default function InstallerDetailPage() {
   // Move all hooks before early return
   const allProjects = useMemo(() => {
     if (!installer) return [];
-    return (savedQuotes || []).filter(q => q.allocatedInstallerId === installer.nickname);
+    return (savedQuotes || []).filter((quote) => isInstallerAssignedToQuote(quote, installer));
   }, [savedQuotes, installer]);
 
   const activeProjects = useMemo(() => allProjects.filter(q => !q.completedAt), [allProjects]);
