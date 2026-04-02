@@ -1,0 +1,27 @@
+{
+  "userStories": [
+    {
+      "id": "1",
+      "title": "Make the login page Mobile-Friendly",
+      "priority": 1,
+      "passes": true,
+      "description": "Make the login page Mobile-Friendly",
+      "acceptanceCriteria": [
+        "Can be accessed and used on a mobile device without layout issues",
+        "All elements are appropriately sized and spaced for touch interaction",
+        "Login form is centered and readable on small screens",
+        "Login feature works as now on web layout, with no new issues"
+      ]
+    },
+    {
+      "id": "2",
+      "title": "Fix login page error messages",
+      "priority": 1,
+      "passes": true,
+      "description": "Fix login page error messages: Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON, make it more user friendly and informative",
+      "acceptanceCriteria": [
+        "When a user enters incorrect login credentials, they should see a clear and concise error message indicating that the username or password is incorrect, instead of a generic JSON parsing error."
+      ]
+    }
+  ]
+}
