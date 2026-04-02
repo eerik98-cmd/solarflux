@@ -3,7 +3,8 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, Users, Calendar, LogOut } from 'lucide-react';
+import { LayoutDashboard, Users, Calendar, LogOut, Monitor } from 'lucide-react';
+import { getInstallerDesktopPath } from '@/lib/installerNavigation';
 
 interface InstallerMobileNavProps {
   onLogout: () => void;
@@ -11,11 +12,13 @@ interface InstallerMobileNavProps {
 
 export const InstallerMobileNav: React.FC<InstallerMobileNavProps> = ({ onLogout }) => {
   const pathname = usePathname();
+  const desktopViewPath = getInstallerDesktopPath(pathname);
 
   const navItems = [
     { id: 'dashboard', label: 'Home', icon: LayoutDashboard, path: '/installer-mobile' },
     { id: 'clients', label: 'Clients', icon: Users, path: '/installer-mobile/clients' },
     { id: 'reports', label: 'Reports', icon: Calendar, path: '/installer-mobile/reports' },
+    { id: 'desktop', label: 'Desktop', icon: Monitor, path: desktopViewPath },
   ];
 
   const isActive = (path: string) => {
@@ -34,7 +37,7 @@ export const InstallerMobileNav: React.FC<InstallerMobileNavProps> = ({ onLogout
         return (
           <Link key={item.id} href={item.path} className="flex-1">
             <button
-              className={`w-full h-16 flex flex-col items-center justify-center gap-1 transition-colors ${
+              className={`relative w-full h-16 flex flex-col items-center justify-center gap-1 transition-colors ${
                 active
                   ? 'text-amber-400'
                   : 'text-slate-400 active:text-slate-200'

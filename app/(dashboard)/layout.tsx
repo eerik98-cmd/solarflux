@@ -7,6 +7,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { View } from '@/types';
 import { AuthRequired } from '@/components/AuthRequired';
 import Loading from '@/components/Loading';
+import { getInstallerPreferredRoute, isInstallerPortalPath } from '@/lib/installerNavigation';
 
 export default function DashboardLayout({
   children,
@@ -16,7 +17,7 @@ export default function DashboardLayout({
   const router = useRouter();
   const pathname = usePathname();
   const { logout, isAuthenticated, authLoading, currentUser } = useAuth();
-  const isInstallerPortalRoute = pathname === '/installer' || pathname.startsWith('/installer/');
+  const isInstallerPortalRoute = isInstallerPortalPath(pathname);
   
   // Protect dashboard routes - redirect to login if not authenticated
   useEffect(() => {
@@ -28,7 +29,7 @@ export default function DashboardLayout({
   // Redirect installers to their dashboard
   useEffect(() => {
     if (!authLoading && currentUser && currentUser.role === 'INSTALLER' && !isInstallerPortalRoute) {
-      router.replace('/installer');
+      router.replace(getInstallerPreferredRoute());
     }
   }, [authLoading, currentUser, isInstallerPortalRoute, router]);
   

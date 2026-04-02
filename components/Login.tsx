@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { Sun, Lock, User, ArrowRight } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
+import { getInstallerPreferredRoute } from '@/lib/installerNavigation';
 
 export const Login: React.FC = () => {
   const [username, setUsername] = useState('');
@@ -22,7 +23,7 @@ export const Login: React.FC = () => {
       const user = await login(username, password);
       // Redirect based on user role
       if (user.role === 'INSTALLER') {
-        router.push('/installer');
+        router.push(getInstallerPreferredRoute());
       } else {
         router.push('/clients');
       }

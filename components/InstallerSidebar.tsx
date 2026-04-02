@@ -1,9 +1,10 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Sun, Users, FileText, LogOut, ChevronLeft, ChevronRight, Calendar, LayoutDashboard } from 'lucide-react';
+import { Sun, Users, FileText, LogOut, ChevronLeft, ChevronRight, Calendar, LayoutDashboard, Smartphone } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { getInstallerMobilePath } from '@/lib/installerNavigation';
 
 interface InstallerSidebarProps {
   onLogout: () => void;
@@ -12,6 +13,7 @@ interface InstallerSidebarProps {
 export const InstallerSidebar: React.FC<InstallerSidebarProps> = ({ onLogout }) => {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const pathname = usePathname();
+  const mobileViewPath = getInstallerMobilePath(pathname);
   
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, path: '/installer' },
@@ -75,6 +77,14 @@ export const InstallerSidebar: React.FC<InstallerSidebarProps> = ({ onLogout }) 
             <p className="text-xs text-slate-500">View clients & submit reports</p>
           </div>
         )}
+        <Link
+          href={mobileViewPath}
+          className={`w-full flex items-center justify-center gap-2 px-3 py-2 mb-3 text-slate-300 hover:text-white transition-colors bg-slate-700/50 hover:bg-slate-700 rounded-lg ${isCollapsed ? 'flex-col' : ''}`}
+          title="Open mobile view"
+        >
+          <Smartphone size={18} />
+          {!isCollapsed && <span className="text-xs font-bold">Mobile View</span>}
+        </Link>
         <button 
           onClick={onLogout}
           className={`w-full flex items-center justify-center gap-2 px-3 py-2 text-slate-400 hover:text-red-400 transition-colors bg-slate-700/30 hover:bg-red-500/10 rounded-lg ${isCollapsed ? 'flex-col' : ''}`}
