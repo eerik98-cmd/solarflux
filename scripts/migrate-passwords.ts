@@ -13,7 +13,7 @@
 
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection, getDocs, doc, updateDoc } from 'firebase/firestore';
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import * as dotenv from 'dotenv';
 
 // Load environment variables

@@ -60,18 +60,6 @@ export default function InstallersPage() {
     });
   }, [installers, savedQuotes, teamMessageThreads]);
 
-  if (!currentUser || currentUser.role !== 'SUPER_ADMIN') {
-    return (
-      <div className="h-full flex items-center justify-center bg-slate-900">
-        <div className="text-center">
-          <AlertCircle size={48} className="text-red-500 mx-auto mb-4" />
-          <p className="text-white font-bold">Access Denied</p>
-          <p className="text-slate-400">Only super admins can view this page</p>
-        </div>
-      </div>
-    );
-  }
-
   // Filter installers by search term
   const filteredInstallers = useMemo(() => {
     if (!searchTerm) return installerStats;
@@ -97,6 +85,18 @@ export default function InstallersPage() {
       unreadInstallerReplies
     };
   }, [installerStats]);
+
+  if (!currentUser || currentUser.role !== 'SUPER_ADMIN') {
+    return (
+      <div className="h-full flex items-center justify-center bg-slate-900">
+        <div className="text-center">
+          <AlertCircle size={48} className="text-red-500 mx-auto mb-4" />
+          <p className="text-white font-bold">Access Denied</p>
+          <p className="text-slate-400">Only super admins can view this page</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-full overflow-y-auto p-8 bg-slate-900">

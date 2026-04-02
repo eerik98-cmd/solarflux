@@ -40,6 +40,11 @@ export default function ClientDataPage() {
     }
   }, [client?.id]);
 
+  const isDirty = useMemo(() => {
+    if (!client || !formData) return false;
+    return JSON.stringify(client) !== JSON.stringify(formData);
+  }, [client, formData]);
+
   if (!client || !formData) {
     return <div className="p-8 text-slate-400">Loading...</div>;
   }
@@ -47,13 +52,6 @@ export default function ClientDataPage() {
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
-
-  const isDirty = useMemo(() => {
-    if (!client || !formData) {
-      return false;
-    }
-    return JSON.stringify(client) !== JSON.stringify(formData);
-  }, [client, formData]);
 
   const handleSave = async () => {
     updateClient(formData);

@@ -1,0 +1,16 @@
+2026-03-30: Made login page mobile-friendly (components/Login.tsx).
+- Added px-4 py-8 padding to outer container so form doesn't touch screen edges on mobile
+- Made background decoration circles responsive (300px on mobile, 500px on sm+)
+- Reduced card padding to p-6 on mobile, p-8 on sm+
+- Made heading font-size responsive (text-xl mobile, text-2xl sm+)
+- Made Sun icon size responsive
+- Added text-base to inputs to prevent iOS auto-zoom (triggered when font-size < 16px)
+- Reduced form spacing slightly on mobile (space-y-5 mobile, space-y-6 sm+)
+
+2026-03-30: Verified mobile-friendly login implementation — all acceptance criteria pass. Updated PRD passes: true.
+
+2026-03-30: Fixed login page error messages (contexts/AuthContext.tsx). [100% complete]
+- Login function now catches non-JSON responses (e.g. HTML error pages returning <!DOCTYPE)
+- Falls back to "Incorrect username or password. Please try again." for all auth failures
+- Avoids exposing internal server error messages to users
+- All acceptance criteria pass. Updated PRD passes: true.

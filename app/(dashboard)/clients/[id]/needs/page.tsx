@@ -71,6 +71,82 @@ export default function ClientNeedsPage() {
     return () => window.removeEventListener('keydown', handleKeyPress);
   }, [previewImageIndex, client?.needs?.siteImages]);
 
+  const suggestedInverters = useMemo(() => {
+    if (!client?.needs?.inverterKw) return [];
+    const connectionType = client.needs.connectionType;
+    const targetKw = client.needs.inverterKw;
+    const tolerance = 2;
+
+    return inventory.filter(item => {
+      if (item.category !== Category.INVERTERS) return false;
+      if (connectionType && item.inverterConnectionType && item.inverterConnectionType !== connectionType) return false;
+      if (item.inverterPowerKw) {
+        return Math.abs(item.inverterPowerKw - targetKw) <= tolerance && (item.quantity || 0) > 0;
+      }
+      return false;
+    });
+  }, [client?.needs?.inverterKw, client?.needs?.connectionType, inventory]);
+
+  const suggestedBatteries = useMemo(() => {
+    if (!client?.needs?.batteryKwh || client.needs.batteryKwh <= 0) return [];
+
+    const selectedInverter = client?.needs?.selectedInverterId
+      ? inventory.find(i => i.id === client.needs.selectedInverterId)
+      : null;
+    const requiredStorageType = selectedInverter?.inverterStorageType;
+    const targetKwh = client.needs.batteryKwh;
+    const tolerance = 5; // kWh tolerance
+
+    return inventory
+      .filter(item => {
+        if (item.category !== Category.BATTERIES) return false;
+        if ((item.quantity || 0) === 0) return false;
+
+        // If inverter is selected, filter by compatible storage type
+        if (requiredStorageType && item.batteryType !== requiredStorageType) return false;
+
+        // Filter by battery capacity
+        if (item.batteryPowerKwh) {
+          return Math.abs(item.batteryPowerKwh - targetKwh) <= tolerance;
+        }
+        return false;
+      })
+      .sort((a, b) => {
+        // If inverter selected, prioritize compatible batteries
+        if (requiredStorageType) {
+          const aCompatible = a.batteryType === requiredStorageType ? 1 : 0;
+          const bCompatible = b.batteryType === requiredStorageType ? 1 : 0;
+          if (aCompatible !== bCompatible) return bCompatible - aCompatible;
+        }
+        // Sort by closest capacity match
+        return Math.abs(a.batteryPowerKwh! - targetKwh) - Math.abs(b.batteryPowerKwh! - targetKwh);
+      });
+  }, [client?.needs?.batteryKwh, client?.needs?.selectedInverterId, inventory]);
+
+  const suggestedPanels = useMemo(() => {
+    if (!client?.needs?.panelKw || client.needs.panelKw <= 0) return [];
+    const targetWatts = client.needs.panelKw * 1000;
+
+    return inventory
+      .filter(item => item.category === Category.PANELS && item.powerW && item.powerW > 0)
+      .map(panel => {
+        const piecesNeeded = Math.ceil(targetWatts / panel.powerW!);
+        const actualPower = (piecesNeeded * panel.powerW!) / 1000;
+        const stockQuantity = panel.quantity || 0;
+        const isInStock = stockQuantity >= piecesNeeded;
+        const isOutOfStock = stockQuantity === 0;
+
+        return { ...panel, piecesNeeded, actualPower, isInStock, isOutOfStock, stockQuantity };
+      })
+      .filter(p => p.stockQuantity > 0) // Show only items in stock
+      .sort((a, b) => {
+        // Sort by stock availability first, then by power match
+        if (a.isInStock && !b.isInStock) return -1;
+        if (!a.isInStock && b.isInStock) return 1;
+        return Math.abs(a.actualPower - client.needs!.panelKw!) - Math.abs(b.actualPower - client.needs!.panelKw!);
+      });
+  }, [client?.needs?.panelKw, inventory]);
+
   if (!client) return null;
 
   const handleNeedsChange = async (field: string, value: any) => {
@@ -98,82 +174,6 @@ export default function ClientNeedsPage() {
       }
     });
   };
-
-  const suggestedInverters = useMemo(() => {
-    if (!client?.needs?.inverterKw) return [];
-    const connectionType = client.needs.connectionType;
-    const targetKw = client.needs.inverterKw;
-    const tolerance = 2;
-    
-    return inventory.filter(item => {
-      if (item.category !== Category.INVERTERS) return false;
-      if (connectionType && item.inverterConnectionType && item.inverterConnectionType !== connectionType) return false;
-      if (item.inverterPowerKw) {
-        return Math.abs(item.inverterPowerKw - targetKw) <= tolerance && (item.quantity || 0) > 0;
-      }
-      return false;
-    });
-  }, [client?.needs?.inverterKw, client?.needs?.connectionType, inventory]);
-
-  const suggestedBatteries = useMemo(() => {
-    if (!client?.needs?.batteryKwh || client.needs.batteryKwh <= 0) return [];
-    
-    const selectedInverter = client?.needs?.selectedInverterId 
-      ? inventory.find(i => i.id === client.needs.selectedInverterId) 
-      : null;
-    const requiredStorageType = selectedInverter?.inverterStorageType;
-    const targetKwh = client.needs.batteryKwh;
-    const tolerance = 5; // kWh tolerance
-
-    return inventory
-      .filter(item => {
-        if (item.category !== Category.BATTERIES) return false;
-        if ((item.quantity || 0) === 0) return false;
-        
-        // If inverter is selected, filter by compatible storage type
-        if (requiredStorageType && item.batteryType !== requiredStorageType) return false;
-        
-        // Filter by battery capacity
-        if (item.batteryPowerKwh) {
-          return Math.abs(item.batteryPowerKwh - targetKwh) <= tolerance;
-        }
-        return false;
-      })
-      .sort((a, b) => {
-        // If inverter selected, prioritize compatible batteries
-        if (requiredStorageType) {
-          const aCompatible = a.batteryType === requiredStorageType ? 1 : 0;
-          const bCompatible = b.batteryType === requiredStorageType ? 1 : 0;
-          if (aCompatible !== bCompatible) return bCompatible - aCompatible;
-        }
-        // Sort by closest capacity match
-        return Math.abs(a.batteryPowerKwh! - targetKwh) - Math.abs(b.batteryPowerKwh! - targetKwh);
-      });
-  }, [client?.needs?.batteryKwh, client?.needs?.selectedInverterId, inventory]);
-
-  const suggestedPanels = useMemo(() => {
-    if (!client?.needs?.panelKw || client.needs.panelKw <= 0) return [];
-    const targetWatts = client.needs.panelKw * 1000;
-    
-    return inventory
-      .filter(item => item.category === Category.PANELS && item.powerW && item.powerW > 0)
-      .map(panel => {
-        const piecesNeeded = Math.ceil(targetWatts / panel.powerW!);
-        const actualPower = (piecesNeeded * panel.powerW!) / 1000;
-        const stockQuantity = panel.quantity || 0;
-        const isInStock = stockQuantity >= piecesNeeded;
-        const isOutOfStock = stockQuantity === 0;
-        
-        return { ...panel, piecesNeeded, actualPower, isInStock, isOutOfStock, stockQuantity };
-      })
-      .filter(p => p.stockQuantity > 0) // Show only items in stock
-      .sort((a, b) => {
-        // Sort by stock availability first, then by power match
-        if (a.isInStock && !b.isInStock) return -1;
-        if (!a.isInStock && b.isInStock) return 1;
-        return Math.abs(a.actualPower - client.needs!.panelKw!) - Math.abs(b.actualPower - client.needs!.panelKw!);
-      });
-  }, [client?.needs?.panelKw, inventory]);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {

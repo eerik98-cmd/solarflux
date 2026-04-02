@@ -26,10 +26,7 @@ const placeholder = Placeholder.configure({
 
 // Configure StarterKit to exclude extensions we're adding separately
 export const defaultExtensions = [
-  StarterKit.configure({
-    // Disable built-in extensions that we're replacing with configured versions
-    history: false, // We'll use the default history from StarterKit
-  }),
+  StarterKit.configure({}),
   placeholder,
   Link.configure({
     openOnClick: false,

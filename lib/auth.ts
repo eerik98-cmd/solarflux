@@ -3,7 +3,7 @@
  * Handles password hashing, verification, and JWT token generation
  */
 
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import { SignJWT, jwtVerify } from 'jose';
 
 const SALT_ROUNDS = 10;

@@ -23,6 +23,7 @@ dist-ssr
 out
 .vercel
 .turbo
+tsconfig.tsbuildinfo
 
 # Editor directories and files
 .vscode/*

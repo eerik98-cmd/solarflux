@@ -522,17 +522,13 @@ export const FileManager: React.FC<FileManagerProps> = ({ documents = [], onAddD
       </div>
 
       {previewDoc && previewDoc.url && (
-        <DocumentPreview 
-          document={previewDoc}
+        <DocumentPreview
+          document={previewDoc as CompanyDocument & { url: string }}
           onClose={() => setPreviewDoc(null)}
           allowEdit={true}
           folder={`company/${currentPath.join('/')}`}
           onSave={async (newUrl) => {
-            // Update document URL in company documents
-            const updatedDocs = companyDocs.map(doc =>
-              doc.id === previewDoc.id ? { ...doc, url: newUrl } : doc
-            );
-            console.log('Document saved with new URL:', newUrl);
+            onUpdateDocument?.(previewDoc.id, { url: newUrl });
           }}
           onPdfCreated={(pdfDoc) => {
             // Add the PDF as a new company document in the current folder
