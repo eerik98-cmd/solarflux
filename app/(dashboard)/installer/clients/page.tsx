@@ -81,7 +81,7 @@ export default function InstallerClientsPage() {
                           {client.name}
                         </h3>
                         <span className={`text-xs px-2 py-1 rounded-full font-semibold ${
-                          client.type === 'PRIVATE' 
+                          client.type === 'Private'
                             ? 'bg-blue-500/20 text-blue-300'
                             : 'bg-purple-500/20 text-purple-300'
                         }`}>

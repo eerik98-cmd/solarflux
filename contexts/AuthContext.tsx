@@ -7,7 +7,7 @@ interface AuthContextType {
   isAuthenticated: boolean;
   currentUser: User | null;
   authLoading: boolean;
-  login: (username: string, password: string) => Promise<void>;
+  login: (username: string, password: string) => Promise<User>;
   logout: () => Promise<void>;
   setCurrentUser: (user: User | null) => void;
 }
@@ -57,8 +57,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Login failed');
+      let message = 'Incorrect username or password. Please try again.';
+      try {
+        const error = await response.json();
+        if (error.error && !error.error.toLowerCase().includes('internal')) {
+          message = error.error;
+        }
+      } catch {
+        // Response was not JSON (e.g. HTML error page) — use friendly fallback
+      }
+      throw new Error(message);
     }
 
     const data = await response.json();

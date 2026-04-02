@@ -136,6 +136,7 @@ export default function InstallerClientDetailPage() {
 
     const projectPhotos = (selectedProject.installationPhotos || []).map(photo => ({
       ...photo,
+      description: photo.description ?? '',
       timestamp: new Date(photo.timestamp),
       uploadedAt: photo.uploadedAt ? new Date(photo.uploadedAt) : undefined,
     }));

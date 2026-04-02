@@ -53,8 +53,6 @@ export default function ClientQuotesPage() {
     doc: {id: string, name: string, url: string, date: Date} | null;
   }>({ show: false, doc: null });
 
-  if (!client) return null;
-
   // Load email templates and SMTP settings on mount
   useEffect(() => {
     const loadEmailData = async () => {
@@ -140,6 +138,8 @@ export default function ClientQuotesPage() {
     }
     return null;
   }, [client, selectedProjectForQuote]);
+
+  if (!client) return null;
 
   const handleNewQuoteClick = () => { 
     setConfirmDialog({

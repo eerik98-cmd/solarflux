@@ -1,55 +1,52 @@
-'use client';
-
+/* eslint-disable @typescript-eslint/no-explicit-any */
+"use client";
 import React, { useState } from 'react';
 import { Sun, Lock, User, ArrowRight } from 'lucide-react';
-import { useAuth } from '@/contexts/AuthContext';
-import { useRouter } from 'next/navigation';
 
-export const Login: React.FC = () => {
+interface LoginProps {
+  onLogin: (u: string, p: string) => void;
+}
+
+export const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const { login } = useAuth();
-  const router = useRouter();
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setLoading(true);
 
-    try {
-      const user = await login(username, password);
-      // Redirect based on user role
-      if (user.role === 'INSTALLER') {
-        router.push('/installer');
-      } else {
-        router.push('/clients');
+    // Simulate API delay
+    setTimeout(() => {
+      try {
+        onLogin(username, password);
+      } catch (err: any) {
+        setError(err.message || 'Authentication failed');
+        setLoading(false);
       }
-    } catch (err: any) {
-      setError(err.message || 'Authentication failed');
-      setLoading(false);
-    }
+    }, 800);
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 flex items-center justify-center relative overflow-hidden px-4 py-8">
+    <div className="min-h-screen bg-slate-900 flex items-center justify-center relative overflow-hidden">
       {/* Background decoration */}
       <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none">
-        <div className="absolute top-[-10%] right-[-5%] w-[300px] h-[300px] sm:w-[500px] sm:h-[500px] bg-amber-500/10 rounded-full blur-3xl"></div>
-        <div className="absolute bottom-[-10%] left-[-5%] w-[300px] h-[300px] sm:w-[500px] sm:h-[500px] bg-blue-500/10 rounded-full blur-3xl"></div>
+        <div className="absolute top-[-10%] right-[-5%] w-[500px] h-[500px] bg-amber-500/10 rounded-full blur-3xl"></div>
+        <div className="absolute bottom-[-10%] left-[-5%] w-[500px] h-[500px] bg-blue-500/10 rounded-full blur-3xl"></div>
       </div>
 
-      <div className="relative z-10 bg-slate-800 p-6 sm:p-8 rounded-2xl shadow-2xl border border-slate-700 w-full max-w-md backdrop-blur-sm">
-        <div className="text-center mb-6 sm:mb-8">
+      <div className="relative z-10 bg-slate-800 p-8 rounded-2xl shadow-2xl border border-slate-700 w-full max-w-md backdrop-blur-sm">
+        <div className="text-center mb-8">
           <div className="inline-flex p-3 bg-amber-500/10 rounded-2xl mb-4 text-amber-500">
-            <Sun size={40} className="sm:w-12 sm:h-12" />
+            <Sun size={48} />
           </div>
-          <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight">SolarFlux Manager</h1>
+          <h1 className="text-2xl font-bold text-white tracking-tight">SolarFlux Manager</h1>
           <p className="text-slate-400 mt-2 text-sm">Sign in to access the command center</p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-5 sm:space-y-6">
+        <form onSubmit={handleSubmit} className="space-y-6">
           <div className="space-y-2">
             <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Username</label>
             <div className="relative group">
@@ -58,7 +55,7 @@ export const Login: React.FC = () => {
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl py-3 pl-10 pr-4 text-base text-white placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all"
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl py-3 pl-10 pr-4 text-white placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all"
                 placeholder="Enter username"
                 required
               />
@@ -73,7 +70,7 @@ export const Login: React.FC = () => {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl py-3 pl-10 pr-4 text-base text-white placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all"
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl py-3 pl-10 pr-4 text-white placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all"
                 placeholder="••••••••"
                 required
               />
