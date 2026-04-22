@@ -33,6 +33,10 @@ export default function ClientQuotesPage() {
   const [confirmDialog, setConfirmDialog] = useState<{message: string; onConfirm: () => void} | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [sendingEmailDocId, setSendingEmailDocId] = useState<string | null>(null);
+  const [isEditingQuote, setIsEditingQuote] = useState(false);
+  const [quoteBaselineSnapshot, setQuoteBaselineSnapshot] = useState<string>('');
+  const [showUnloadWarning, setShowUnloadWarning] = useState(false);
+  const [pendingNavigationUrl, setPendingNavigationUrl] = useState<string | null>(null);
 
   // Table interaction state
   const [focusedRowId, setFocusedRowId] = useState<string | null>(null);
@@ -148,37 +152,173 @@ export default function ClientQuotesPage() {
 
   if (!client) return null;
 
-  const handleNewQuoteClick = () => { 
-    setConfirmDialog({
-      message: 'Clear current quote and start a new one?',
-      onConfirm: () => {
-        setQuoteItems([]); 
-        setQuoteProjectName(client?.needs?.projectName || ''); 
-        setEditingQuoteId(null);
-        setSelectedProjectForQuote('current');
-        setOfferSent(false);
-        setQuoteWon(false);
-        setAllocatedInstallerId(null);
-        showNotification('New quote started', 'info');
-        setConfirmDialog(null);
-      }
-    });
+  const buildQuoteSnapshot = (payload: {
+    title: string;
+    items: QuoteLineItem[];
+    quoteWon: boolean;
+    offerSent: boolean;
+    allocatedInstallerId: string | null;
+    editingQuoteId: string | null;
+  }) => JSON.stringify(payload);
+
+  const hasUnsavedQuoteChanges =
+    isEditingQuote &&
+    buildQuoteSnapshot({
+      title: quoteProjectName,
+      items: quoteItems,
+      quoteWon,
+      offerSent,
+      allocatedInstallerId,
+      editingQuoteId,
+    }) !== quoteBaselineSnapshot;
+
+  useEffect(() => {
+    if (!hasUnsavedQuoteChanges) return;
+
+    const originalPushState = window.history.pushState;
+    const originalReplaceState = window.history.replaceState;
+
+    const interceptNavigation = (originalMethod: History['pushState']) => {
+      return function (this: History, ...args: any[]) {
+        const targetUrl = args[2];
+        if (typeof targetUrl === 'string' || targetUrl instanceof URL) {
+          const next = new URL(targetUrl.toString(), window.location.href);
+          if (next.href !== window.location.href) {
+            setPendingNavigationUrl(next.href);
+            setShowUnloadWarning(true);
+            return;
+          }
+        }
+        return originalMethod.apply(this, args as [any, string, string | URL | null | undefined]);
+      };
+    };
+
+    window.history.pushState = interceptNavigation(originalPushState);
+    window.history.replaceState = interceptNavigation(originalReplaceState);
+
+    return () => {
+      window.history.pushState = originalPushState;
+      window.history.replaceState = originalReplaceState;
+    };
+  }, [hasUnsavedQuoteChanges]);
+
+  const startNewQuote = () => {
+    const initialQuoteName = client?.needs?.projectName || '';
+    setQuoteItems([]);
+    setQuoteProjectName(initialQuoteName);
+    setEditingQuoteId(null);
+    setSelectedProjectForQuote('current');
+    setOfferSent(false);
+    setQuoteWon(false);
+    setAllocatedInstallerId(null);
+    setQuoteBaselineSnapshot(
+      buildQuoteSnapshot({
+        title: initialQuoteName,
+        items: [],
+        quoteWon: false,
+        offerSent: false,
+        allocatedInstallerId: null,
+        editingQuoteId: null,
+      })
+    );
+    setIsEditingQuote(true);
+    showNotification('New quote started', 'info');
+  };
+
+  const handleNewQuoteClick = () => {
+    if (isEditingQuote && (quoteItems.length > 0 || !!quoteProjectName.trim() || !!editingQuoteId)) {
+      setConfirmDialog({
+        message: 'Clear current quote and start a new one?',
+        onConfirm: () => {
+          startNewQuote();
+          setConfirmDialog(null);
+        }
+      });
+      return;
+    }
+    startNewQuote();
   };
 
   const handleLoadQuote = (quote: Quote) => {
-    setQuoteProjectName(quote.title || '');
-    setQuoteItems(quote.items.map(i => ({...i, selectedSerialNumbers: i.selectedSerialNumbers || []})));
+    const normalizedItems = quote.items.map(i => ({...i, selectedSerialNumbers: i.selectedSerialNumbers || []}));
+    const loadedTitle = quote.title || '';
+
+    setQuoteProjectName(loadedTitle);
+    setQuoteItems(normalizedItems);
     setEditingQuoteId(quote.id);
     setOfferSent(false); // Reset these since they're not in Quote type yet
     setQuoteWon(false);
     setAllocatedInstallerId(quote.allocatedInstallerId || null);
+    setQuoteBaselineSnapshot(
+      buildQuoteSnapshot({
+        title: loadedTitle,
+        items: normalizedItems,
+        quoteWon: false,
+        offerSent: false,
+        allocatedInstallerId: quote.allocatedInstallerId || null,
+        editingQuoteId: quote.id,
+      })
+    );
+    setIsEditingQuote(true);
     showNotification('Quote loaded successfully', 'success');
   };
 
-  const saveClientQuote = (forceNewVersion?: boolean, forceOverwrite?: boolean) => {
+  const handleUnloadQuote = () => {
+    if (hasUnsavedQuoteChanges) {
+      setPendingNavigationUrl(null);
+      setShowUnloadWarning(true);
+      return;
+    }
+    setIsEditingQuote(false);
+    setQuoteItems([]);
+    setQuoteProjectName('');
+    setEditingQuoteId(null);
+    setSelectedProjectForQuote('current');
+    setOfferSent(false);
+    setQuoteWon(false);
+    setAllocatedInstallerId(null);
+  };
+
+  const handleExitWithoutSavingQuote = () => {
+    const target = pendingNavigationUrl;
+    setShowUnloadWarning(false);
+    setPendingNavigationUrl(null);
+    setIsEditingQuote(false);
+    setQuoteItems([]);
+    setQuoteProjectName('');
+    setEditingQuoteId(null);
+    setSelectedProjectForQuote('current');
+    setOfferSent(false);
+    setQuoteWon(false);
+    setAllocatedInstallerId(null);
+    if (target) {
+      window.location.assign(target);
+    }
+  };
+
+  const handleSaveAndExitQuote = () => {
+    const didSave = saveClientQuote(false, true);
+    if (!didSave) return;
+    const target = pendingNavigationUrl;
+    setShowUnloadWarning(false);
+    setPendingNavigationUrl(null);
+    setIsEditingQuote(false);
+    setQuoteItems([]);
+    setQuoteProjectName('');
+    setEditingQuoteId(null);
+    setSelectedProjectForQuote('current');
+    setOfferSent(false);
+    setQuoteWon(false);
+    setAllocatedInstallerId(null);
+    if (target) {
+      window.location.assign(target);
+    }
+  };
+
+  const saveClientQuote = (forceNewVersion?: boolean, forceOverwrite?: boolean): boolean => {
     if (!quoteProjectName.trim()) { 
       showNotification("Please enter a quote name", 'error');
-      return; 
+      return false; 
     }
     
     // If editing an existing quote and we haven't been told what to do, ask
@@ -186,7 +326,7 @@ export default function ClientQuotesPage() {
       const existingQuote = clientQuotes.find(q => q.id === editingQuoteId);
       if (existingQuote && existingQuote.title === quoteProjectName.trim()) {
         setSaveModal({ show: true });
-        return;
+        return false;
       }
     }
 
@@ -228,7 +368,18 @@ export default function ClientQuotesPage() {
     saveQuote(newQuote);
     setEditingQuoteId(targetId);
     if (forceNewVersion) setQuoteProjectName(finalName);
+    setQuoteBaselineSnapshot(
+      buildQuoteSnapshot({
+        title: finalName,
+        items: [...quoteItems],
+        quoteWon,
+        offerSent,
+        allocatedInstallerId,
+        editingQuoteId: targetId,
+      })
+    );
     showNotification('Quote saved successfully' + (allocatedInstallerId ? ` - Allocated to installer` : ''), 'success');
+    return true;
   };
 
   const handleAddQuoteLine = () => {
@@ -884,27 +1035,72 @@ export default function ClientQuotesPage() {
         </div>
       )}
 
+      {showUnloadWarning && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-md shadow-2xl">
+            <div className="p-6">
+              <div className="flex items-start gap-4 mb-5">
+                <div className="p-3 bg-amber-500/10 rounded-lg">
+                  <AlertCircle size={24} className="text-amber-400" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-lg font-bold text-white mb-2">Unsaved Changes</h3>
+                  <p className="text-slate-300 text-sm">
+                    You have unsaved quote changes. What do you want to do?
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-col gap-3">
+                <button
+                  onClick={handleSaveAndExitQuote}
+                  className="px-4 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-lg transition-colors"
+                >
+                  Save and Exit
+                </button>
+                <button
+                  onClick={handleExitWithoutSavingQuote}
+                  className="px-4 py-2.5 bg-red-500/20 hover:bg-red-500/30 text-red-300 font-bold rounded-lg border border-red-500/40 transition-colors"
+                >
+                  Exit Without Saving
+                </button>
+                <button
+                  onClick={() => {
+                    setShowUnloadWarning(false);
+                    setPendingNavigationUrl(null);
+                  }}
+                  className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white font-semibold rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="max-w-6xl mx-auto space-y-8 pb-12">
-        {/* Header with Action Buttons */}
+        {/* Header */}
         <div className="flex items-center justify-between gap-4">
           <h1 className="text-3xl font-bold text-white flex items-center gap-3">
             <FileText size={32} className="text-amber-500" />
             Quotes
           </h1>
-          <div className="flex gap-3">
-            <button 
-              onClick={handleNewQuoteClick}
-              className="bg-slate-700 hover:bg-slate-600 text-white font-bold px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
-            >
-              <Plus size={18} /> New Quote
-            </button>
-            <button 
-              onClick={() => saveClientQuote()}
-              className="bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
-            >
-              <Save size={18} /> Save Quote
-            </button>
-          </div>
+          {isEditingQuote && (
+            <div className="flex gap-3">
+              <button
+                onClick={handleUnloadQuote}
+                className="bg-slate-700 hover:bg-slate-600 text-white font-bold px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
+              >
+                <X size={18} /> Unload
+              </button>
+              <button 
+                onClick={() => saveClientQuote()}
+                className="bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
+              >
+                <Save size={18} /> Save Quote
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Saved Quotes List */}
@@ -950,10 +1146,20 @@ export default function ClientQuotesPage() {
                       </button>
                       <div className="flex items-center gap-2">
                         <button
-                          onClick={() => handleLoadQuote(quote)}
-                          className="px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 hover:border-amber-500/50 rounded font-bold text-xs transition-colors"
+                          onClick={() => {
+                            if (isEditingQuote && isCurrent) {
+                              handleUnloadQuote();
+                              return;
+                            }
+                            handleLoadQuote(quote);
+                          }}
+                          className={`px-3 py-1.5 border rounded font-bold text-xs transition-colors ${
+                            isEditingQuote && isCurrent
+                              ? 'bg-slate-700 hover:bg-slate-600 text-white border-slate-600'
+                              : 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border-amber-500/30 hover:border-amber-500/50'
+                          }`}
                         >
-                          Load
+                          {isEditingQuote && isCurrent ? 'Unload' : 'Load'}
                         </button>
                         <button
                           onClick={() => {
@@ -1027,7 +1233,19 @@ export default function ClientQuotesPage() {
           </section>
         )}
 
+        {!isEditingQuote && (
+          <div className="flex justify-center">
+            <button
+              onClick={handleNewQuoteClick}
+              className="bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold px-5 py-2.5 rounded-lg flex items-center gap-2 transition-colors"
+            >
+              <Plus size={18} /> Create New Quote
+            </button>
+          </div>
+        )}
+
         {/* Quote Editor */}
+        {isEditingQuote && (
         <div className="space-y-8">
           {/* Quote Header */}
           <section className="bg-slate-800 border border-slate-700 rounded-xl p-6">
@@ -1922,6 +2140,7 @@ export default function ClientQuotesPage() {
           </div>
         )}
         </div>
+        )}
       </div>
     </div>
   );

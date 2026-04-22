@@ -30,6 +30,10 @@ export default function ClientNeedsPage() {
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [showAlternatives, setShowAlternatives] = useState(false);
   const [showBatteryAlternatives, setShowBatteryAlternatives] = useState(false);
+  const [isEditingProject, setIsEditingProject] = useState(false);
+  const [projectBaselineSnapshot, setProjectBaselineSnapshot] = useState<string>('');
+  const [showUnloadWarning, setShowUnloadWarning] = useState(false);
+  const [pendingNavigationUrl, setPendingNavigationUrl] = useState<string | null>(null);
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -149,6 +153,40 @@ export default function ClientNeedsPage() {
 
   if (!client) return null;
 
+  const buildNeedsSnapshot = (needsData: any) => JSON.stringify(needsData || {});
+  const hasUnsavedProjectChanges =
+    isEditingProject && buildNeedsSnapshot(client.needs) !== projectBaselineSnapshot;
+
+  useEffect(() => {
+    if (!hasUnsavedProjectChanges) return;
+
+    const originalPushState = window.history.pushState;
+    const originalReplaceState = window.history.replaceState;
+
+    const interceptNavigation = (originalMethod: History['pushState']) => {
+      return function (this: History, ...args: any[]) {
+        const targetUrl = args[2];
+        if (typeof targetUrl === 'string' || targetUrl instanceof URL) {
+          const next = new URL(targetUrl.toString(), window.location.href);
+          if (next.href !== window.location.href) {
+            setPendingNavigationUrl(next.href);
+            setShowUnloadWarning(true);
+            return;
+          }
+        }
+        return originalMethod.apply(this, args as [any, string, string | URL | null | undefined]);
+      };
+    };
+
+    window.history.pushState = interceptNavigation(originalPushState);
+    window.history.replaceState = interceptNavigation(originalReplaceState);
+
+    return () => {
+      window.history.pushState = originalPushState;
+      window.history.replaceState = originalReplaceState;
+    };
+  }, [hasUnsavedProjectChanges]);
+
   const handleNeedsChange = async (field: string, value: any) => {
     await updateClient({ needs: { ...client.needs, [field]: value } });
   };
@@ -266,10 +304,10 @@ export default function ClientNeedsPage() {
     setTimeout(() => setNotification(null), 4000);
   };
 
-  const handleSaveProject = async () => {
+  const handleSaveProject = async (): Promise<boolean> => {
     if (!client.needs?.projectName?.trim()) {
       showNotification('Please enter a project name before saving.', 'error');
-      return;
+      return false;
     }
     const projectNameToSave = client.needs.projectName;
     const existingProjectIndex = archivedProjects.findIndex(p => p.projectName === projectNameToSave);
@@ -290,11 +328,11 @@ export default function ClientNeedsPage() {
     }
     setArchivedProjects(updatedProjects);
     await updateClient({ archivedProjects: updatedProjects });
+    setProjectBaselineSnapshot(buildNeedsSnapshot(client.needs));
+    return true;
   };
 
   const handleNewProject = async () => {
-    if (!confirm('Clear current project and start a new one?')) return;
-    
     const clearedNeeds = { 
       projectName: '',
       projectId: undefined,
@@ -325,6 +363,40 @@ export default function ClientNeedsPage() {
     setSelectedInverterId(null);
     setSelectedBatteryId(null);
     setSelectedPanelId(null);
+    setProjectBaselineSnapshot(buildNeedsSnapshot(clearedNeeds));
+    setIsEditingProject(true);
+    showNotification('New project created', 'info');
+  };
+
+  const handleUnloadProject = () => {
+    if (hasUnsavedProjectChanges) {
+      setPendingNavigationUrl(null);
+      setShowUnloadWarning(true);
+      return;
+    }
+    setIsEditingProject(false);
+  };
+
+  const handleExitWithoutSavingProject = () => {
+    const target = pendingNavigationUrl;
+    setShowUnloadWarning(false);
+    setPendingNavigationUrl(null);
+    setIsEditingProject(false);
+    if (target) {
+      window.location.assign(target);
+    }
+  };
+
+  const handleSaveAndExitProject = async () => {
+    const didSave = await handleSaveProject();
+    if (!didSave) return;
+    const target = pendingNavigationUrl;
+    setShowUnloadWarning(false);
+    setPendingNavigationUrl(null);
+    setIsEditingProject(false);
+    if (target) {
+      window.location.assign(target);
+    }
   };
 
   const toggleProjectExpanded = (projectId: string) => {
@@ -409,30 +481,75 @@ export default function ClientNeedsPage() {
         </div>
       )}
 
+      {/* Unsaved Changes Warning Modal */}
+      {showUnloadWarning && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-md shadow-2xl">
+            <div className="p-6">
+              <div className="flex items-start gap-4 mb-5">
+                <div className="p-3 bg-amber-500/10 rounded-lg">
+                  <AlertCircle size={24} className="text-amber-400" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-lg font-bold text-white mb-2">Unsaved Changes</h3>
+                  <p className="text-slate-300 text-sm">
+                    You have unsaved project changes. What do you want to do?
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-col gap-3">
+                <button
+                  onClick={handleSaveAndExitProject}
+                  className="px-4 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-lg transition-colors"
+                >
+                  Save and Exit
+                </button>
+                <button
+                  onClick={handleExitWithoutSavingProject}
+                  className="px-4 py-2.5 bg-red-500/20 hover:bg-red-500/30 text-red-300 font-bold rounded-lg border border-red-500/40 transition-colors"
+                >
+                  Exit Without Saving
+                </button>
+                <button
+                  onClick={() => {
+                    setShowUnloadWarning(false);
+                    setPendingNavigationUrl(null);
+                  }}
+                  className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white font-semibold rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="max-w-4xl mx-auto space-y-8 pb-12">
-        {/* Header with Action Buttons */}
+        {/* Header */}
         <div className="flex items-center justify-between gap-4">
           <h1 className="text-3xl font-bold text-white flex items-center gap-3">
             <FileText size={32} className="text-amber-500" />
             Client Needs
           </h1>
-          <div className="flex gap-3">
-            <button 
-              onClick={handleNewProject}
-              className="bg-slate-700 hover:bg-slate-600 text-white font-bold px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
-            >
-              <Plus size={18} /> New Project
-            </button>
-            <button 
-              onClick={handleSaveProject}
-              className="bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
-            >
-              <Save size={18} /> Save Project
-            </button>
-          </div>
+          {isEditingProject && (
+            <div className="flex gap-3">
+              <button 
+                onClick={handleUnloadProject}
+                className="bg-slate-700 hover:bg-slate-600 text-white font-bold px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
+              >
+                <X size={18} /> Unload
+              </button>
+              <button 
+                onClick={handleSaveProject}
+                className="bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
+              >
+                <Save size={18} /> Save Project
+              </button>
+            </div>
+          )}
         </div>
 
-        {/* Saved Projects Section */}
         {archivedProjects.length > 0 && (
           <section className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
             <div className="px-6 py-4 border-b border-slate-700">
@@ -444,6 +561,7 @@ export default function ClientNeedsPage() {
             <div className="divide-y divide-slate-700">
               {archivedProjects.map(project => {
                 const isCurrent = client.needs?.projectName === project.projectName;
+                const isLoaded = isEditingProject && isCurrent;
                 const isExpanded = expandedProjects.has(project.id);
                 
                 return (
@@ -476,16 +594,26 @@ export default function ClientNeedsPage() {
                       <div className="flex items-center gap-2">
                         <button
                           onClick={() => {
+                            if (isLoaded) {
+                              handleUnloadProject();
+                              return;
+                            }
                             const loadedData = JSON.parse(JSON.stringify(project.data));
                             updateClient({ needs: loadedData });
                             setTempDescription(loadedData.description || '');
                             setSelectedInverterId(loadedData.selectedInverterId || null);
                             setSelectedBatteryId(loadedData.selectedBatteryId || null);
                             setSelectedPanelId(loadedData.panelStockItemId || null);
+                            setProjectBaselineSnapshot(buildNeedsSnapshot(loadedData));
+                            setIsEditingProject(true);
                           }}
-                          className="px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 hover:border-amber-500/50 rounded font-bold text-xs transition-colors"
+                          className={`px-3 py-1.5 border rounded font-bold text-xs transition-colors ${
+                            isLoaded
+                              ? 'bg-slate-700 hover:bg-slate-600 text-white border-slate-600'
+                              : 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border-amber-500/30 hover:border-amber-500/50'
+                          }`}
                         >
-                          Load
+                          {isLoaded ? 'Unload' : 'Load'}
                         </button>
                         <button
                           onClick={() => {
@@ -548,6 +676,19 @@ export default function ClientNeedsPage() {
           </section>
         )}
 
+        {!isEditingProject && (
+          <div className="flex justify-center">
+            <button 
+              onClick={handleNewProject}
+              className="bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold px-5 py-2.5 rounded-lg flex items-center gap-2 transition-colors"
+            >
+              <Plus size={18} /> Create New Project
+            </button>
+          </div>
+        )}
+
+        {isEditingProject && (
+        <>
         {/* Project Name */}
         <section className="bg-slate-800 p-6 rounded-xl border border-slate-700">
           <h3 className="text-sm font-bold text-slate-300 mb-3 flex items-center gap-2">
@@ -2000,6 +2141,8 @@ export default function ClientNeedsPage() {
               </div>
             </div>
           </div>
+        )}
+        </>
         )}
       </div>
     </div>
