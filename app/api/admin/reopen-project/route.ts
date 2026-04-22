@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/session';
 import { Quote } from '@/types';
-import { collection, query, getDocs, doc, setDoc } from 'firebase/firestore';
-import { db } from '@/services/firebase';
+import { getDb } from '@/services/mongodb';
 
 export async function POST(request: NextRequest) {
   try {
@@ -34,16 +33,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Get the quote from Firestore
-    if (!db) {
-      return NextResponse.json(
-        { error: 'Database not configured' },
-        { status: 500 }
-      );
-    }
-
-    const q = query(collection(db, 'quotes'));
-    const snapshot = await getDocs(q);
-    const quote = snapshot.docs.find(d => d.data().id === quoteId)?.data() as Quote | undefined;
+    const db = await getDb();
+    const quoteDoc = await db.collection('quotes').findOne({ id: quoteId });
+    const quote = quoteDoc ? (({ _id, ...rest }) => rest)(quoteDoc) as Quote : undefined;
 
     if (!quote) {
       return NextResponse.json(
@@ -81,7 +73,7 @@ export async function POST(request: NextRequest) {
     };
 
     // Save to Firestore
-    await setDoc(doc(db, 'quotes', quoteId), updatedQuote);
+    await db.collection('quotes').replaceOne({ id: quoteId }, updatedQuote, { upsert: true });
 
     return NextResponse.json(
       {

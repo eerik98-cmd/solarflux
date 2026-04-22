@@ -1,19 +1,8 @@
 
-import { db, storage } from './firebase';
-import { 
-  collection, 
-  doc, 
-  setDoc, 
-  deleteDoc, 
-  onSnapshot, 
-  query, 
-  getDocs,
-  getDoc,
-  writeBatch
-} from 'firebase/firestore';
-import { 
-  ref, 
-  uploadString, 
+import { storage } from './firebase';
+import {
+  ref,
+  uploadString,
   getDownloadURL
 } from 'firebase/storage';
 
@@ -182,115 +171,119 @@ export const StorageService = {
     return await uploadBase64ToStorage(base64Data, path);
   },
 
-  // Subscribe to a collection (Real-time updates)
-  subscribe: (collectionName: string, callback: (data: any[]) => void) => {
-    if (!db) return () => {};
-    
-    const q = query(collection(db, collectionName));
-    return onSnapshot(q, (snapshot) => {
-      const items = snapshot.docs.map((doc) => normalizeFirestoreDates(doc.data()));
-      callback(items);
-    }, (error) => {
-      console.error(`Error subscribing to ${collectionName}:`, error);
-      if (error.code === 'permission-denied') {
-        console.warn("Permission denied. Check Firestore Console -> Rules.");
+  // Poll a collection every 5 seconds and call callback with latest data.
+  // Returns a cleanup function (mirrors Firestore onSnapshot API).
+  subscribe: (collectionName: string, callback: (data: any[]) => void): (() => void) => {
+    let active = true;
+
+    const fetchData = async () => {
+      try {
+        const res = await fetch(`/api/db/${collectionName}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (active) callback(Array.isArray(data) ? data : []);
+      } catch (error) {
+        console.error(`Error polling ${collectionName}:`, error);
       }
-    });
+    };
+
+    fetchData();
+    const interval = setInterval(fetchData, 5000);
+
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
   },
 
   // Save (Create or Update)
   saveItem: async (collectionName: string, item: any) => {
-    if (!db) {
-      alert("Database not configured. Please check services/firebase.ts");
-      return;
-    }
-
     try {
-      // 1. Upload files first to avoid Firestore size limits
       const cleanItem = await prepareDataForFirestore(collectionName, item);
-      
-      // 2. Sanitize to remove undefined values and circular refs (Firestore rejects undefined)
       const sanitizedItem = sanitizeForFirestore(cleanItem);
 
-      // 3. Save metadata to Firestore
-      await setDoc(doc(db, collectionName, sanitizedItem.id), sanitizedItem);
+      const res = await fetch(`/api/db/${collectionName}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ item: sanitizedItem }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error || 'Failed to save');
+      }
     } catch (error: any) {
       console.error(`Error saving to ${collectionName}:`, error);
-      
-      if (error.code === 'permission-denied') {
-         alert("PERMISSION DENIED: You cannot save data.\n\nPlease go to Firebase Console > Firestore Database > Rules and change 'allow read, write: if false;' to 'if true;'.");
-      } else {
-         alert(`Failed to save data. Error: ${error.message}`);
-      }
+      alert(`Failed to save data. Error: ${error.message}`);
       throw error;
     }
   },
 
   // Delete
   deleteItem: async (collectionName: string, itemId: string) => {
-    if (!db) return;
     try {
-      await deleteDoc(doc(db, collectionName, itemId));
+      const res = await fetch(`/api/db/${collectionName}?id=${encodeURIComponent(itemId)}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error || 'Failed to delete');
+      }
     } catch (error: any) {
       console.error(`Error deleting from ${collectionName}:`, error);
-      if (error.code === 'permission-denied') {
-        alert("PERMISSION DENIED: Check your Firestore Security Rules.");
-      } else {
-        alert("Failed to delete item.");
-      }
+      alert('Failed to delete item.');
       throw error;
     }
   },
 
   // Batch Save (Save entire collection)
   batchSave: async (collectionName: string, items: any[]) => {
-    if (!db) return;
-    
     try {
-      const batch = writeBatch(db);
-      for (const item of items) {
+      await Promise.all(items.map(async (item) => {
         const cleanItem = await prepareDataForFirestore(collectionName, item);
         const sanitized = sanitizeForFirestore(cleanItem);
-        const ref = doc(db, collectionName, sanitized.id);
-        batch.set(ref, sanitized);
-      }
-      await batch.commit();
+        const res = await fetch(`/api/db/${collectionName}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ item: sanitized }),
+        });
+        if (!res.ok) throw new Error(`Failed to save item ${sanitized.id}`);
+      }));
     } catch (error: any) {
       console.error(`Error batch saving to ${collectionName}:`, error);
-      if (error.code === 'permission-denied') {
-        alert('PERMISSION DENIED: Check your Firestore Security Rules.');
-      }
       throw error;
     }
   },
 
-  // Bulk Load (Used for initializing Mock Data if DB is empty)
+  // Bulk Load (initialize collection with mock data if empty)
   initializeDataIfEmpty: async (collectionName: string, mockData: any[]) => {
-    if (!db) return;
-    
-    const q = query(collection(db, collectionName));
-    const snapshot = await getDocs(q);
-    
-    if (snapshot.empty && mockData.length > 0) {
-      console.log(`Initializing ${collectionName} with mock data...`);
-      const batch = writeBatch(db);
-      mockData.forEach(item => {
-        const sanitized = sanitizeForFirestore(item);
-        const ref = doc(db, collectionName, item.id);
-        batch.set(ref, sanitized);
-      });
-      await batch.commit();
+    try {
+      const res = await fetch(`/api/db/${collectionName}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const existing = await res.json();
+
+      if (Array.isArray(existing) && existing.length === 0 && mockData.length > 0) {
+        console.log(`Initializing ${collectionName} with mock data...`);
+        await Promise.all(mockData.map(async (item) => {
+          const sanitized = sanitizeForFirestore(item);
+          await fetch(`/api/db/${collectionName}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ item: sanitized }),
+          });
+        }));
+      }
+    } catch (error: any) {
+      console.error(`Error initializing ${collectionName}:`, error);
+      throw error;
     }
   },
 
   // Get a single item by ID
   getItem: async (collectionName: string, itemId: string): Promise<any | null> => {
-    if (!db) return null;
-    
     try {
-      const docRef = doc(db, collectionName, itemId);
-      const docSnap = await getDoc(docRef);
-      return docSnap.exists() ? docSnap.data() : null;
+      const res = await fetch(`/api/db/${collectionName}?id=${encodeURIComponent(itemId)}`);
+      if (!res.ok) return null;
+      return await res.json();
     } catch (error: any) {
       console.error(`Error getting item from ${collectionName}:`, error);
       return null;
@@ -299,12 +292,11 @@ export const StorageService = {
 
   // Get all items from a collection (non-realtime)
   getAllItems: async (collectionName: string): Promise<any[]> => {
-    if (!db) return [];
-    
     try {
-      const q = query(collection(db, collectionName));
-      const snapshot = await getDocs(q);
-      return snapshot.docs.map(doc => doc.data());
+      const res = await fetch(`/api/db/${collectionName}`);
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
     } catch (error: any) {
       console.error(`Error getting items from ${collectionName}:`, error);
       return [];

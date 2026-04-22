@@ -22,7 +22,7 @@ export default function ClientQuotesPage() {
   const [quoteItems, setQuoteItems] = useState<QuoteLineItem[]>([]);
   const [editingQuoteId, setEditingQuoteId] = useState<string | null>(null);
   const [openSerialPickerId, setOpenSerialPickerId] = useState<string | null>(null);
-  const [selectedProjectForQuote, setSelectedProjectForQuote] = useState<string>('');
+  const [selectedProjectForQuote, setSelectedProjectForQuote] = useState<string>('current');
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
   const [previewDoc, setPreviewDoc] = useState<{id?: string, name: string, url: string, description?: string, date?: Date} | null>(null);
   const [offerSent, setOfferSent] = useState(false);
@@ -77,6 +77,13 @@ export default function ClientQuotesPage() {
 
     loadEmailData();
   }, []);
+
+  useEffect(() => {
+    // Default new quotes to current needs so selected components are visible immediately.
+    if (!editingQuoteId && selectedProjectForQuote === 'current' && !quoteProjectName.trim()) {
+      setQuoteProjectName(client?.needs?.projectName || '');
+    }
+  }, [editingQuoteId, selectedProjectForQuote, quoteProjectName, client?.needs?.projectName]);
 
   const clientQuotes = savedQuotes.filter(q => q.clientId === client.id);
   
@@ -146,9 +153,9 @@ export default function ClientQuotesPage() {
       message: 'Clear current quote and start a new one?',
       onConfirm: () => {
         setQuoteItems([]); 
-        setQuoteProjectName(''); 
+        setQuoteProjectName(client?.needs?.projectName || ''); 
         setEditingQuoteId(null);
-        setSelectedProjectForQuote('');
+        setSelectedProjectForQuote('current');
         setOfferSent(false);
         setQuoteWon(false);
         setAllocatedInstallerId(null);
@@ -1097,38 +1104,35 @@ export default function ClientQuotesPage() {
             {selectedProjectData.selectedInverterId && (() => {
               const selectedInv = inventory.find(i => i.id === selectedProjectData.selectedInverterId && i.category === Category.INVERTERS);
               if (!selectedInv) return null;
-              
+              const isAdded = quoteItems.some(qi => qi.inventoryItemId === selectedInv.id);
               return (
-                <div className="bg-slate-800 border border-slate-700 rounded-xl p-4">
-                  <h4 className="text-xs font-bold text-slate-300 mb-3 flex items-center gap-2">
-                    <Zap size={14} className="text-amber-500" />Selected Inverter
-                  </h4>
-                  <div className="flex items-center justify-between bg-emerald-500/10 p-3 rounded-lg border border-emerald-500/50">
-                    <div className="flex-1">
-                      <p className="text-white font-bold text-sm">{selectedInv.name}</p>
-                      <p className="text-xs text-slate-400 mt-1">
-                        {selectedInv.inverterPowerKw}kW • {selectedInv.inverterConnectionType} • {selectedInv.quantity} in stock
-                      </p>
-                      <p className="text-sm text-emerald-400 font-bold mt-1">{selectedInv.sellPrice} RON</p>
+                <div className={`border rounded-xl transition-all ${isAdded ? 'bg-slate-800/50 border-slate-700/50 p-2' : 'bg-slate-800 border-slate-700 p-4'}`}>
+                  {isAdded ? (
+                    <div className="flex items-center gap-2 text-xs text-slate-400">
+                      <CheckCircle size={13} className="text-emerald-400 shrink-0" />
+                      <span className="truncate font-medium text-slate-300">{selectedInv.name}</span>
+                      <span className="ml-auto text-slate-500 whitespace-nowrap">Added</span>
                     </div>
-                    <button
-                      onClick={() => {
-                        const newLine: QuoteLineItem = {
-                          id: Date.now().toString(),
-                          inventoryItemId: selectedInv.id,
-                          description: `${selectedInv.name} (${selectedInv.inverterPowerKw}kW)`,
-                          unit: 'piece',
-                          quantity: 1,
-                          netPrice: selectedInv.sellPrice,
-                          selectedSerialNumbers: []
-                        };
-                        addItemToQuote(newLine);
-                      }}
-                      className="ml-3 px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-lg text-xs transition-colors whitespace-nowrap"
-                    >
-                      Add to Quote
-                    </button>
-                  </div>
+                  ) : (
+                    <>
+                      <h4 className="text-xs font-bold text-slate-300 mb-3 flex items-center gap-2">
+                        <Zap size={14} className="text-amber-500" />Selected Inverter
+                      </h4>
+                      <div className="flex items-center justify-between bg-emerald-500/10 p-3 rounded-lg border border-emerald-500/50">
+                        <div className="flex-1">
+                          <p className="text-white font-bold text-sm">{selectedInv.name}</p>
+                          <p className="text-xs text-slate-400 mt-1">{selectedInv.inverterPowerKw}kW • {selectedInv.inverterConnectionType} • {selectedInv.quantity} in stock</p>
+                          <p className="text-sm text-emerald-400 font-bold mt-1">{selectedInv.sellPrice} RON</p>
+                        </div>
+                        <button
+                          onClick={() => {
+                            addItemToQuote({ id: Date.now().toString(), inventoryItemId: selectedInv.id, description: `${selectedInv.name} (${selectedInv.inverterPowerKw}kW)`, unit: 'piece', quantity: 1, netPrice: selectedInv.sellPrice, selectedSerialNumbers: [] });
+                          }}
+                          className="ml-3 px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-lg text-xs transition-colors whitespace-nowrap"
+                        >Add to Quote</button>
+                      </div>
+                    </>
+                  )}
                 </div>
               );
             })()}
@@ -1137,36 +1141,35 @@ export default function ClientQuotesPage() {
             {selectedProjectData.selectedBatteryId && (() => {
               const selectedBat = inventory.find(i => i.id === selectedProjectData.selectedBatteryId && i.category === Category.BATTERIES);
               if (!selectedBat) return null;
-              
+              const isAdded = quoteItems.some(qi => qi.inventoryItemId === selectedBat.id);
               return (
-                <div className="bg-slate-800 border border-slate-700 rounded-xl p-4">
-                  <h4 className="text-xs font-bold text-slate-300 mb-3 flex items-center gap-2">
-                    <Package size={14} className="text-amber-500" />Selected Battery
-                  </h4>
-                  <div className="flex items-center justify-between bg-emerald-500/10 p-3 rounded-lg border border-emerald-500/50">
-                    <div className="flex-1">
-                      <p className="text-white font-bold text-sm">{selectedBat.name}</p>
-                      <p className="text-xs text-slate-400 mt-1">{selectedBat.batteryPowerKwh}kWh • {selectedBat.quantity} in stock</p>
-                      <p className="text-sm text-emerald-400 font-bold mt-1">{selectedBat.sellPrice} RON</p>
+                <div className={`border rounded-xl transition-all ${isAdded ? 'bg-slate-800/50 border-slate-700/50 p-2' : 'bg-slate-800 border-slate-700 p-4'}`}>
+                  {isAdded ? (
+                    <div className="flex items-center gap-2 text-xs text-slate-400">
+                      <CheckCircle size={13} className="text-emerald-400 shrink-0" />
+                      <span className="truncate font-medium text-slate-300">{selectedBat.name}</span>
+                      <span className="ml-auto text-slate-500 whitespace-nowrap">Added</span>
                     </div>
-                    <button
-                      onClick={() => {
-                        const newLine: QuoteLineItem = {
-                          id: Date.now().toString(),
-                          inventoryItemId: selectedBat.id,
-                          description: `${selectedBat.name} (${selectedBat.batteryPowerKwh}kWh)`,
-                          unit: 'piece',
-                          quantity: 1,
-                          netPrice: selectedBat.sellPrice,
-                          selectedSerialNumbers: []
-                        };
-                        addItemToQuote(newLine);
-                      }}
-                      className="ml-3 px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-lg text-xs transition-colors whitespace-nowrap"
-                    >
-                      Add to Quote
-                    </button>
-                  </div>
+                  ) : (
+                    <>
+                      <h4 className="text-xs font-bold text-slate-300 mb-3 flex items-center gap-2">
+                        <Package size={14} className="text-amber-500" />Selected Battery
+                      </h4>
+                      <div className="flex items-center justify-between bg-emerald-500/10 p-3 rounded-lg border border-emerald-500/50">
+                        <div className="flex-1">
+                          <p className="text-white font-bold text-sm">{selectedBat.name}</p>
+                          <p className="text-xs text-slate-400 mt-1">{selectedBat.batteryPowerKwh}kWh • {selectedBat.quantity} in stock</p>
+                          <p className="text-sm text-emerald-400 font-bold mt-1">{selectedBat.sellPrice} RON</p>
+                        </div>
+                        <button
+                          onClick={() => {
+                            addItemToQuote({ id: Date.now().toString(), inventoryItemId: selectedBat.id, description: `${selectedBat.name} (${selectedBat.batteryPowerKwh}kWh)`, unit: 'piece', quantity: 1, netPrice: selectedBat.sellPrice, selectedSerialNumbers: [] });
+                          }}
+                          className="ml-3 px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-lg text-xs transition-colors whitespace-nowrap"
+                        >Add to Quote</button>
+                      </div>
+                    </>
+                  )}
                 </div>
               );
             })()}
@@ -1188,33 +1191,33 @@ export default function ClientQuotesPage() {
                 );
               }
 
+              const isAdded = quoteItems.some(qi => qi.inventoryItemId === groundingProduct.id);
               return (
-                <div className="bg-slate-800 border border-slate-700 rounded-xl p-4">
-                  <h4 className="text-xs font-bold text-slate-300 mb-3">Adauga priza de pamant</h4>
-                  <div className="flex items-center justify-between bg-emerald-500/10 p-3 rounded-lg border border-emerald-500/50">
-                    <div className="flex-1">
-                      <p className="text-white font-bold text-sm">{groundingProduct.name}</p>
-                      <p className="text-xs text-slate-400 mt-1">SKU: {groundingProduct.sku} • {groundingProduct.quantity} in stock</p>
-                      <p className="text-sm text-emerald-400 font-bold mt-1">{groundingProduct.sellPrice} RON</p>
+                <div className={`border rounded-xl transition-all ${isAdded ? 'bg-slate-800/50 border-slate-700/50 p-2' : 'bg-slate-800 border-slate-700 p-4'}`}>
+                  {isAdded ? (
+                    <div className="flex items-center gap-2 text-xs text-slate-400">
+                      <CheckCircle size={13} className="text-emerald-400 shrink-0" />
+                      <span className="truncate font-medium text-slate-300">{groundingProduct.name}</span>
+                      <span className="ml-auto text-slate-500 whitespace-nowrap">Added</span>
                     </div>
-                    <button
-                      onClick={() => {
-                        const newLine: QuoteLineItem = {
-                          id: Date.now().toString(),
-                          inventoryItemId: groundingProduct.id,
-                          description: `${groundingProduct.name} (${groundingProduct.sku})`,
-                          unit: 'piece',
-                          quantity: 1,
-                          netPrice: groundingProduct.sellPrice,
-                          selectedSerialNumbers: []
-                        };
-                        addItemToQuote(newLine);
-                      }}
-                      className="ml-3 px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-lg text-xs transition-colors whitespace-nowrap"
-                    >
-                      Add to Quote
-                    </button>
-                  </div>
+                  ) : (
+                    <>
+                      <h4 className="text-xs font-bold text-slate-300 mb-3">Adauga priza de pamant</h4>
+                      <div className="flex items-center justify-between bg-emerald-500/10 p-3 rounded-lg border border-emerald-500/50">
+                        <div className="flex-1">
+                          <p className="text-white font-bold text-sm">{groundingProduct.name}</p>
+                          <p className="text-xs text-slate-400 mt-1">SKU: {groundingProduct.sku} • {groundingProduct.quantity} in stock</p>
+                          <p className="text-sm text-emerald-400 font-bold mt-1">{groundingProduct.sellPrice} RON</p>
+                        </div>
+                        <button
+                          onClick={() => {
+                            addItemToQuote({ id: Date.now().toString(), inventoryItemId: groundingProduct.id, description: `${groundingProduct.name} (${groundingProduct.sku})`, unit: 'piece', quantity: 1, netPrice: groundingProduct.sellPrice, selectedSerialNumbers: [] });
+                          }}
+                          className="ml-3 px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-lg text-xs transition-colors whitespace-nowrap"
+                        >Add to Quote</button>
+                      </div>
+                    </>
+                  )}
                 </div>
               );
             })()}
@@ -1223,64 +1226,76 @@ export default function ClientQuotesPage() {
             {selectedProjectData.panelStockItemId && selectedProjectData.panelCount && (() => {
               const selectedPanel = inventory.find(i => i.id === selectedProjectData.panelStockItemId && i.category === Category.PANELS);
               if (!selectedPanel) return null;
-              
+              const isAdded = quoteItems.some(qi => qi.inventoryItemId === selectedPanel.id);
               return (
-                <div className="bg-slate-800 border border-slate-700 rounded-xl p-4">
-                  <h4 className="text-xs font-bold text-slate-300 mb-3 flex items-center gap-2">
-                    <Package size={14} className="text-amber-500" />Selected Panels
-                  </h4>
-                  <div className="flex items-center justify-between bg-emerald-500/10 p-3 rounded-lg border border-emerald-500/50">
-                    <div className="flex-1">
-                      <p className="text-white font-bold text-sm">{selectedPanel.name}</p>
-                      <p className="text-xs text-slate-400 mt-1">
-                        {selectedPanel.powerW}W • {selectedProjectData.panelCount} pieces • {selectedPanel.quantity} in stock
-                      </p>
-                      <p className="text-sm text-emerald-400 font-bold mt-1">{selectedPanel.sellPrice} RON/piece</p>
+                <div className={`border rounded-xl transition-all ${isAdded ? 'bg-slate-800/50 border-slate-700/50 p-2' : 'bg-slate-800 border-slate-700 p-4'}`}>
+                  {isAdded ? (
+                    <div className="flex items-center gap-2 text-xs text-slate-400">
+                      <CheckCircle size={13} className="text-emerald-400 shrink-0" />
+                      <span className="truncate font-medium text-slate-300">{selectedPanel.name}</span>
+                      <span className="ml-auto text-slate-500 whitespace-nowrap">Added</span>
                     </div>
-                    <button
-                      onClick={() => {
-                        const newLine: QuoteLineItem = {
-                          id: Date.now().toString(),
-                          inventoryItemId: selectedPanel.id,
-                          description: `${selectedPanel.name} (${selectedPanel.powerW}W)`,
-                          unit: 'piece',
-                          quantity: selectedProjectData.panelCount!,
-                          netPrice: selectedPanel.sellPrice,
-                          selectedSerialNumbers: []
-                        };
-                        addItemToQuote(newLine);
-                      }}
-                      className="ml-3 px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-lg text-xs transition-colors whitespace-nowrap"
-                    >
-                      Add to Quote
-                    </button>
-                  </div>
+                  ) : (
+                    <>
+                      <h4 className="text-xs font-bold text-slate-300 mb-3 flex items-center gap-2">
+                        <Package size={14} className="text-amber-500" />Selected Panels
+                      </h4>
+                      <div className="flex items-center justify-between bg-emerald-500/10 p-3 rounded-lg border border-emerald-500/50">
+                        <div className="flex-1">
+                          <p className="text-white font-bold text-sm">{selectedPanel.name}</p>
+                          <p className="text-xs text-slate-400 mt-1">{selectedPanel.powerW}W • {selectedProjectData.panelCount} pieces • {selectedPanel.quantity} in stock</p>
+                          <p className="text-sm text-emerald-400 font-bold mt-1">{selectedPanel.sellPrice} RON/piece</p>
+                        </div>
+                        <button
+                          onClick={() => {
+                            addItemToQuote({ id: Date.now().toString(), inventoryItemId: selectedPanel.id, description: `${selectedPanel.name} (${selectedPanel.powerW}W)`, unit: 'piece', quantity: selectedProjectData.panelCount!, netPrice: selectedPanel.sellPrice, selectedSerialNumbers: [] });
+                          }}
+                          className="ml-3 px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-lg text-xs transition-colors whitespace-nowrap"
+                        >Add to Quote</button>
+                      </div>
+                    </>
+                  )}
                 </div>
               );
             })()}
 
           {/* Mounting Structure */}
-            {selectedProjectData.panelCount && (
-              <div className="bg-slate-800 border border-slate-700 rounded-xl p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <h4 className="text-xs font-bold text-slate-300 flex items-center gap-2">
-                    <Package size={14} className="text-amber-500" />Mounting Structure
-                  </h4>
-                  <button
-                    onClick={() => addMountingStructuresToQuote(selectedProjectData)}
-                    className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-bold rounded-lg text-xs transition-colors flex items-center gap-2"
-                  >
-                    <Plus size={14} /> Add All to Quote
-                  </button>
+            {selectedProjectData.panelCount && (() => {
+              const mountingSkuPattern = /\((CEND|CMID|CRAIL|CCOMB|CHOOK|CMINI)/i;
+              const isMountingAdded = quoteItems.some(qi => mountingSkuPattern.test(qi.description));
+              return (
+                <div className={`border rounded-xl transition-all ${isMountingAdded ? 'bg-slate-800/50 border-slate-700/50 p-2' : 'bg-slate-800 border-slate-700 p-4'}`}>
+                  {isMountingAdded ? (
+                    <div className="flex items-center gap-2 text-xs text-slate-400">
+                      <CheckCircle size={13} className="text-emerald-400 shrink-0" />
+                      <span className="font-medium text-slate-300">Mounting Structure</span>
+                      <span className="text-slate-500">— {selectedProjectData.panelCount} panels</span>
+                      <span className="ml-auto text-slate-500 whitespace-nowrap">Added</span>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-between mb-3">
+                        <h4 className="text-xs font-bold text-slate-300 flex items-center gap-2">
+                          <Package size={14} className="text-amber-500" />Mounting Structure
+                        </h4>
+                        <button
+                          onClick={() => addMountingStructuresToQuote(selectedProjectData)}
+                          className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-bold rounded-lg text-xs transition-colors flex items-center gap-2"
+                        >
+                          <Plus size={14} /> Add All to Quote
+                        </button>
+                      </div>
+                      <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+                        <p className="text-xs text-blue-300">
+                          Mounting structures calculated for <span className="font-bold">{selectedProjectData.panelCount} panels</span>.
+                          Click "Add All to Quote" to include all components.
+                        </p>
+                      </div>
+                    </>
+                  )}
                 </div>
-                <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
-                  <p className="text-xs text-blue-300">
-                    Mounting structures calculated for <span className="font-bold">{selectedProjectData.panelCount} panels</span>.
-                    Click "Add All to Quote" to include all components.
-                  </p>
-                </div>
-              </div>
-            )}
+              );
+            })()}
           </div>
         )}
 

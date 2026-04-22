@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { StorageService } from '@/services/storageService';
 import { getCurrentUser } from '@/lib/session';
-import { collection, query, getDocs, doc } from 'firebase/firestore';
-import { db } from '@/services/firebase';
+import { getDb } from '@/services/mongodb';
 
 export async function POST(request: NextRequest) {
   try {
@@ -24,10 +23,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Get the quote
-    const q = query(collection(db, 'quotes'));
-    const snapshot = await getDocs(q);
-    const quotes = snapshot.docs.map(doc => doc.data());
-    const quote = quotes.find((q: any) => q.id === quoteId);
+    const db = await getDb();
+    const quoteDoc = await db.collection('quotes').findOne({ id: quoteId });
+    const quote = quoteDoc ? (({ _id, ...rest }) => rest)(quoteDoc) : null;
 
     if (!quote) {
       return NextResponse.json({ error: 'Quote not found' }, { status: 404 });

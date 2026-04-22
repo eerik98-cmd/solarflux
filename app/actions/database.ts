@@ -1,11 +1,9 @@
 'use server';
-
 import { StorageService } from '@/services/storageService';
 import { revalidatePath } from 'next/cache';
 import { hashPassword, verifyPassword } from '@/lib/auth';
 import type { User, SafeUser } from '@/types';
-import { collection, query, where, getDocs } from 'firebase/firestore';
-import { db } from '@/services/firebase';
+import { getDb } from '@/services/mongodb';
 
 export async function saveItemAction(collection: string, item: Record<string, unknown>) {
   try {
@@ -52,23 +50,11 @@ export async function initializeDataAction(collection: string, data: Record<stri
  */
 export async function getUserByUsername(username: string): Promise<User | null> {
   try {
-    if (!db) {
-      throw new Error('Database not initialized');
-    }
-    
-    const usersRef = collection(db, 'users');
-    const q = query(usersRef, where('username', '==', username));
-    const querySnapshot = await getDocs(q);
-    
-    if (querySnapshot.empty) {
-      return null;
-    }
-    
-    const userData = querySnapshot.docs[0].data();
-    return {
-      id: querySnapshot.docs[0].id,
-      ...userData,
-    } as User;
+    const db = await getDb();
+    const doc = await db.collection('users').findOne({ username });
+    if (!doc) return null;
+    const { _id, ...userData } = doc;
+    return userData as User;
   } catch (error) {
     console.error('Error getting user:', error);
     return null;

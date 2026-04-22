@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { hashPassword } from '@/lib/auth';
-import { StorageService } from '@/services/storageService';
 import { getCurrentUser } from '@/lib/session';
 import { User } from '@/types';
+import { getDb } from '@/services/mongodb';
 
 export async function POST(request: NextRequest) {
   try {
@@ -32,7 +32,8 @@ export async function POST(request: NextRequest) {
         password: await hashPassword(user.password),
       };
 
-      await StorageService.saveItem('users', newUser);
+      const db = await getDb();
+      await db.collection('users').replaceOne({ id: newUser.id }, newUser, { upsert: true });
       console.log(`User ${newUser.username} created by ${currentUser.username}`);
       return NextResponse.json({ success: true, message: 'User created successfully' });
     }
@@ -50,7 +51,8 @@ export async function POST(request: NextRequest) {
         password: hashedPassword,
       };
 
-      await StorageService.saveItem('users', updatedUser);
+      const db = await getDb();
+      await db.collection('users').replaceOne({ id: updatedUser.id }, updatedUser, { upsert: true });
       console.log(`Password hashed for user ${user.username}`);
       return NextResponse.json({ success: true, message: 'Password hashed successfully' });
     }

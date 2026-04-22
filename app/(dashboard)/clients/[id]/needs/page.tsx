@@ -163,6 +163,25 @@ export default function ClientNeedsPage() {
     await updateClient({ needs: { ...client.needs, projectName: value, projectId } });
   };
 
+  const handleUseClientAddress = async () => {
+    const copiedAddress = {
+      siteStreet: client.street || '',
+      siteStreetNumber: client.streetNumber || '',
+      siteCity: client.city || '',
+      siteCounty: client.county || '',
+      sitePostalCode: client.postalCode || '',
+      siteCountry: client.country || 'Romania',
+    };
+
+    await updateClient({
+      needs: {
+        ...client.needs,
+        ...copiedAddress,
+      },
+    });
+    showNotification('Site address imported from client address.', 'success');
+  };
+
   const saveDescription = async () => {
     if (tempDescription === client.needs?.description) return;
     await updateClient({
@@ -545,9 +564,20 @@ export default function ClientNeedsPage() {
 
         {/* Site Location */}
         <section className="bg-slate-800 p-6 rounded-xl border border-slate-700">
-          <h3 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2">
-            <MapPin size={16} className="text-amber-500" />Site Location
-          </h3>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <h3 className="text-sm font-bold text-slate-300 flex items-center gap-2">
+              <MapPin size={16} className="text-amber-500" />Site Location
+            </h3>
+            <button
+              type="button"
+              onClick={handleUseClientAddress}
+              className="inline-flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs font-bold uppercase tracking-wide text-amber-300 transition-colors hover:bg-amber-500/20"
+              title="Use the same address as the client"
+            >
+              <RefreshCcw size={14} />
+              Same As Client Address
+            </button>
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Street</label>
