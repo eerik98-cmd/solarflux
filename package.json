@@ -10,6 +10,7 @@
     "migrate-passwords": "tsx scripts/migrate-passwords.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.91.1",
     "@tiptap/core": "^2.27.2",
     "@tiptap/extension-color": "^2.27.2",
     "@tiptap/extension-font-family": "^2.27.2",

@@ -15,7 +15,7 @@ import { replaceEmailVariables, getCommonTemplateData } from '@/lib/emailTemplat
 
 export default function ClientQuotesPage() {
   const { client } = useClient();
-  const { inventory, savedQuotes, saveQuote, deleteQuote, docTemplates } = useData();
+  const { inventory, savedQuotes, saveQuote, deleteQuote, docTemplates, companyDocuments } = useData();
   const { currentUser } = useAuth();
   
   const [quoteProjectName, setQuoteProjectName] = useState('');
@@ -94,6 +94,10 @@ export default function ClientQuotesPage() {
   // Get current quote's generated documents
   const currentQuote = editingQuoteId ? clientQuotes.find(q => q.id === editingQuoteId) : null;
   const generatedDocuments = currentQuote?.generatedDocuments || [];
+  // Also include documents saved to companyDocuments for this quote (generated from quote-generator page)
+  const companyDocsForQuote = editingQuoteId
+    ? (companyDocuments as any[]).filter(d => d.quoteId === editingQuoteId)
+    : [];
   
   const showNotification = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
     setNotification({ message, type });
@@ -315,10 +319,10 @@ export default function ClientQuotesPage() {
     }
   };
 
-  const saveClientQuote = (forceNewVersion?: boolean, forceOverwrite?: boolean): boolean => {
+  const saveClientQuote = (forceNewVersion?: boolean, forceOverwrite?: boolean): string | false => {
     if (!quoteProjectName.trim()) { 
       showNotification("Please enter a quote name", 'error');
-      return false; 
+      return false;
     }
     
     // If editing an existing quote and we haven't been told what to do, ask
@@ -379,7 +383,7 @@ export default function ClientQuotesPage() {
       })
     );
     showNotification('Quote saved successfully' + (allocatedInstallerId ? ` - Allocated to installer` : ''), 'success');
-    return true;
+    return targetId;
   };
 
   const handleAddQuoteLine = () => {
@@ -658,9 +662,17 @@ export default function ClientQuotesPage() {
   };
 
   const generateDocumentFromTemplate = async () => {
-    if (!selectedTemplateId || !editingQuoteId) {
-      showNotification('Please select a template and save the quote first', 'error');
+    if (!selectedTemplateId) {
+      showNotification('Please select a template', 'error');
       return;
+    }
+
+    // Auto-save the quote if it hasn't been saved yet
+    let quoteId = editingQuoteId;
+    if (!quoteId) {
+      const savedId = saveClientQuote(false, true);
+      if (!savedId) return; // saveClientQuote shows its own error
+      quoteId = savedId;
     }
 
     const template = docTemplates?.find(t => t.id === selectedTemplateId);
@@ -766,34 +778,38 @@ export default function ClientQuotesPage() {
       }
 
       const timestamp = Date.now();
-      const storagePath = `quotes/${editingQuoteId}/documents/${timestamp}_${fileName}`;
+      const storagePath = `quotes/${quoteId}/documents/${timestamp}_${fileName}`;
       const storageRef = ref(storage, storagePath);
       
       showNotification('Uploading document...', 'info');
       await uploadBytes(storageRef, out);
       const downloadURL = await getDownloadURL(storageRef);
 
-      // Update quote with new document
-      const existingQuote = clientQuotes.find(q => q.id === editingQuoteId);
-      if (existingQuote) {
-        const updatedDocuments = [
-          ...(existingQuote.generatedDocuments || []),
-          {
-            id: timestamp.toString(),
-            name: fileName,
-            url: downloadURL,
-            date: new Date(),
-            generatedBy: currentUser?.username || 'Unknown'
-          }
-        ];
+      const newDoc = {
+        id: timestamp.toString(),
+        name: fileName,
+        url: downloadURL,
+        date: new Date(),
+        generatedBy: currentUser?.username || 'Unknown'
+      };
 
+      // Update quote with new document (stored in quote.generatedDocuments)
+      const existingQuote = clientQuotes.find(q => q.id === quoteId);
+      if (existingQuote) {
         const updatedQuote: Quote = {
           ...existingQuote,
-          generatedDocuments: updatedDocuments
+          generatedDocuments: [...(existingQuote.generatedDocuments || []), newDoc]
         };
-
         saveQuote(updatedQuote);
       }
+
+      // Also save to companyDocuments for cross-listing in quote-generator
+      await StorageService.saveItem('companyDocuments', {
+        ...newDoc,
+        quoteId,
+        clientId: client.id,
+        description: `Quote document for ${client.name}`
+      });
 
       setIsGenerating(false);
       showNotification('Document generated and saved successfully!', 'success');
@@ -1842,7 +1858,7 @@ export default function ClientQuotesPage() {
         )}
 
         {/* Documents for this Quote */}
-        {docTemplates && docTemplates.length > 0 && editingQuoteId && (
+        {docTemplates && docTemplates.length > 0 && (
           <div className="bg-slate-800 rounded-xl border border-slate-700 p-6 shadow-lg">
             <h3 className="text-lg font-bold text-white mb-6 flex items-center gap-2">
               <FileText size={20} className="text-green-500" />
@@ -1891,13 +1907,13 @@ export default function ClientQuotesPage() {
             </div>
 
             {/* List of Generated Documents */}
-            {generatedDocuments.length > 0 && (
+            {(generatedDocuments.length > 0 || companyDocsForQuote.length > 0) && (
               <div>
                 <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-3">
                   Generated Documents
                 </h4>
                 <div className="space-y-2">
-                  {generatedDocuments.map(doc => (
+                  {[...generatedDocuments, ...companyDocsForQuote.filter(cd => !generatedDocuments.some(gd => gd.id === cd.id))].map(doc => (
                     <div key={doc.id} className="flex items-center justify-between p-3 bg-slate-700/30 border border-slate-600 rounded-lg hover:bg-slate-700/50 transition-colors">
                       <div className="flex-1 min-w-0">
                         <p className="text-white font-semibold text-sm truncate">{doc.name}</p>

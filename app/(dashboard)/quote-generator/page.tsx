@@ -26,6 +26,16 @@ function QuoteGeneratorWrapper() {
     await StorageService.deleteItem('companyDocuments', id);
   };
 
+  const handleUpdateQuoteDocuments = async (quoteId: string, doc: { id: string; name: string; url: string; date: Date; generatedBy?: string }) => {
+    const existing = savedQuotes.find(q => q.id === quoteId);
+    if (!existing) return;
+    const updatedQuote: Quote = {
+      ...existing,
+      generatedDocuments: [...(existing.generatedDocuments || []), doc]
+    };
+    await StorageService.saveItem('quotes', updatedQuote);
+  };
+
   return (
     <QuoteGeneratorComponent
       inventory={inventory}
@@ -37,6 +47,7 @@ function QuoteGeneratorWrapper() {
       companyDocuments={companyDocuments as any}
       onSaveDocument={handleSaveDocument}
       onDeleteDocument={handleDeleteDocument}
+      onUpdateQuoteDocuments={handleUpdateQuoteDocuments}
     />
   );
 }

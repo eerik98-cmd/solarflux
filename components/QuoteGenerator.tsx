@@ -16,9 +16,10 @@ interface QuoteGeneratorProps {
   companyDocuments?: Array<{ id: string; name: string; url: string; date?: Date; description?: string; quoteId?: string }>;
   onSaveDocument?: (doc: { id: string; name: string; url: string; date: Date; description?: string; quoteId?: string; clientId?: string }) => Promise<void>;
   onDeleteDocument?: (id: string) => Promise<void>;
+  onUpdateQuoteDocuments?: (quoteId: string, doc: { id: string; name: string; url: string; date: Date; generatedBy?: string }) => Promise<void>;
 }
 
-export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clients, savedQuotes, onSaveQuote, onDeleteQuote, docTemplates, companyDocuments = [], onSaveDocument, onDeleteDocument }) => {
+export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clients, savedQuotes, onSaveQuote, onDeleteQuote, docTemplates, companyDocuments = [], onSaveDocument, onDeleteDocument, onUpdateQuoteDocuments }) => {
   const [projectTitle, setProjectTitle] = useState('');
   const [customerName, setCustomerName] = useState('');
   const [selectedClientId, setSelectedClientId] = useState<string | undefined>(undefined);
@@ -477,8 +478,9 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
 
       // Persist to storage if handler provided
       if (onSaveDocument) {
+        const docId = Date.now().toString();
         await onSaveDocument({
-          id: Date.now().toString(),
+          id: docId,
           name: fileName,
           url: dataUrl,
           date: new Date(),
@@ -486,6 +488,16 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
           quoteId: currentQuoteId || undefined,
           clientId: selectedClientId || undefined
         });
+
+        // Also update the quote's generatedDocuments for cross-listing in client quotes page
+        if (onUpdateQuoteDocuments && currentQuoteId) {
+          await onUpdateQuoteDocuments(currentQuoteId, {
+            id: docId,
+            name: fileName,
+            url: dataUrl,
+            date: new Date()
+          });
+        }
       }
 
       setIsGenerating(false);
@@ -688,10 +700,16 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
             )}
 
             {/* DOCUMENTS FOR CURRENT QUOTE */}
-            {currentQuoteId && (
-              generatedDocuments.some(d => d.quoteId === currentQuoteId) ||
-              companyDocuments.some((d: any) => d.quoteId === currentQuoteId)
-            ) && (
+            {currentQuoteId && (() => {
+              const quotePersistedDocs = savedQuotes.find(q => q.id === currentQuoteId)?.generatedDocuments || [];
+              const sessionDocs = generatedDocuments.filter(d => d.quoteId === currentQuoteId);
+              const companyDocs = companyDocuments.filter((d: any) => d.quoteId === currentQuoteId);
+              // Combine: quotePersistedDocs + companyDocs (deduped by id) + session docs
+              const persistedIds = new Set([...quotePersistedDocs.map((d: any) => d.id), ...sessionDocs.map(d => d.id)]);
+              const uniqueCompanyDocs = companyDocs.filter((cd: any) => !persistedIds.has(cd.id));
+              const hasAny = sessionDocs.length > 0 || companyDocs.length > 0 || quotePersistedDocs.length > 0;
+              if (!hasAny) return null;
+              return (
                 <div className="bg-slate-800 rounded-xl border border-slate-700 p-6 shadow-lg">
                     <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
                         <FileText size={20} className="text-green-500" />
@@ -746,8 +764,40 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
                             </div>
                         ))}
 
-                        {/* Persisted documents for this quote */}
-                        {companyDocuments.filter((doc: any) => doc.quoteId === currentQuoteId).map((doc: any) => (
+                        {/* Quote's own persisted documents (generated from client quotes page) */}
+                        {quotePersistedDocs.filter((doc: any) => !sessionDocs.some(sd => sd.id === doc.id)).map((doc: any) => (
+                            <div key={doc.id} className="flex items-center justify-between p-3 bg-slate-700/30 border border-slate-600 rounded-lg hover:bg-slate-700/50 transition-colors">
+                                <div className="flex-1 min-w-0">
+                                    <p className="text-white font-semibold text-sm truncate">{doc.name}</p>
+                                    <p className="text-xs text-slate-400 mt-1">
+                                        {doc.date ? new Date(doc.date).toLocaleString('ro-RO') : ''}
+                                        {doc.generatedBy && ` • by ${doc.generatedBy}`}
+                                    </p>
+                                </div>
+                                <div className="flex items-center gap-2 ml-4">
+                                    <button
+                                        onClick={() => setPreviewDoc({ name: doc.name, url: doc.url, date: doc.date })}
+                                        className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
+                                    >
+                                        <FileText size={14} />
+                                        Preview
+                                    </button>
+                                    <a
+                                        href={doc.url}
+                                        download={doc.name}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
+                                    >
+                                        <Download size={14} />
+                                        Download
+                                    </a>
+                                </div>
+                            </div>
+                        ))}
+
+                        {/* Unique company documents (not already in quote.generatedDocuments) */}
+                        {uniqueCompanyDocs.map((doc: any) => (
                             <div key={doc.id} className="flex items-center justify-between p-3 bg-slate-700/30 border border-slate-600 rounded-lg hover:bg-slate-700/50 transition-colors">
                                 <div className="flex-1 min-w-0">
                                     <p className="text-white font-semibold text-sm truncate">{doc.name}</p>
@@ -788,7 +838,8 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
                         ))}
                     </div>
                 </div>
-            )}
+              );
+            })()}
 
             {/* SECTION 2: QUOTE EDITOR */}
             <div className="bg-slate-800 rounded-xl border border-slate-700 flex flex-col min-h-[500px] shadow-lg overflow-hidden">

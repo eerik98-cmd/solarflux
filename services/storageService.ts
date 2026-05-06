@@ -213,7 +213,6 @@ export const StorageService = {
       }
     } catch (error: any) {
       console.error(`Error saving to ${collectionName}:`, error);
-      alert(`Failed to save data. Error: ${error.message}`);
       throw error;
     }
   },
@@ -230,7 +229,6 @@ export const StorageService = {
       }
     } catch (error: any) {
       console.error(`Error deleting from ${collectionName}:`, error);
-      alert('Failed to delete item.');
       throw error;
     }
   },
