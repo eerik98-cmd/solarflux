@@ -167,6 +167,7 @@ export interface Quote {
     sentTo: string;
     sentBy: string;
     documentName?: string;
+    documentId?: string;
   }>;
   
   // Generated Documents
@@ -177,6 +178,9 @@ export interface Quote {
     date: Date;
     generatedBy?: string; // User who generated it
   }>;
+
+  // Quote Status Lifecycle
+  quoteStatus?: 'draft' | 'sent' | 'won_unallocated' | 'won_allocated';
 }
 
 export type InstallerReminderType = 'MISSING_DAILY_REPORT';

@@ -171,12 +171,16 @@ export const StorageService = {
     return await uploadBase64ToStorage(base64Data, path);
   },
 
-  // Poll a collection every 5 seconds and call callback with latest data.
+  // Poll a collection every 15 seconds and call callback with latest data.
+  // An in-flight guard ensures a new fetch never starts while the previous is still pending.
   // Returns a cleanup function (mirrors Firestore onSnapshot API).
   subscribe: (collectionName: string, callback: (data: any[]) => void): (() => void) => {
     let active = true;
+    let inFlight = false;
 
     const fetchData = async () => {
+      if (inFlight || !active) return;
+      inFlight = true;
       try {
         const res = await fetch(`/api/db/${collectionName}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -184,11 +188,13 @@ export const StorageService = {
         if (active) callback(Array.isArray(data) ? data : []);
       } catch (error) {
         console.error(`Error polling ${collectionName}:`, error);
+      } finally {
+        inFlight = false;
       }
     };
 
     fetchData();
-    const interval = setInterval(fetchData, 5000);
+    const interval = setInterval(fetchData, 15000);
 
     return () => {
       active = false;

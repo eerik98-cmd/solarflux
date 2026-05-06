@@ -8,7 +8,8 @@ import { Quote } from '@/types';
 import Loading from '@/components/Loading';
 
 function QuoteGeneratorWrapper() {
-  const { inventory, clients, savedQuotes, docTemplates, companyDocuments } = useData();
+  const { inventory, clients, savedQuotes, docTemplates, companyDocuments, users } = useData();
+  const installerUsers = (users || []).filter(u => u.role === 'INSTALLER');
 
   const handleSaveQuote = async (quote: Quote) => {
     await StorageService.saveItem('quotes', quote);
@@ -48,6 +49,7 @@ function QuoteGeneratorWrapper() {
       onSaveDocument={handleSaveDocument}
       onDeleteDocument={handleDeleteDocument}
       onUpdateQuoteDocuments={handleUpdateQuoteDocuments}
+      installerUsers={installerUsers}
     />
   );
 }
