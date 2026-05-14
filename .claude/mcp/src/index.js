@@ -30,22 +30,13 @@ async function connectDatabase() {
     db = mongoClient.db(mongoDb);
 
     // Indexek létrehozása
-    await db
-      .collection("quotes")
-      .createIndex({ customerName: "text", id: 1, date: -1 })
-      .catch(() => {});
-    await db
-      .collection("clients")
-      .createIndex({ name: "text", internalId: 1, status: 1 })
-      .catch(() => {});
-    await db
-      .collection("inventory")
-      .createIndex({ name: "text", sku: 1, category: 1 })
-      .catch(() => {});
-    await db
-      .collection("users")
-      .createIndex({ username: 1 })
-      .catch(() => {});
+    await db.collection("quotes").createIndex({ date: -1 }).catch(() => {});
+    await db.collection("quotes").createIndex({ customerName: 1 }).catch(() => {});
+    await db.collection("clients").createIndex({ name: 1 }).catch(() => {});
+    await db.collection("clients").createIndex({ status: 1 }).catch(() => {});
+    await db.collection("inventory").createIndex({ name: 1 }).catch(() => {});
+    await db.collection("inventory").createIndex({ category: 1 }).catch(() => {});
+    await db.collection("users").createIndex({ username: 1 }).catch(() => {});
 
     console.error("✅ MongoDB Atlas csatlakozva (solarflux)");
   } catch (error) {
@@ -71,14 +62,63 @@ const server = new Server({
 // TOOL HANDLERS
 // ============================================================================
 
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function buildFlexibleQuoteSearchOr(searchTerm) {
+  const term = String(searchTerm || "").trim();
+  if (!term) {
+    return [];
+  }
+
+  const escapedTerm = escapeRegex(term);
+  const tokens = term
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean)
+    .map((token) => escapeRegex(token));
+
+  const or = [
+    { customerName: { $regex: escapedTerm, $options: "i" } },
+    { title: { $regex: escapedTerm, $options: "i" } },
+    { id: { $regex: escapedTerm, $options: "i" } },
+    { quoteId: { $regex: escapedTerm, $options: "i" } },
+    { quoteNumber: { $regex: escapedTerm, $options: "i" } },
+    { internalId: { $regex: escapedTerm, $options: "i" } },
+  ];
+
+  if (tokens.length > 1) {
+    // Allow matching names in any order (e.g. "Ari Attila" vs "Attila Ari").
+    or.push({
+      $and: tokens.map((token) => ({
+        customerName: { $regex: token, $options: "i" },
+      })),
+    });
+  }
+
+  return or;
+}
+
 // 1. AJÁNLATOK KERESÉSE
 async function handleSearchQuotes(params) {
-  const { customerName = null, phase = null, limit = 20 } = params;
+  const {
+    customerName = null,
+    clientName = null,
+    searchTerm = null,
+    quoteId = null,
+    phase = null,
+    limit = 20,
+  } = params;
 
   let query = {};
+  const effectiveSearchTerm = searchTerm || customerName || clientName || quoteId;
 
-  if (customerName) {
-    query.customerName = { $regex: customerName, $options: "i" };
+  if (effectiveSearchTerm) {
+    const or = buildFlexibleQuoteSearchOr(effectiveSearchTerm);
+    if (or.length > 0) {
+      query.$or = or;
+    }
   }
 
   if (phase) {
@@ -108,6 +148,7 @@ async function handleSearchQuotes(params) {
       customerName: q.customerName,
       title: q.title,
       totalGross: q.totalGross,
+      currency: q.currency || 'RON',
       phase: q.phase,
       date: q.date,
       allocatedInstallerId: q.allocatedInstallerId,
@@ -124,9 +165,33 @@ async function handleGetQuote(params) {
   }
 
   try {
-    const quote = await db
-      .collection("quotes")
-      .findOne({ id: quoteId });
+    const normalizedQuoteId = String(quoteId).trim();
+    const numericQuoteId = Number(normalizedQuoteId);
+    const hasNumericValue = !Number.isNaN(numericQuoteId);
+
+    let quote = await db.collection("quotes").findOne({
+      $or: [
+        { id: normalizedQuoteId },
+        ...(hasNumericValue ? [{ id: numericQuoteId }] : []),
+        { quoteId: normalizedQuoteId },
+        { quoteNumber: normalizedQuoteId },
+        { internalId: normalizedQuoteId },
+      ],
+    });
+
+    if (!quote) {
+      const escapedQuoteId = escapeRegex(normalizedQuoteId);
+      quote = await db.collection("quotes").findOne({
+        $or: [
+          { id: { $regex: escapedQuoteId, $options: "i" } },
+          { quoteId: { $regex: escapedQuoteId, $options: "i" } },
+          { quoteNumber: { $regex: escapedQuoteId, $options: "i" } },
+          { internalId: { $regex: escapedQuoteId, $options: "i" } },
+          { customerName: { $regex: escapedQuoteId, $options: "i" } },
+          { title: { $regex: escapedQuoteId, $options: "i" } },
+        ],
+      });
+    }
 
     if (!quote) {
       return { success: false, error: "Ajánlat nem található" };
@@ -136,17 +201,38 @@ async function handleGetQuote(params) {
       success: true,
       quote: {
         id: quote.id,
+        clientId: quote.clientId,
+        projectId: quote.projectId,
         customerName: quote.customerName,
         title: quote.title,
         description: quote.description,
         date: quote.date,
+        currency: quote.currency || 'RON',
+        validityDays: quote.validityDays,
         items: quote.items || [],
         subtotalNet: quote.subtotalNet,
         vatTotal: quote.vatTotal,
         totalGross: quote.totalGross,
         phase: quote.phase,
+        phaseHistory: quote.phaseHistory || [],
+        estimatedCompletionDate: quote.estimatedCompletionDate,
         allocatedInstallerId: quote.allocatedInstallerId,
+        allocatedAt: quote.allocatedAt,
+        assignedInstallers: quote.assignedInstallers || [],
+        completedAt: quote.completedAt,
+        completedBy: quote.completedBy,
         completionNotes: quote.completionNotes,
+        adminApprovedAt: quote.adminApprovedAt,
+        adminApprovedBy: quote.adminApprovedBy,
+        adminApprovalNotes: quote.adminApprovalNotes,
+        shareToken: quote.shareToken,
+        publicLinkSentAt: quote.publicLinkSentAt,
+        publicLinkOpenCount: quote.publicLinkOpenCount,
+        isLocked: quote.isLocked,
+        paymentStatus: quote.paymentStatus,
+        payments: quote.payments || [],
+        emailSentAt: quote.emailSentAt,
+        emailSentTo: quote.emailSentTo,
       },
     };
   } catch (error) {
@@ -246,11 +332,14 @@ async function handleSearchInventory(params) {
   let query = {};
 
   if (searchTerm) {
-    query.$text = { $search: searchTerm };
+    query.$or = [
+      { name: { $regex: searchTerm, $options: "i" } },
+      { sku: { $regex: searchTerm, $options: "i" } },
+    ];
   }
 
   if (category) {
-    query.category = category;
+    query.category = { $regex: category, $options: "i" };
   }
 
   const items = await db
@@ -367,14 +456,14 @@ async function handleUpdateQuotePhase(params) {
         { returnDocument: "after" }
       );
 
-    if (!result.value) {
+    if (!result) {
       return { success: false, error: "Ajánlat nem található" };
     }
 
     return {
       success: true,
       message: `Ajánlat fázisa módosítva: ${newPhase}`,
-      quote: result.value,
+      quote: result,
     };
   } catch (error) {
     return { success: false, error: error.message };
@@ -545,14 +634,14 @@ async function handleUpdateClientNeeds(params) {
         { returnDocument: "after" }
       );
 
-    if (!result.value) {
+    if (!result) {
       return { success: false, error: "Kliens nem található" };
     }
 
     return {
       success: true,
       message: "Kliens szükségletei frissítve",
-      client: result.value,
+      client: result,
     };
   } catch (error) {
     return { success: false, error: error.message };
@@ -628,7 +717,7 @@ async function handleAssignInstallerToQuote(params) {
         { returnDocument: "after" }
       );
 
-    if (!result.value) {
+    if (!result) {
       return { success: false, error: "Ajánlat nem található" };
     }
 
@@ -666,6 +755,55 @@ async function handleGetLowStockItems(params) {
   }
 }
 
+// 16. KLIENS AJÁNLATAI
+async function handleGetClientQuotes(params) {
+  const { clientId = null, clientName = null, limit = 20 } = params;
+
+  if (!clientId && !clientName) {
+    return { success: false, error: "clientId vagy clientName szükséges" };
+  }
+
+  try {
+    let nameForSearch = clientName;
+
+    // Ha clientId van, először megkeressük a kliens nevét
+    if (clientId && !clientName) {
+      const client = await db.collection("clients").findOne({ id: clientId });
+      if (!client) {
+        return { success: false, error: "Kliens nem található" };
+      }
+      nameForSearch = client.name;
+    }
+
+    const or = buildFlexibleQuoteSearchOr(nameForSearch);
+    const quotes = await db
+      .collection("quotes")
+      .find(or.length > 0 ? { $or: or } : {})
+      .sort({ date: -1 })
+      .limit(limit)
+      .toArray();
+
+    return {
+      success: true,
+      clientName: nameForSearch,
+      count: quotes.length,
+      quotes: quotes.map((q) => ({
+        id: q.id,
+        customerName: q.customerName,
+        title: q.title,
+        totalGross: q.totalGross,
+        currency: q.currency || 'RON',
+        phase: q.phase,
+        date: q.date,
+        allocatedInstallerId: q.allocatedInstallerId,
+        itemCount: q.items ? q.items.length : 0,
+      })),
+    };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
 // ============================================================================
 // TOOL REGISZTRÁCIÓ
 // ============================================================================
@@ -681,6 +819,18 @@ const tools = [
         customerName: {
           type: "string",
           description: "Ügyfél nevének keresése",
+        },
+        clientName: {
+          type: "string",
+          description: "Alias: ügyfél neve kereséshez",
+        },
+        searchTerm: {
+          type: "string",
+          description: "Általános keresőszó (név, quote ID, cím)",
+        },
+        quoteId: {
+          type: "string",
+          description: "Ajánlat azonosító vagy kód",
         },
         phase: {
           type: "string",
@@ -913,6 +1063,28 @@ const tools = [
     },
   },
   {
+    name: "get_client_quotes",
+    description:
+      "Kliens összes ajánlatának lekérése kliens neve vagy ID alapján. Használd ha valaki ajánlatait keresed.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        clientId: {
+          type: "string",
+          description: "Kliens ID (opcionális ha clientName meg van adva)",
+        },
+        clientName: {
+          type: "string",
+          description: "Kliens neve (pl. 'Ari Attila') - részleges egyezés is működik",
+        },
+        limit: {
+          type: "number",
+          description: "Max ajánlatok száma",
+        },
+      },
+    },
+  },
+  {
     name: "get_stats",
     description: "Adatbázis statisztikái és összegzések",
     inputSchema: {
@@ -979,6 +1151,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       break;
     case "list_users":
       result = await handleListUsers(args);
+      break;
+    case "get_client_quotes":
+      result = await handleGetClientQuotes(args);
       break;
     case "get_stats":
       result = await handleGetStats(args);

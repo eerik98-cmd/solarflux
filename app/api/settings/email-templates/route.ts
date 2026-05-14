@@ -62,7 +62,7 @@ export async function POST(request: NextRequest) {
       updatedBy: updatedBy || session.username,
     };
 
-    // Save to Firebase using StorageService
+    // Save to MongoDB using StorageService
     await StorageService.saveItem('emailTemplates', emailTemplate);
 
     return NextResponse.json({

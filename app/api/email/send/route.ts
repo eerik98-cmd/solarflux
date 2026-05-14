@@ -3,7 +3,7 @@ import { getSession } from '@/lib/session';
 import { decryptSmtpPassword } from '@/lib/encryption';
 import nodemailer from 'nodemailer';
 import { SmtpSettings } from '@/types';
-import { getDb } from '@/services/mongodb';
+import { StorageService } from '@/services/storageService';
 
 /**
  * Send email with PDF attachment
@@ -42,12 +42,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Fetch SMTP settings from MongoDB
-    const db = await getDb();
-    const smtpDoc = await db.collection('smtpSettings').findOne({ id: 'default' });
-    const { _id: _ignored, ...smtpSettings } = (smtpDoc ?? {}) as any;
-    const smtpSettingsValid = smtpDoc != null;
+    const smtpSettings = await StorageService.getItem('smtpSettings', 'default');
 
-    if (!smtpSettingsValid) {
+    if (!smtpSettings) {
       return NextResponse.json(
         { error: 'SMTP settings not configured. Please configure email settings in Settings page.' },
         { status: 400 }
@@ -99,9 +96,9 @@ export async function POST(request: NextRequest) {
     // Update quote with email history if quoteId provided
     if (quoteId) {
       try {
-        const { _id: _qIgnored, ...quote } = (await db.collection('quotes').findOne({ id: quoteId }) ?? {}) as any;
+        const quote = await StorageService.getItem('quotes', quoteId);
         
-        if (quote?.id) {
+        if (quote) {
           const emailHistory = quote.emailHistory || [];
           
           const updatedQuote = {
@@ -120,7 +117,7 @@ export async function POST(request: NextRequest) {
             ],
           };
           
-          await db.collection('quotes').replaceOne({ id: quoteId }, updatedQuote, { upsert: true });
+          await StorageService.saveItem('quotes', updatedQuote);
         }
       } catch (error) {
         console.error('Failed to update quote email history:', error);

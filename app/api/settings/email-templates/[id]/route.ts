@@ -24,7 +24,7 @@ export async function DELETE(
       );
     }
 
-    // Delete from Firebase
+    // Delete from MongoDB
     await StorageService.deleteItem('emailTemplates', id);
 
     return NextResponse.json({

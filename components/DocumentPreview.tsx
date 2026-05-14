@@ -26,19 +26,26 @@ interface DocumentPreviewProps {
 }
 
 const isPdfDoc = (doc: { url: string; name: string }) =>
-  !!doc.url && (doc.url.startsWith('data:application/pdf') || doc.name?.toLowerCase().endsWith('.pdf'));
+  !!doc.url && (
+    doc.url.startsWith('data:application/pdf') ||
+    doc.name?.toLowerCase().endsWith('.pdf') ||
+    doc.url.toLowerCase().includes('.pdf')
+  );
 
 const isDocxDoc = (doc: { url: string; name: string }) =>
   !!doc.url && (
     doc.url.startsWith('data:application/vnd.openxmlformats-officedocument.wordprocessingml.document') ||
-    doc.name?.toLowerCase().endsWith('.docx')
+    doc.name?.toLowerCase().endsWith('.docx') ||
+    doc.url.toLowerCase().includes('.docx')
   );
 
 const isHtmlDoc = (doc: { url: string; name: string }) =>
   !!doc.url && (
     doc.url.startsWith('data:text/html') ||
     doc.name?.toLowerCase().endsWith('.html') ||
-    doc.name?.toLowerCase().endsWith('.htm')
+    doc.name?.toLowerCase().endsWith('.htm') ||
+    doc.url.toLowerCase().includes('.html') ||
+    doc.url.toLowerCase().includes('.htm')
   );
 
 const HtmlPreview: React.FC<{ url: string; title: string }> = ({ url, title }) => {
@@ -83,13 +90,15 @@ const HtmlPreview: React.FC<{ url: string; title: string }> = ({ url, title }) =
 };
 
 const PdfPreview: React.FC<{ url: string; title: string }> = ({ url, title }) => {
+  // #toolbar=0&navpanes=0 suppresses the download toolbar in Chrome's PDF viewer
+  const src = url.startsWith('data:') ? url : `${url}#toolbar=0&navpanes=0&scrollbar=1`;
   return (
     <div className="w-full h-full flex flex-col">
-      <div className="flex-1 overflow-auto rounded-lg border border-slate-700 bg-slate-950">
+      <div className="flex-1 rounded-lg border border-slate-700 bg-slate-950 overflow-hidden">
         <iframe
-          src={url}
+          src={src}
           title={title}
-          className="w-full h-full min-h-[600px]"
+          className="w-full min-h-[600px] h-full"
           style={{ border: 'none' }}
         />
       </div>
@@ -289,7 +298,7 @@ const DocxPreview: React.FC<{
       setEditorContent(editedHtml);
       setEditMode(false);
 
-      // Pass the real DOCX blob upstream for Firebase upload
+      // Pass the real DOCX blob upstream for persistence
       if (onSave) {
         onSave(docxBlob);
       }
@@ -333,7 +342,7 @@ const DocxPreview: React.FC<{
 
       const { pdfBase64 } = await response.json();
       
-      // Upload PDF to Firebase Storage
+      // Store PDF in app storage (Mongo-backed document URL)
       const pdfDataUrl = `data:application/pdf;base64,${pdfBase64}`;
       const pdfFileName = name.replace('.docx', '.pdf');
       const timestamp = Date.now();
@@ -517,46 +526,25 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({
     window.document.body.removeChild(link);
   };
 
-  // Extract the Firebase Storage path from a download URL so we can overwrite the exact file
-  const getStoragePathFromUrl = (url: string): string | null => {
-    try {
-      // Firebase download URL format:
-      // https://firebasestorage.googleapis.com/v0/b/{bucket}/o/{encodedPath}?alt=media&token=...
-      const match = url.match(/\/o\/([^?#]+)/);
-      return match ? decodeURIComponent(match[1]) : null;
-    } catch {
-      return null;
-    }
-  };
-
   const handleSaveDocx = async (blob: Blob) => {
     setSaving(true);
     try {
-      const { storage } = await import('@/services/firebase');
-      const { ref, uploadBytes, getDownloadURL } = await import('firebase/storage');
-
-      // Always overwrite the same storage path so refresh shows the updated file
-      const existingPath = getStoragePathFromUrl(doc.url);
-      let storageRef;
-      if (existingPath) {
-        storageRef = ref(storage, existingPath);
-      } else {
-        // Fallback: build path from client/folder context
-        const fileName = doc.name.toLowerCase().endsWith('.docx') ? doc.name : `${doc.name}.docx`;
-        const storagePath = clientId && folder
-          ? `clients/${clientId}/${folder}/${fileName}`
-          : `documents/${doc.id || Date.now()}/${fileName}`;
-        storageRef = ref(storage, storagePath);
-      }
-
-      await uploadBytes(storageRef, blob, {
-        contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        cacheControl: 'no-cache, max-age=0'
+      const newDocxDataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const result = reader.result;
+          if (typeof result === 'string') {
+            resolve(result);
+            return;
+          }
+          reject(new Error('Failed to encode edited document'));
+        };
+        reader.onerror = () => reject(new Error('Failed to read edited document blob'));
+        reader.readAsDataURL(blob);
       });
-      const downloadURL = await getDownloadURL(storageRef);
       
       if (onSave) {
-        await onSave(downloadURL);
+        await onSave(newDocxDataUrl);
       }
     } catch (error) {
       console.error('Error uploading document:', error);

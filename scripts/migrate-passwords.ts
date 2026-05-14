@@ -11,8 +11,7 @@
  *   node --loader ts-node/esm scripts/migrate-passwords.ts
  */
 
-import { initializeApp } from 'firebase/app';
-import { getFirestore, collection, getDocs, doc, updateDoc } from 'firebase/firestore';
+import { MongoClient } from 'mongodb';
 import bcrypt from 'bcryptjs';
 import * as dotenv from 'dotenv';
 
@@ -21,43 +20,39 @@ dotenv.config({ path: '.env.local' });
 
 const SALT_ROUNDS = 10;
 
-// Firebase configuration from environment variables
-const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-};
-
 async function migratePasswords() {
   console.log('🔐 Starting password migration...\n');
 
-  // Initialize Firebase
-  const app = initializeApp(firebaseConfig);
-  const db = getFirestore(app);
-
   try {
-    // Get all users
-    const usersRef = collection(db, 'users');
-    const snapshot = await getDocs(usersRef);
+    const mongoUri = process.env.MONGODB_URI;
+    const mongoDb = process.env.MONGODB_DB || 'solarflux';
 
-    if (snapshot.empty) {
+    if (!mongoUri) {
+      throw new Error('MONGODB_URI is not set. Please configure .env.local');
+    }
+
+    const client = new MongoClient(mongoUri);
+    await client.connect();
+    const db = client.db(mongoDb);
+
+    // Get all users
+    const users = await db.collection('users').find({}).toArray();
+
+    if (users.length === 0) {
       console.log('❌ No users found in database.');
+      await client.close();
       return;
     }
 
-    console.log(`📊 Found ${snapshot.size} user(s) to process.\n`);
+    console.log(`📊 Found ${users.length} user(s) to process.\n`);
 
     let migratedCount = 0;
     let skippedCount = 0;
     let errorCount = 0;
 
     // Process each user
-    for (const userDoc of snapshot.docs) {
-      const userData = userDoc.data();
-      const userId = userDoc.id;
+    for (const userData of users) {
+      const userId = String(userData.id || userData._id);
       const username = userData.username || 'Unknown';
       const currentPassword = userData.password;
 
@@ -81,9 +76,10 @@ async function migratePasswords() {
         const hashedPassword = await bcrypt.hash(currentPassword, SALT_ROUNDS);
 
         // Update the user document
-        await updateDoc(doc(db, 'users', userId), {
-          password: hashedPassword,
-        });
+        await db.collection('users').updateOne(
+          { _id: userData._id },
+          { $set: { password: hashedPassword } }
+        );
 
         console.log(`✅ Successfully migrated ${username}\n`);
         migratedCount++;
@@ -100,16 +96,18 @@ async function migratePasswords() {
     console.log(`✅ Successfully migrated: ${migratedCount}`);
     console.log(`⏭️  Skipped (already hashed): ${skippedCount}`);
     console.log(`❌ Errors: ${errorCount}`);
-    console.log(`📊 Total processed: ${snapshot.size}`);
+    console.log(`📊 Total processed: ${users.length}`);
     console.log('='.repeat(50) + '\n');
 
     if (migratedCount > 0) {
       console.log('🎉 Password migration completed successfully!');
       console.log('⚠️  Users will need to use their existing passwords to login.');
       console.log('💡 Passwords are now securely hashed with bcrypt.\n');
-    } else if (skippedCount === snapshot.size) {
+    } else if (skippedCount === users.length) {
       console.log('✨ All passwords were already hashed. No migration needed.\n');
     }
+
+    await client.close();
 
   } catch (error) {
     console.error('\n❌ Migration failed:', error);

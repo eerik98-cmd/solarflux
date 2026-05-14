@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { InventoryItem, Quote, QuoteLineItem, Client, DocTemplate, User } from '../types';
-import { Plus, Trash2, Save, History, RefreshCcw, CheckSquare, Square, Search, ChevronDown, Package, Edit3, FileText, Download, X, Eye, Award, Users, SendHorizonal, Printer } from 'lucide-react';
+import { InventoryItem, Quote, QuoteLineItem, Client, DocTemplate, Project } from '../types';
+import { Plus, Trash2, Save, History, RefreshCcw, CheckSquare, Square, Search, ChevronDown, Package, Printer, Edit3, FileText, Download, X, Briefcase } from 'lucide-react';
 import { ConfirmDialog } from './ConfirmDialog';
 import { DocumentPreview } from './DocumentPreview';
 
@@ -10,20 +10,21 @@ interface QuoteGeneratorProps {
   inventory: InventoryItem[];
   clients: Client[];
   savedQuotes: Quote[];
+  projects?: Project[];
   onSaveQuote: (quote: Quote) => void;
   onDeleteQuote?: (id: string) => void;
   docTemplates: DocTemplate[];
   companyDocuments?: Array<{ id: string; name: string; url: string; date?: Date; description?: string; quoteId?: string }>;
   onSaveDocument?: (doc: { id: string; name: string; url: string; date: Date; description?: string; quoteId?: string; clientId?: string }) => Promise<void>;
   onDeleteDocument?: (id: string) => Promise<void>;
-  onUpdateQuoteDocuments?: (quoteId: string, doc: { id: string; name: string; url: string; date: Date; generatedBy?: string }) => Promise<void>;
-  installerUsers?: User[];
+  initialQuote?: Quote;
 }
 
-export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clients, savedQuotes, onSaveQuote, onDeleteQuote, docTemplates, companyDocuments = [], onSaveDocument, onDeleteDocument, onUpdateQuoteDocuments, installerUsers = [] }) => {
+export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clients, savedQuotes, projects = [], onSaveQuote, onDeleteQuote, docTemplates, companyDocuments = [], onSaveDocument, onDeleteDocument, initialQuote }) => {
   const [projectTitle, setProjectTitle] = useState('');
   const [customerName, setCustomerName] = useState('');
   const [selectedClientId, setSelectedClientId] = useState<string | undefined>(undefined);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | undefined>(undefined);
   const [description, setDescription] = useState('');
   const [items, setItems] = useState<QuoteLineItem[]>([]);
   const [currentQuoteId, setCurrentQuoteId] = useState<string | null>(null);
@@ -56,8 +57,10 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
     onConfirm: () => {},
   });
 
-  // Installer Allocation State for quote-won flow
-  const [pendingInstallerIds, setPendingInstallerIds] = useState<string[]>([]);
+  // Installer Allocation State
+  const [allocatedInstallerId, setAllocatedInstallerId] = useState<string>('');
+  const [quoteStatus, setQuoteStatus] = useState<'draft' | 'sent' | 'won'>('draft');
+  const [currency, setCurrency] = useState<'RON' | 'EUR'>('RON');
   
   const VAT_RATE = 0.21;
 
@@ -159,13 +162,20 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
     const newQuote: Quote = {
       id: Date.now().toString(),
       clientId: finalClientId,
+      projectId: selectedProjectId,
+      currency: currency,
       title: projectTitle,
       customerName,
       description,
       date: new Date(),
       items: [...items],
       ...calculateTotals,
-      quoteStatus: 'draft',
+      // Add installer allocation if status is won and installer is selected
+      ...(quoteStatus === 'won' && allocatedInstallerId ? {
+        allocatedInstallerId,
+        allocatedAt: new Date(),
+        phase: 'in-progress' as const
+      } : {})
     };
 
     onSaveQuote(newQuote);
@@ -186,10 +196,13 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
     setProjectTitle('');
     setCustomerName('');
     setSelectedClientId(undefined);
+    setSelectedProjectId(undefined);
     setDescription('');
     setItems([]);
     setCurrentQuoteId(null);
-    setPendingInstallerIds([]);
+    setAllocatedInstallerId('');
+    setQuoteStatus('draft');
+    setCurrency('RON');
   };
 
   const loadQuote = (quote: Quote) => {
@@ -216,41 +229,25 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
     setDescription(quote.description || '');
     setItems(quote.items.map(i => ({...i, selectedSerialNumbers: i.selectedSerialNumbers || []})));
     setCurrentQuoteId(quote.id);
-    setPendingInstallerIds((quote.assignedInstallers || []).map(i => i.installerId));
+    setAllocatedInstallerId(quote.allocatedInstallerId || '');
+    setQuoteStatus(quote.allocatedInstallerId ? 'won' : 'draft');
+    setCurrency(quote.currency || 'RON');
     
     // Scroll to top
     const container = document.querySelector('.quote-gen-scroll');
     if (container) container.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const getCurrentQuote = () => savedQuotes.find(q => q.id === currentQuoteId);
-
-  const handleMarkQuoteWon = () => {
-    const q = getCurrentQuote();
-    if (!q) return;
-    onSaveQuote({ ...q, quoteStatus: 'won_unallocated' });
-  };
-
-  const handleAllocateInstallers = () => {
-    const q = getCurrentQuote();
-    if (!q || pendingInstallerIds.length === 0) return;
-    const chosen = installerUsers.filter(u => pendingInstallerIds.includes(u.id));
-    onSaveQuote({
-      ...q,
-      quoteStatus: 'won_allocated',
-      assignedInstallers: chosen.map(u => ({
-        installerId: u.id,
-        installerNickname: u.nickname,
-        assignedAt: new Date(),
-      })),
-      allocatedInstallerId: chosen[0]?.nickname || q.allocatedInstallerId,
-      allocatedAt: new Date(),
-      phase: 'in-progress',
-    });
-  };
+  // Load initial quote when provided (e.g. opened from the quotes list)
+  useEffect(() => {
+    if (initialQuote) {
+      loadQuoteData(initialQuote);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const formatCurrency = (val: number) => {
-    return new Intl.NumberFormat('ro-RO', { style: 'currency', currency: 'RON' }).format(val);
+    return new Intl.NumberFormat('ro-RO', { style: 'currency', currency, currencyDisplay: 'code' }).format(val);
   };
 
   const printQuote = () => {
@@ -305,8 +302,8 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
                 </td>
                 <td class="py-3 text-center text-sm text-gray-600">${item.unit}</td>
                 <td class="py-3 text-center text-sm font-bold">${item.quantity}</td>
-                <td class="py-3 text-right text-sm">${item.netPrice.toLocaleString('ro-RO', {style: 'currency', currency: 'RON'})}</td>
-                <td class="py-3 text-right text-sm font-bold">${(item.quantity * item.netPrice).toLocaleString('ro-RO', {style: 'currency', currency: 'RON'})}</td>
+                <td class="py-3 text-right text-sm">${item.netPrice.toLocaleString('ro-RO', {style: 'currency', currency: '${currency}'})}</td>
+                <td class="py-3 text-right text-sm font-bold">${(item.quantity * item.netPrice).toLocaleString('ro-RO', {style: 'currency', currency: '${currency}'})}</td>
               </tr>
             `).join('')}
           </tbody>
@@ -316,15 +313,15 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
            <div class="w-64 space-y-2">
               <div class="flex justify-between text-sm">
                  <span class="text-gray-600">Subtotal Net:</span>
-                 <span class="font-medium">${calculateTotals.subtotalNet.toLocaleString('ro-RO', {style: 'currency', currency: 'RON'})}</span>
+                 <span class="font-medium">${calculateTotals.subtotalNet.toLocaleString('ro-RO', {style: 'currency', currency: '${currency}'})}</span>
               </div>
               <div class="flex justify-between text-sm">
                  <span class="text-gray-600">VAT (21%):</span>
-                 <span class="font-medium">${calculateTotals.vatTotal.toLocaleString('ro-RO', {style: 'currency', currency: 'RON'})}</span>
+                 <span class="font-medium">${calculateTotals.vatTotal.toLocaleString('ro-RO', {style: 'currency', currency: '${currency}'})}</span>
               </div>
               <div class="flex justify-between text-lg font-bold border-t border-gray-800 pt-2">
                  <span>Total Gross:</span>
-                 <span>${calculateTotals.totalGross.toLocaleString('ro-RO', {style: 'currency', currency: 'RON'})}</span>
+                 <span>${calculateTotals.totalGross.toLocaleString('ro-RO', {style: 'currency', currency: '${currency}'})}</span>
               </div>
            </div>
         </div>
@@ -497,9 +494,8 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
 
       // Persist to storage if handler provided
       if (onSaveDocument) {
-        const docId = Date.now().toString();
         await onSaveDocument({
-          id: docId,
+          id: Date.now().toString(),
           name: fileName,
           url: dataUrl,
           date: new Date(),
@@ -507,16 +503,6 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
           quoteId: currentQuoteId || undefined,
           clientId: selectedClientId || undefined
         });
-
-        // Also update the quote's generatedDocuments for cross-listing in client quotes page
-        if (onUpdateQuoteDocuments && currentQuoteId) {
-          await onUpdateQuoteDocuments(currentQuoteId, {
-            id: docId,
-            name: fileName,
-            url: dataUrl,
-            date: new Date()
-          });
-        }
       }
 
       setIsGenerating(false);
@@ -595,7 +581,7 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
                                 onChange={(e) => {
                                     setCustomerName(e.target.value);
                                     setIsCustomerSearchOpen(true);
-                                    if (selectedClientId) setSelectedClientId(undefined); // Clear ID if user starts typing
+                                    if (selectedClientId) { setSelectedClientId(undefined); setSelectedProjectId(undefined); } // Clear ID if user starts typing
                                 }}
                                 onFocus={() => setIsCustomerSearchOpen(true)}
                                 onBlur={() => setTimeout(() => setIsCustomerSearchOpen(false), 200)}
@@ -622,6 +608,24 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
                              </div>
                         )}
                     </div>
+                    {/* Project Link */}
+                    {selectedClientId && projects.filter(p => p.clientId === selectedClientId).length > 0 && (
+                      <div>
+                        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 block flex items-center gap-1">
+                          <Briefcase size={12} /> Link to Project (optional)
+                        </label>
+                        <select
+                          value={selectedProjectId ?? ""}
+                          onChange={e => setSelectedProjectId(e.target.value || undefined)}
+                          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-amber-500 outline-none"
+                        >
+                          <option value="">— No project —</option>
+                          {projects.filter(p => p.clientId === selectedClientId).map(p => (
+                            <option key={p.id} value={p.id}>{p.projectNumber} — {p.projectName}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                     <div className="md:col-span-2">
                         <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 block">Description / Notes</label>
                         <textarea 
@@ -635,261 +639,191 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
                 </div>
             </div>
 
-            {/* ─── Quote Related Documents (only when a quote is loaded) ─── */}
-            {currentQuoteId && (() => {
-              const loadedQuote = savedQuotes.find(q => q.id === currentQuoteId);
-              const quotePersistedDocs = loadedQuote?.generatedDocuments || [];
-              const sessionDocs = generatedDocuments.filter(d => d.quoteId === currentQuoteId);
-              const companyDocs = companyDocuments.filter((d: any) => d.quoteId === currentQuoteId);
-              const persistedIds = new Set([...quotePersistedDocs.map((d: any) => d.id), ...sessionDocs.map(d => d.id)]);
-              const uniqueCompanyDocs = companyDocs.filter((cd: any) => !persistedIds.has(cd.id));
-              const qs = loadedQuote?.quoteStatus;
-
-              const statusCfgs: Record<string, { label: string; cls: string }> = {
-                sent: { label: 'Quote Sent', cls: 'bg-blue-500/20 text-blue-300 border-blue-500/40' },
-                won_unallocated: { label: 'Quote WON — Not Allocated', cls: 'bg-amber-500/20 text-amber-300 border-amber-500/40' },
-                won_allocated: { label: `Quote WON — ${loadedQuote?.assignedInstallers?.map(i => i.installerNickname).join(', ')}`, cls: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' },
-              };
-
-              return (
-                <div className="bg-slate-800 rounded-xl border border-slate-700 p-6 shadow-lg">
-                  <div className="flex items-center justify-between mb-6">
-                    <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                      <FileText size={20} className="text-blue-400" />
-                      Quote Related Documents
-                    </h3>
-                    {qs && qs !== 'draft' && statusCfgs[qs] && (
-                      <span className={`px-3 py-1 rounded-full text-xs font-bold border ${statusCfgs[qs].cls}`}>
-                        {statusCfgs[qs].label}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Template select + generate */}
-                  {docTemplates && docTemplates.length > 0 && (
-                    <div className="mb-6 pb-6 border-b border-slate-700">
-                      <div className="flex items-end gap-4">
-                        <div className="flex-1">
-                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">Generate from Template</label>
-                          <select
-                            value={selectedTemplateId}
-                            onChange={(e) => setSelectedTemplateId(e.target.value)}
-                            className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-amber-500 outline-none"
-                          >
-                            <option value="">Select a template...</option>
-                            {docTemplates.map(tmpl => (
-                              <option key={tmpl.id} value={tmpl.id}>{tmpl.name}</option>
-                            ))}
-                          </select>
-                        </div>
-                        <button
-                          onClick={generateDocument}
-                          disabled={!selectedTemplateId || isGenerating || items.length === 0}
-                          className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed font-semibold transition-all flex items-center gap-2 shadow-lg"
+            {/* INSTALLER ALLOCATION */}
+            <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-lg">
+                <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-4 flex items-center gap-2">
+                   <CheckSquare size={16} className="text-emerald-500" />
+                   Quote Status & Installer Allocation
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 block">Quote Status</label>
+                        <select
+                            value={quoteStatus}
+                            onChange={(e) => setQuoteStatus(e.target.value as 'draft' | 'sent' | 'won')}
+                            className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 outline-none"
                         >
-                          {isGenerating ? (
-                            <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />Generating...</>
-                          ) : (
-                            <><FileText size={18} />Generate</>
-                          )}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Combined documents list */}
-                  {(sessionDocs.length > 0 || quotePersistedDocs.length > 0 || uniqueCompanyDocs.length > 0) ? (
-                    <div className="space-y-2">
-                      {/* session (blob) docs */}
-                      {sessionDocs.map(doc => (
-                        <div key={doc.id} className="flex items-center justify-between p-3 bg-slate-700/30 border border-slate-600 rounded-lg hover:bg-slate-700/50 transition-colors">
-                          <div className="flex-1 min-w-0">
-                            <p className="text-white font-semibold text-sm truncate">{doc.name}</p>
-                            <p className="text-xs text-slate-400 mt-1">{doc.date.toLocaleString('ro-RO')} • {(doc.blob.size / 1024).toFixed(1)} KB</p>
-                          </div>
-                          <div className="flex items-center gap-2 ml-4">
-                            <button
-                              onClick={async () => {
-                                const reader = new FileReader();
-                                reader.onloadend = () => setPreviewDoc({ name: doc.name, url: reader.result as string, date: doc.date });
-                                reader.readAsDataURL(doc.blob);
-                              }}
-                              className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
-                            ><Eye size={14} />Preview</button>
-                            <button
-                              onClick={async () => {
-                                const FileSaverModule = await import('file-saver');
-                                const saveAs = (FileSaverModule as any).saveAs || (FileSaverModule as any).default?.saveAs;
-                                saveAs(doc.blob, doc.name);
-                              }}
-                              className="px-3 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
-                            ><Download size={14} />Download</button>
-                            <button
-                              onClick={() => { if (confirm(`Delete "${doc.name}"?`)) setGeneratedDocuments(prev => prev.filter(d => d.id !== doc.id)); }}
-                              className="p-2 text-red-500 hover:text-red-400 hover:bg-slate-600 rounded transition-colors"
-                            ><Trash2 size={16} /></button>
-                          </div>
-                        </div>
-                      ))}
-                      {/* persisted firebase docs */}
-                      {quotePersistedDocs.filter((doc: any) => !sessionDocs.some(sd => sd.id === doc.id)).map((doc: any) => (
-                        <div key={doc.id} className="flex items-center justify-between p-3 bg-slate-700/30 border border-slate-600 rounded-lg hover:bg-slate-700/50 transition-colors">
-                          <div className="flex-1 min-w-0">
-                            <p className="text-white font-semibold text-sm truncate">{doc.name}</p>
-                            <p className="text-xs text-slate-400 mt-1">
-                              {doc.date ? new Date(doc.date).toLocaleString('ro-RO') : ''}{doc.generatedBy && ` • by ${doc.generatedBy}`}
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-2 ml-4">
-                            <button onClick={() => setPreviewDoc({ name: doc.name, url: doc.url, date: doc.date })}
-                              className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
-                            ><Eye size={14} />Preview</button>
-                            <a href={doc.url} download={doc.name} target="_blank" rel="noreferrer"
-                              className="px-3 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
-                            ><Download size={14} />Download</a>
-                          </div>
-                        </div>
-                      ))}
-                      {/* company docs */}
-                      {uniqueCompanyDocs.map((doc: any) => (
-                        <div key={doc.id} className="flex items-center justify-between p-3 bg-slate-700/30 border border-slate-600 rounded-lg hover:bg-slate-700/50 transition-colors">
-                          <div className="flex-1 min-w-0">
-                            <p className="text-white font-semibold text-sm truncate">{doc.name}</p>
-                            <p className="text-xs text-slate-400 mt-1">{doc.date ? new Date(doc.date).toLocaleString('ro-RO') : ''}</p>
-                          </div>
-                          <div className="flex items-center gap-2 ml-4">
-                            <button onClick={() => setPreviewDoc({ name: doc.name, url: doc.url, description: doc.description, date: doc.date })}
-                              className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
-                            ><Eye size={14} />Preview</button>
-                            <a href={doc.url} download={doc.name}
-                              className="px-3 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
-                            ><Download size={14} />Download</a>
-                            {onDeleteDocument && (
-                              <button onClick={() => { if (confirm(`Delete "${doc.name}"?`)) onDeleteDocument(doc.id); }}
-                                className="p-2 text-red-500 hover:text-red-400 hover:bg-slate-600 rounded transition-colors"
-                              ><Trash2 size={16} /></button>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="text-center py-10 text-slate-500">
-                      <FileText size={36} className="mx-auto mb-3 opacity-30" />
-                      <p className="text-sm">No documents yet. Select a template above and click Generate.</p>
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
-
-            {/* ─── Quote Won / Outcome Section (only when a quote is loaded) ─── */}
-            {currentQuoteId && (() => {
-              const loadedQuote = savedQuotes.find(q => q.id === currentQuoteId);
-              const qs = loadedQuote?.quoteStatus;
-              const isWon = qs === 'won_unallocated' || qs === 'won_allocated';
-
-              return (
-                <div className="bg-slate-800 rounded-xl border border-slate-700 p-6 shadow-lg">
-                  <h3 className="text-lg font-bold text-white flex items-center gap-2 mb-5">
-                    <Award size={20} className="text-amber-400" />
-                    Quote Outcome
-                  </h3>
-
-                  {!isWon ? (
-                    <div className="space-y-4">
-                      <div className={`flex items-center gap-3 p-3 rounded-lg border ${
-                        qs === 'sent' ? 'bg-blue-500/10 border-blue-500/30' : 'bg-slate-900/50 border-slate-700'
-                      }`}>
-                        {qs === 'sent' ? (
-                          <><SendHorizonal size={18} className="text-blue-400 shrink-0" />
-                          <div>
-                            <p className="text-sm font-semibold text-blue-300">Quote Sent</p>
-                            {loadedQuote?.emailSentAt && (
-                              <p className="text-xs text-slate-400 mt-0.5">
-                                Sent to {loadedQuote.emailSentTo} on {new Date(loadedQuote.emailSentAt).toLocaleDateString('ro-RO')}
-                              </p>
-                            )}
-                          </div></>
-                        ) : (
-                          <><FileText size={18} className="text-slate-500 shrink-0" />
-                          <p className="text-sm text-slate-400">Draft — not yet sent to client</p></>
+                            <option value="draft">Draft</option>
+                            <option value="sent">Sent to Client</option>
+                            <option value="won">Won - Allocate Installer</option>
+                        </select>
+                        {quoteStatus === 'won' && (
+                          <p className="text-xs text-emerald-400 mt-2">✓ This quote will be marked as won and can be allocated to an installer</p>
                         )}
-                      </div>
-                      <button
-                        onClick={handleMarkQuoteWon}
-                        className="w-full px-6 py-4 bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 text-slate-900 font-extrabold rounded-xl transition-all flex items-center justify-center gap-3 shadow-lg text-lg"
-                      >
-                        <Award size={24} />
-                        Quote Won!
-                      </button>
                     </div>
-                  ) : (
-                    <div className="space-y-5">
-                      <div className="flex items-center gap-4 p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-xl">
-                        <div className="p-2 bg-amber-500/20 rounded-lg">
-                          <Award size={28} className="text-amber-400" />
-                        </div>
-                        <div>
-                          <p className="text-lg font-extrabold text-emerald-300">Quote WON!</p>
-                          {qs === 'won_unallocated' ? (
-                            <p className="text-sm text-slate-400 mt-0.5">Not yet allocated to an installer</p>
-                          ) : (
-                            <p className="text-sm text-slate-400 mt-0.5">
-                              Allocated to: <span className="font-bold text-emerald-400">
-                                {loadedQuote?.assignedInstallers?.map(i => i.installerNickname).join(', ')}
-                              </span>
-                            </p>
-                          )}
-                        </div>
-                      </div>
-
+                    {quoteStatus === 'won' && (
                       <div>
-                        <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-                          <Users size={14} />
-                          {qs === 'won_allocated' ? 'Update Installer Allocation' : 'Allocate to Installer'}
-                        </p>
-                        {installerUsers.length === 0 ? (
-                          <p className="text-sm text-slate-500 italic">No installers found. Add users with INSTALLER role in Settings.</p>
-                        ) : (
-                          <div className="space-y-2 mb-4">
-                            {installerUsers.map(u => {
-                              const checked = pendingInstallerIds.includes(u.id);
-                              return (
-                                <label key={u.id} className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-                                  checked
-                                    ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-300'
-                                    : 'bg-slate-900/50 border-slate-700 text-slate-300 hover:border-slate-500'
-                                }`}>
-                                  <input
-                                    type="checkbox"
-                                    checked={checked}
-                                    onChange={() => setPendingInstallerIds(prev =>
-                                      checked ? prev.filter(id => id !== u.id) : [...prev, u.id]
-                                    )}
-                                    className="w-4 h-4 rounded border-slate-600 bg-slate-900 text-emerald-500 focus:ring-emerald-500"
-                                  />
-                                  <span className="font-semibold text-sm">{u.nickname}</span>
-                                  <span className="text-xs text-slate-500 ml-auto">{u.username}</span>
-                                </label>
-                              );
-                            })}
-                          </div>
-                        )}
-                        <button
-                          onClick={handleAllocateInstallers}
-                          disabled={pendingInstallerIds.length === 0}
-                          className="w-full px-6 py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-bold rounded-xl transition-colors flex items-center justify-center gap-2"
-                        >
-                          <Users size={18} />
-                          {qs === 'won_allocated' ? 'Update Allocation' : 'Confirm Allocation'}
-                        </button>
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 block">Assign Installer</label>
+                          <input
+                              type="text"
+                              value={allocatedInstallerId}
+                              onChange={(e) => setAllocatedInstallerId(e.target.value)}
+                              placeholder="Enter installer name or ID..."
+                              className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                          />
+                          {allocatedInstallerId && (
+                            <p className="text-xs text-emerald-400 mt-2">✓ Will be allocated to: <strong>{allocatedInstallerId}</strong></p>
+                          )}
                       </div>
-                    </div>
-                  )}
+                    )}
                 </div>
-              );
-            })()}
+            </div>
+
+            {/* DOCUMENT GENERATION */}
+            {docTemplates && docTemplates.length > 0 && (
+                <div className="bg-slate-800 rounded-xl border border-slate-700 p-6 shadow-lg">
+                    <div className="flex items-center gap-4">
+                        <div className="flex-1">
+                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">
+                                <FileText className="inline-block mr-2" size={14} />
+                                Document Template
+                            </label>
+                            <select
+                                value={selectedTemplateId}
+                                onChange={(e) => setSelectedTemplateId(e.target.value)}
+                                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-amber-500 outline-none"
+                            >
+                                <option value="">Select a template...</option>
+                                {docTemplates.map(tmpl => (
+                                    <option key={tmpl.id} value={tmpl.id}>{tmpl.name}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div className="pt-7">
+                            <button
+                                onClick={generateDocument}
+                                disabled={!selectedTemplateId || isGenerating || items.length === 0}
+                                className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed font-semibold transition-all flex items-center gap-2 shadow-lg hover:shadow-xl"
+                            >
+                                {isGenerating ? (
+                                    <>
+                                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                        Generating...
+                                    </>
+                                ) : (
+                                    <>
+                                        <FileText size={18} />
+                                        Generate Document
+                                    </>
+                                )}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* DOCUMENTS FOR CURRENT QUOTE */}
+            {currentQuoteId && (
+              generatedDocuments.some(d => d.quoteId === currentQuoteId) ||
+              companyDocuments.some((d: any) => d.quoteId === currentQuoteId)
+            ) && (
+                <div className="bg-slate-800 rounded-xl border border-slate-700 p-6 shadow-lg">
+                    <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                        <FileText size={20} className="text-green-500" />
+                        Documents for this Quote
+                    </h3>
+                    <div className="space-y-2">
+                        {/* Session documents linked to this quote */}
+                        {generatedDocuments.filter(doc => doc.quoteId === currentQuoteId).map(doc => (
+                            <div key={doc.id} className="flex items-center justify-between p-3 bg-slate-700/30 border border-slate-600 rounded-lg hover:bg-slate-700/50 transition-colors">
+                                <div className="flex-1 min-w-0">
+                                    <p className="text-white font-semibold text-sm truncate">{doc.name}</p>
+                                    <p className="text-xs text-slate-400 mt-1">
+                                        {doc.date.toLocaleString('ro-RO')} • {(doc.blob.size / 1024).toFixed(1)} KB
+                                    </p>
+                                </div>
+                                <div className="flex items-center gap-2 ml-4">
+                                    <button
+                                        onClick={async () => {
+                                            const reader = new FileReader();
+                                            reader.onloadend = () => {
+                                              setPreviewDoc({ name: doc.name, url: reader.result as string, date: doc.date });
+                                            };
+                                            reader.readAsDataURL(doc.blob);
+                                        }}
+                                        className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
+                                    >
+                                        <FileText size={14} />
+                                        Preview
+                                    </button>
+                                    <button
+                                        onClick={async () => {
+                                            const FileSaverModule = await import('file-saver');
+                                            const saveAs = (FileSaverModule as any).saveAs || (FileSaverModule as any).default?.saveAs;
+                                            saveAs(doc.blob, doc.name);
+                                        }}
+                                        className="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
+                                    >
+                                        <Download size={14} />
+                                        Download
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            if (confirm(`Delete "${doc.name}"?`)) {
+                                                setGeneratedDocuments(prev => prev.filter(d => d.id !== doc.id));
+                                            }
+                                        }}
+                                        className="p-2 text-red-500 hover:text-red-400 hover:bg-slate-600 rounded transition-colors"
+                                    >
+                                        <Trash2 size={16} />
+                                    </button>
+                                </div>
+                            </div>
+                        ))}
+
+                        {/* Persisted documents for this quote */}
+                        {companyDocuments.filter((doc: any) => doc.quoteId === currentQuoteId).map((doc: any) => (
+                            <div key={doc.id} className="flex items-center justify-between p-3 bg-slate-700/30 border border-slate-600 rounded-lg hover:bg-slate-700/50 transition-colors">
+                                <div className="flex-1 min-w-0">
+                                    <p className="text-white font-semibold text-sm truncate">{doc.name}</p>
+                                    <p className="text-xs text-slate-400 mt-1">
+                                        {doc.date ? new Date(doc.date).toLocaleString('ro-RO') : ''}
+                                    </p>
+                                </div>
+                                <div className="flex items-center gap-2 ml-4">
+                                    <button
+                                        onClick={() => setPreviewDoc({ name: doc.name, url: doc.url, description: doc.description, date: doc.date })}
+                                        className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
+                                    >
+                                        <FileText size={14} />
+                                        Preview
+                                    </button>
+                                    <a
+                                        href={doc.url}
+                                        download={doc.name}
+                                        className="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
+                                    >
+                                        <Download size={14} />
+                                        Download
+                                    </a>
+                                    {onDeleteDocument && (
+                                      <button
+                                        onClick={() => {
+                                          if (confirm(`Delete "${doc.name}"?`)) {
+                                            onDeleteDocument(doc.id);
+                                          }
+                                        }}
+                                        className="p-2 text-red-500 hover:text-red-400 hover:bg-slate-600 rounded transition-colors"
+                                      >
+                                        <Trash2 size={16} />
+                                      </button>
+                                    )}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
 
             {/* SECTION 2: QUOTE EDITOR */}
             <div className="bg-slate-800 rounded-xl border border-slate-700 flex flex-col min-h-[500px] shadow-lg overflow-hidden">
@@ -1103,6 +1037,23 @@ export const QuoteGenerator: React.FC<QuoteGeneratorProps> = ({ inventory, clien
                   {/* Totals Footer */}
                   <div className="bg-slate-900 p-6 border-t border-slate-700 flex justify-end">
                     <div className="w-full max-w-xs space-y-2">
+                      <div className="flex justify-between items-center text-sm text-slate-400 mb-3">
+                        <span className="text-xs uppercase tracking-wider">Currency</span>
+                        <div className="flex rounded-lg overflow-hidden border border-slate-600">
+                          <button
+                            onClick={() => setCurrency('RON')}
+                            className={`px-3 py-1 text-xs font-bold transition-colors ${
+                              currency === 'RON' ? 'bg-amber-500 text-slate-900' : 'bg-slate-800 text-slate-400 hover:text-white'
+                            }`}
+                          >RON</button>
+                          <button
+                            onClick={() => setCurrency('EUR')}
+                            className={`px-3 py-1 text-xs font-bold transition-colors ${
+                              currency === 'EUR' ? 'bg-amber-500 text-slate-900' : 'bg-slate-800 text-slate-400 hover:text-white'
+                            }`}
+                          >EUR</button>
+                        </div>
+                      </div>
                       <div className="flex justify-between text-sm text-slate-400">
                         <span>Subtotal Net</span>
                         <span className="font-medium text-white">{formatCurrency(calculateTotals.subtotalNet)}</span>

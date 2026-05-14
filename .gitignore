@@ -25,6 +25,9 @@ out
 .turbo
 tsconfig.tsbuildinfo
 
+# Uploaded files
+public/uploads
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

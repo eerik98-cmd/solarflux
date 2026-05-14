@@ -296,6 +296,51 @@ export default function InstallerClientDetailPage() {
     }
   }, [isInitialized]);
 
+  const currentEntrySummary = useMemo(() => {
+    if (!selectedProject) {
+      return {
+        mainRows: [] as Array<{ row: EnhancedQuoteItem; matchedQuoteItem: { id: string; description: string; quantity: number; unit: string; netPrice: number; inventoryItemId?: string } }>,
+        extraRows: [] as EnhancedQuoteItem[],
+        mainRowsTotal: 0,
+        extraRowsTotal: 0,
+        quotedRowsTotal: 0,
+        totalVariance: 0,
+      };
+    }
+
+    const meaningfulRows = equipmentData.filter(isMeaningfulTrackingRow);
+    const mainRows: Array<{ row: EnhancedQuoteItem; matchedQuoteItem: { id: string; description: string; quantity: number; unit: string; netPrice: number; inventoryItemId?: string } }> = [];
+    const extraRows: EnhancedQuoteItem[] = [];
+
+    meaningfulRows.forEach((row) => {
+      const matchedQuoteItem = findMatchingQuoteLineItem(selectedProject, row);
+      if (matchedQuoteItem) {
+        mainRows.push({ row, matchedQuoteItem });
+      } else {
+        extraRows.push(row);
+      }
+    });
+
+    const mainRowsTotal = mainRows.reduce(
+      (sum, item) => sum + ((item.row.actuallyUsed || 0) * (item.row.netPrice || item.matchedQuoteItem.netPrice || 0)),
+      0
+    );
+    const quotedRowsTotal = mainRows.reduce(
+      (sum, item) => sum + ((item.row.actuallyUsed || 0) * item.matchedQuoteItem.netPrice),
+      0
+    );
+    const extraRowsTotal = extraRows.reduce((sum, item) => sum + ((item.actuallyUsed || 0) * (item.netPrice || 0)), 0);
+
+    return {
+      mainRows,
+      extraRows,
+      mainRowsTotal,
+      extraRowsTotal,
+      quotedRowsTotal,
+      totalVariance: (mainRowsTotal - quotedRowsTotal) + extraRowsTotal,
+    };
+  }, [equipmentData, selectedProject]);
+
   if (!client) {
     return (
       <div className="h-full flex items-center justify-center bg-slate-900">
@@ -753,51 +798,6 @@ export default function InstallerClientDetailPage() {
       setScannerError('Could not access camera. Please allow camera permission or enter serial manually.');
     }
   };
-
-  const currentEntrySummary = useMemo(() => {
-    if (!selectedProject) {
-      return {
-        mainRows: [] as Array<{ row: EnhancedQuoteItem; matchedQuoteItem: { id: string; description: string; quantity: number; unit: string; netPrice: number; inventoryItemId?: string } }>,
-        extraRows: [] as EnhancedQuoteItem[],
-        mainRowsTotal: 0,
-        extraRowsTotal: 0,
-        quotedRowsTotal: 0,
-        totalVariance: 0,
-      };
-    }
-
-    const meaningfulRows = equipmentData.filter(isMeaningfulTrackingRow);
-    const mainRows: Array<{ row: EnhancedQuoteItem; matchedQuoteItem: { id: string; description: string; quantity: number; unit: string; netPrice: number; inventoryItemId?: string } }> = [];
-    const extraRows: EnhancedQuoteItem[] = [];
-
-    meaningfulRows.forEach((row) => {
-      const matchedQuoteItem = findMatchingQuoteLineItem(selectedProject, row);
-      if (matchedQuoteItem) {
-        mainRows.push({ row, matchedQuoteItem });
-      } else {
-        extraRows.push(row);
-      }
-    });
-
-    const mainRowsTotal = mainRows.reduce(
-      (sum, item) => sum + ((item.row.actuallyUsed || 0) * (item.row.netPrice || item.matchedQuoteItem.netPrice || 0)),
-      0
-    );
-    const quotedRowsTotal = mainRows.reduce(
-      (sum, item) => sum + ((item.row.actuallyUsed || 0) * item.matchedQuoteItem.netPrice),
-      0
-    );
-    const extraRowsTotal = extraRows.reduce((sum, item) => sum + ((item.actuallyUsed || 0) * (item.netPrice || 0)), 0);
-
-    return {
-      mainRows,
-      extraRows,
-      mainRowsTotal,
-      extraRowsTotal,
-      quotedRowsTotal,
-      totalVariance: (mainRowsTotal - quotedRowsTotal) + extraRowsTotal,
-    };
-  }, [equipmentData, selectedProject]);
 
   const persistTrackingEntry = async ({
     status,
@@ -2265,17 +2265,18 @@ export default function InstallerClientDetailPage() {
                 </button>
               </div>
               <div className="flex-1 overflow-auto p-4 bg-slate-900">
-                {previewDoc.url.startsWith('data:image') ? (
+                {previewDoc.url.startsWith('data:image') || previewDoc.url.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? (
                   <img
                     src={previewDoc.url}
                     alt={previewDoc.name}
                     className="max-w-full h-auto mx-auto"
                   />
-                ) : previewDoc.url.startsWith('data:application/pdf') ? (
+                ) : previewDoc.url.startsWith('data:application/pdf') || previewDoc.url.toLowerCase().includes('.pdf') ? (
                   <iframe
-                    src={previewDoc.url}
+                    src={previewDoc.url.startsWith('data:') ? previewDoc.url : `${previewDoc.url}#toolbar=0&navpanes=0&scrollbar=1`}
                     className="w-full h-full min-h-[600px]"
                     title={previewDoc.name}
+                    style={{ border: 'none' }}
                   />
                 ) : (
                   <div className="text-center py-12">

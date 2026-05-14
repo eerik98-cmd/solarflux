@@ -1,24 +1,20 @@
 'use client';
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
-import { FileText, Save, Zap, Package, Info, Plus, Trash2, ChevronDown, ChevronUp, Download, Eye, Sparkles, Users, X, FolderOpen, CheckCircle, AlertCircle, CheckSquare, Square, Mail, Trophy, Award, SendHorizonal, RotateCcw } from 'lucide-react';
+import { FileText, Save, Zap, Package, Info, Plus, Trash2, ChevronDown, ChevronUp, Download, Eye, Sparkles, Users, X, FolderOpen, CheckCircle, AlertCircle, CheckSquare, Square, Mail } from 'lucide-react';
 import { useClient } from '@/contexts/ClientContext';
 import { useData } from '@/contexts/DataContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { Quote, QuoteLineItem, Category, ClientNeed, EmailTemplate, SmtpSettings } from '@/types';
 import { DocumentPreview } from '@/components/DocumentPreview';
 import EmailPreviewModal from '@/components/EmailPreviewModal';
-import { storage } from '@/services/firebase';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { StorageService } from '@/services/storageService';
 import { replaceEmailVariables, getCommonTemplateData } from '@/lib/emailTemplateUtils';
 
 export default function ClientQuotesPage() {
   const { client } = useClient();
-  const { inventory, savedQuotes, saveQuote, deleteQuote, docTemplates, companyDocuments, users } = useData();
+  const { inventory, savedQuotes, saveQuote, deleteQuote, docTemplates } = useData();
   const { currentUser } = useAuth();
-  const router = useRouter();
   
   const [quoteProjectName, setQuoteProjectName] = useState('');
   const [quoteItems, setQuoteItems] = useState<QuoteLineItem[]>([]);
@@ -27,7 +23,9 @@ export default function ClientQuotesPage() {
   const [selectedProjectForQuote, setSelectedProjectForQuote] = useState<string>('current');
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
   const [previewDoc, setPreviewDoc] = useState<{id?: string, name: string, url: string, description?: string, date?: Date} | null>(null);
-
+  const [offerSent, setOfferSent] = useState(false);
+  const [quoteWon, setQuoteWon] = useState(false);
+  const [allocatedInstallerId, setAllocatedInstallerId] = useState<string | null>(null);
   const [expandedQuotes, setExpandedQuotes] = useState<Set<string>>(new Set());
   const [notification, setNotification] = useState<{message: string; type: 'success' | 'error' | 'info'} | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<{message: string; onConfirm: () => void} | null>(null);
@@ -94,10 +92,6 @@ export default function ClientQuotesPage() {
   // Get current quote's generated documents
   const currentQuote = editingQuoteId ? clientQuotes.find(q => q.id === editingQuoteId) : null;
   const generatedDocuments = currentQuote?.generatedDocuments || [];
-  // Also include documents saved to companyDocuments for this quote (generated from quote-generator page)
-  const companyDocsForQuote = editingQuoteId
-    ? (companyDocuments as any[]).filter(d => d.quoteId === editingQuoteId)
-    : [];
   
   const showNotification = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
     setNotification({ message, type });
@@ -154,11 +148,12 @@ export default function ClientQuotesPage() {
     return null;
   }, [client, selectedProjectForQuote]);
 
-  if (!client) return null;
-
   const buildQuoteSnapshot = (payload: {
     title: string;
     items: QuoteLineItem[];
+    quoteWon: boolean;
+    offerSent: boolean;
+    allocatedInstallerId: string | null;
     editingQuoteId: string | null;
   }) => JSON.stringify(payload);
 
@@ -167,6 +162,9 @@ export default function ClientQuotesPage() {
     buildQuoteSnapshot({
       title: quoteProjectName,
       items: quoteItems,
+      quoteWon,
+      offerSent,
+      allocatedInstallerId,
       editingQuoteId,
     }) !== quoteBaselineSnapshot;
 
@@ -200,16 +198,24 @@ export default function ClientQuotesPage() {
     };
   }, [hasUnsavedQuoteChanges]);
 
+  if (!client) return null;
+
   const startNewQuote = () => {
     const initialQuoteName = client?.needs?.projectName || '';
     setQuoteItems([]);
     setQuoteProjectName(initialQuoteName);
     setEditingQuoteId(null);
     setSelectedProjectForQuote('current');
+    setOfferSent(false);
+    setQuoteWon(false);
+    setAllocatedInstallerId(null);
     setQuoteBaselineSnapshot(
       buildQuoteSnapshot({
         title: initialQuoteName,
         items: [],
+        quoteWon: false,
+        offerSent: false,
+        allocatedInstallerId: null,
         editingQuoteId: null,
       })
     );
@@ -238,10 +244,16 @@ export default function ClientQuotesPage() {
     setQuoteProjectName(loadedTitle);
     setQuoteItems(normalizedItems);
     setEditingQuoteId(quote.id);
+    setOfferSent(false); // Reset these since they're not in Quote type yet
+    setQuoteWon(false);
+    setAllocatedInstallerId(quote.allocatedInstallerId || null);
     setQuoteBaselineSnapshot(
       buildQuoteSnapshot({
         title: loadedTitle,
         items: normalizedItems,
+        quoteWon: false,
+        offerSent: false,
+        allocatedInstallerId: quote.allocatedInstallerId || null,
         editingQuoteId: quote.id,
       })
     );
@@ -260,6 +272,9 @@ export default function ClientQuotesPage() {
     setQuoteProjectName('');
     setEditingQuoteId(null);
     setSelectedProjectForQuote('current');
+    setOfferSent(false);
+    setQuoteWon(false);
+    setAllocatedInstallerId(null);
   };
 
   const handleExitWithoutSavingQuote = () => {
@@ -271,6 +286,9 @@ export default function ClientQuotesPage() {
     setQuoteProjectName('');
     setEditingQuoteId(null);
     setSelectedProjectForQuote('current');
+    setOfferSent(false);
+    setQuoteWon(false);
+    setAllocatedInstallerId(null);
     if (target) {
       window.location.assign(target);
     }
@@ -287,15 +305,18 @@ export default function ClientQuotesPage() {
     setQuoteProjectName('');
     setEditingQuoteId(null);
     setSelectedProjectForQuote('current');
+    setOfferSent(false);
+    setQuoteWon(false);
+    setAllocatedInstallerId(null);
     if (target) {
       window.location.assign(target);
     }
   };
 
-  const saveClientQuote = (forceNewVersion?: boolean, forceOverwrite?: boolean): string | false => {
+  const saveClientQuote = (forceNewVersion?: boolean, forceOverwrite?: boolean): boolean => {
     if (!quoteProjectName.trim()) { 
       showNotification("Please enter a quote name", 'error');
-      return false;
+      return false; 
     }
     
     // If editing an existing quote and we haven't been told what to do, ask
@@ -325,8 +346,7 @@ export default function ClientQuotesPage() {
       targetId = existingByName ? existingByName.id : Date.now().toString();
     }
     
-    // Preserve existing status/allocation when saving line items
-    const existingQuoteData = clientQuotes.find(q => q.id === targetId);
+    // Prepare the quote object with installer allocation if quote is won
     const newQuote: Quote = { 
       id: targetId, 
       clientId: client.id, 
@@ -335,17 +355,11 @@ export default function ClientQuotesPage() {
       date: new Date(), 
       items: [...quoteItems], 
       ...quoteTotals,
-      // Preserve existing status/allocation fields
-      ...(existingQuoteData ? {
-        quoteStatus: existingQuoteData.quoteStatus,
-        assignedInstallers: existingQuoteData.assignedInstallers,
-        allocatedInstallerId: existingQuoteData.allocatedInstallerId,
-        allocatedAt: existingQuoteData.allocatedAt,
-        phase: existingQuoteData.phase,
-        generatedDocuments: existingQuoteData.generatedDocuments,
-        emailSentAt: existingQuoteData.emailSentAt,
-        emailSentTo: existingQuoteData.emailSentTo,
-        emailSentBy: existingQuoteData.emailSentBy,
+      // Include installer allocation if quote won and installer selected
+      ...(quoteWon && allocatedInstallerId ? {
+        allocatedInstallerId,
+        allocatedAt: new Date(),
+        phase: 'in-progress'
       } : {})
     };
     
@@ -356,11 +370,14 @@ export default function ClientQuotesPage() {
       buildQuoteSnapshot({
         title: finalName,
         items: [...quoteItems],
+        quoteWon,
+        offerSent,
+        allocatedInstallerId,
         editingQuoteId: targetId,
       })
     );
-    showNotification('Quote saved successfully', 'success');
-    return targetId;
+    showNotification('Quote saved successfully' + (allocatedInstallerId ? ` - Allocated to installer` : ''), 'success');
+    return true;
   };
 
   const handleAddQuoteLine = () => {
@@ -372,28 +389,6 @@ export default function ClientQuotesPage() {
       netPrice: 0 
     };
     setQuoteItems([...quoteItems, newItem]);
-  };
-
-  // Quote status handlers — save directly to Firestore via saveQuote
-  const handleMarkQuoteWon = () => {
-    if (!currentQuote) return;
-    const updatedQuote: Quote = { ...currentQuote, quoteStatus: 'won_unallocated' };
-    saveQuote(updatedQuote);
-    showNotification('Quote marked as WON! Allocate it to an installer below.', 'success');
-  };
-
-  const handleUnmarkQuoteWon = () => {
-    if (!currentQuote) return;
-    const updatedQuote: Quote = {
-      ...currentQuote,
-      quoteStatus: currentQuote.emailSentAt ? 'sent' : 'draft',
-      assignedInstallers: [],
-      allocatedInstallerId: undefined,
-      allocatedAt: undefined,
-      phase: undefined,
-    };
-    saveQuote(updatedQuote);
-    showNotification('Quote status reset to ' + (currentQuote.emailSentAt ? 'Sent' : 'Draft') + '.', 'info');
   };
 
   const updateQuoteLine = (id: string, field: keyof QuoteLineItem, value: string | number | string[]) => {
@@ -661,17 +656,9 @@ export default function ClientQuotesPage() {
   };
 
   const generateDocumentFromTemplate = async () => {
-    if (!selectedTemplateId) {
-      showNotification('Please select a template', 'error');
+    if (!selectedTemplateId || !editingQuoteId) {
+      showNotification('Please select a template and save the quote first', 'error');
       return;
-    }
-
-    // Auto-save the quote if it hasn't been saved yet
-    let quoteId = editingQuoteId;
-    if (!quoteId) {
-      const savedId = saveClientQuote(false, true);
-      if (!savedId) return; // saveClientQuote shows its own error
-      quoteId = savedId;
     }
 
     const template = docTemplates?.find(t => t.id === selectedTemplateId);
@@ -770,45 +757,43 @@ export default function ClientQuotesPage() {
       });
 
       const fileName = `Quote - ${quoteProjectName || client?.name} - ${new Date().toLocaleDateString('ro-RO').replace(/\//g, '-')}.docx`;
-      
-      // Upload to Firebase Storage
-      if (!storage) {
-        throw new Error('Firebase Storage not initialized');
-      }
 
       const timestamp = Date.now();
-      const storagePath = `quotes/${quoteId}/documents/${timestamp}_${fileName}`;
-      const storageRef = ref(storage, storagePath);
-      
-      showNotification('Uploading document...', 'info');
-      await uploadBytes(storageRef, out);
-      const downloadURL = await getDownloadURL(storageRef);
+      const downloadURL = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const result = reader.result;
+          if (typeof result === 'string') {
+            resolve(result);
+            return;
+          }
+          reject(new Error('Failed to encode generated document'));
+        };
+        reader.onerror = () => reject(new Error('Failed to read generated document blob'));
+        reader.readAsDataURL(out);
+      });
 
-      const newDoc = {
-        id: timestamp.toString(),
-        name: fileName,
-        url: downloadURL,
-        date: new Date(),
-        generatedBy: currentUser?.username || 'Unknown'
-      };
-
-      // Update quote with new document (stored in quote.generatedDocuments)
-      const existingQuote = clientQuotes.find(q => q.id === quoteId);
+      // Update quote with new document
+      const existingQuote = clientQuotes.find(q => q.id === editingQuoteId);
       if (existingQuote) {
+        const updatedDocuments = [
+          ...(existingQuote.generatedDocuments || []),
+          {
+            id: timestamp.toString(),
+            name: fileName,
+            url: downloadURL,
+            date: new Date(),
+            generatedBy: currentUser?.username || 'Unknown'
+          }
+        ];
+
         const updatedQuote: Quote = {
           ...existingQuote,
-          generatedDocuments: [...(existingQuote.generatedDocuments || []), newDoc]
+          generatedDocuments: updatedDocuments
         };
+
         saveQuote(updatedQuote);
       }
-
-      // Also save to companyDocuments for cross-listing in quote-generator
-      await StorageService.saveItem('companyDocuments', {
-        ...newDoc,
-        quoteId,
-        clientId: client.id,
-        description: `Quote document for ${client.name}`
-      });
 
       setIsGenerating(false);
       showNotification('Document generated and saved successfully!', 'success');
@@ -904,7 +889,7 @@ export default function ClientQuotesPage() {
     setShowEmailPreview(false);
 
     try {
-      // Fetch the document from Firebase Storage URL
+      // Fetch the document URL (data URL or remote URL)
       showNotification('Downloading document...', 'info');
       const response = await fetch(doc.url);
       if (!response.ok) {
@@ -979,52 +964,6 @@ export default function ClientQuotesPage() {
       }
 
       showNotification(`Email sent successfully to ${emailData.to}`, 'success');
-
-      // Save PDF to generatedDocuments and update emailHistory
-      if (editingQuoteId) {
-        const existingQuote = clientQuotes.find(q => q.id === editingQuoteId);
-        if (existingQuote) {
-          // If DOCX was converted to PDF, upload the PDF and add to generatedDocuments
-          let savedPdfDoc = (existingQuote.generatedDocuments || []).find(d => d.name === pdfFileName);
-          if (!isPdf && !savedPdfDoc && storage) {
-            try {
-              const binaryStr = atob(pdfBase64);
-              const bytes = new Uint8Array(binaryStr.length);
-              for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
-              const pdfBlob = new Blob([bytes], { type: 'application/pdf' });
-              const newDocId = Date.now().toString();
-              const pdfRef = ref(storage, `quotes/${editingQuoteId}/documents/${newDocId}_${pdfFileName}`);
-              await uploadBytes(pdfRef, pdfBlob);
-              const pdfUrl = await getDownloadURL(pdfRef);
-              savedPdfDoc = { id: newDocId, name: pdfFileName, url: pdfUrl, date: new Date(), generatedBy: currentUser?.username || 'Unknown' };
-            } catch (uploadErr) {
-              console.error('Failed to save converted PDF to docs:', uploadErr);
-            }
-          }
-
-          const sentEntry = {
-            sentAt: new Date(),
-            sentTo: emailData.to,
-            sentBy: currentUser?.username || '',
-            documentName: pdfFileName,
-            documentId: savedPdfDoc ? savedPdfDoc.id : doc.id,
-          };
-          const updatedDocs = savedPdfDoc && !(existingQuote.generatedDocuments || []).some(d => d.id === savedPdfDoc!.id)
-            ? [...(existingQuote.generatedDocuments || []), savedPdfDoc]
-            : existingQuote.generatedDocuments;
-
-          const updatedQuote: Quote = {
-            ...existingQuote,
-            quoteStatus: existingQuote.quoteStatus?.startsWith('won') ? existingQuote.quoteStatus : 'sent',
-            emailSentAt: new Date(),
-            emailSentTo: emailData.to,
-            emailSentBy: currentUser?.username,
-            emailHistory: [...(existingQuote.emailHistory || []), sentEntry],
-            generatedDocuments: updatedDocs,
-          };
-          saveQuote(updatedQuote);
-        }
-      }
 
     } catch (error) {
       console.error('Email sending error:', error);
@@ -1190,7 +1129,7 @@ export default function ClientQuotesPage() {
                           {isExpanded ? <ChevronUp size={16} className="text-white" /> : <ChevronDown size={16} className="text-white" />}
                         </div>
                         <div className="flex-1">
-                          <div className="flex items-center gap-2 flex-wrap">
+                          <div className="flex items-center gap-2">
                             <p className={`font-bold text-sm ${isCurrent ? 'text-emerald-400' : 'text-white'}`}>
                               {quote.title}
                             </p>
@@ -1199,17 +1138,6 @@ export default function ClientQuotesPage() {
                                 <CheckCircle size={12} /> EDITING
                               </span>
                             )}
-                            {(() => {
-                              const qs = quote.quoteStatus;
-                              if (!qs || qs === 'draft') return null;
-                              const cfgs: Record<string, { label: string; cls: string }> = {
-                                sent: { label: 'Sent', cls: 'bg-blue-500/20 text-blue-300 border border-blue-500/30' },
-                                won_unallocated: { label: 'WON', cls: 'bg-amber-500/20 text-amber-300 border border-amber-500/30' },
-                                won_allocated: { label: 'WON ✓', cls: 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' },
-                              };
-                              const cfg = cfgs[qs];
-                              return cfg ? <span className={`px-2 py-0.5 text-xs font-bold rounded ${cfg.cls}`}>{cfg.label}</span> : null;
-                            })()}
                           </div>
                           <p className="text-xs text-slate-400 mt-1">
                             Created: {new Date(quote.date).toLocaleDateString()} • Total: {quote.totalGross.toLocaleString('ro-RO', {style:'currency', currency:'RON'})}
@@ -1833,237 +1761,225 @@ export default function ClientQuotesPage() {
           </section>
         )}
 
-        {/* ─── Quote Related Documents ─── */}
+        {/* Quote Status Section */}
         {editingQuoteId && (
-          <section className="bg-slate-800 rounded-xl border border-slate-700 p-6 shadow-lg">
-            <div className="flex items-center justify-between mb-6">
-              <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                <FileText size={20} className="text-blue-400" />
-                Quote Related Documents
-              </h3>
-              {/* Status badge */}
-              {(() => {
-                const qs = currentQuote?.quoteStatus;
-                if (!qs || qs === 'draft') return null;
-                const configs: Record<string, { label: string; cls: string }> = {
-                  sent: { label: 'Quote Sent', cls: 'bg-blue-500/20 text-blue-300 border-blue-500/40' },
-                  won_unallocated: { label: 'Quote WON — Not Allocated', cls: 'bg-amber-500/20 text-amber-300 border-amber-500/40' },
-                  won_allocated: { label: `Quote WON — ${currentQuote?.assignedInstallers?.map(i => i.installerNickname).join(', ')}`, cls: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' },
-                };
-                const cfg = configs[qs];
-                return cfg ? (
-                  <span className={`px-3 py-1 rounded-full text-xs font-bold border ${cfg.cls}`}>{cfg.label}</span>
-                ) : null;
-              })()}
+          <div className="bg-slate-800 rounded-xl border border-slate-700 p-6 shadow-lg space-y-4">
+            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+              <Sparkles size={20} className="text-purple-500" />
+              Quote Status
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Offer Sent */}
+              <div className="bg-slate-900/50 p-4 rounded-lg border border-slate-700">
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={offerSent}
+                    onChange={(e) => setOfferSent(e.target.checked)}
+                    className="w-5 h-5 rounded border-slate-600 bg-slate-900 text-blue-500 focus:ring-blue-500"
+                  />
+                  <div>
+                    <p className="font-semibold text-white">Offer Sent to Client</p>
+                    <p className="text-xs text-slate-400">Mark when quote has been sent</p>
+                  </div>
+                </label>
+              </div>
+
+              {/* Quote Won */}
+              <div className="bg-slate-900/50 p-4 rounded-lg border border-slate-700">
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={quoteWon}
+                    onChange={(e) => setQuoteWon(e.target.checked)}
+                    className="w-5 h-5 rounded border-slate-600 bg-slate-900 text-emerald-500 focus:ring-emerald-500"
+                  />
+                  <div>
+                    <p className="font-semibold text-white">Quote Won!</p>
+                    <p className="text-xs text-slate-400">Client accepted the offer</p>
+                  </div>
+                </label>
+              </div>
             </div>
 
-            {/* Template selection + generate */}
-            {docTemplates && docTemplates.length > 0 && (
-              <div className="mb-6 pb-6 border-b border-slate-700">
-                <div className="flex items-end gap-4">
-                  <div className="flex-1">
-                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">
-                      Generate from Template
-                    </label>
-                    <select
-                      value={selectedTemplateId}
-                      onChange={(e) => setSelectedTemplateId(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-amber-500 outline-none"
-                    >
-                      <option value="">Select a template...</option>
-                      {docTemplates.map(tmpl => (
-                        <option key={tmpl.id} value={tmpl.id}>{tmpl.name}</option>
-                      ))}
-                    </select>
-                  </div>
+            {/* Implementation/Installer Allocation */}
+            {quoteWon && (
+              <div className="bg-emerald-500/10 border border-emerald-500/30 p-4 rounded-lg">
+                <label className="block text-sm font-semibold text-white mb-2 flex items-center gap-2">
+                  <Users size={16} className="text-emerald-400" />
+                  Allocate to Installer
+                </label>
+                <input
+                  type="text"
+                  placeholder="Enter installer name or ID"
+                  value={allocatedInstallerId || ''}
+                  onChange={(e) => setAllocatedInstallerId(e.target.value || null)}
+                  className="w-full bg-slate-900 border border-emerald-500/50 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+                <p className="text-xs text-emerald-400 mt-2">Installer will be notified to start implementation</p>
+              </div>
+            )}
+
+            {/* Start Implementation Button */}
+            {quoteWon && allocatedInstallerId && (
+              <button
+                onClick={() => saveClientQuote()}
+                className="w-full px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold transition-colors flex items-center justify-center gap-2 shadow-lg"
+              >
+                <Sparkles size={18} />
+                Start Implementation
+              </button>
+            )}
+
+            <button
+              onClick={() => saveClientQuote()}
+              className="w-full px-6 py-3 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold transition-colors flex items-center justify-center gap-2"
+            >
+              <Save size={18} />
+              Save Quote Status
+            </button>
+          </div>
+        )}
+
+        {/* Documents for this Quote */}
+        {docTemplates && docTemplates.length > 0 && editingQuoteId && (
+          <div className="bg-slate-800 rounded-xl border border-slate-700 p-6 shadow-lg">
+            <h3 className="text-lg font-bold text-white mb-6 flex items-center gap-2">
+              <FileText size={20} className="text-green-500" />
+              Documents for this Quote
+            </h3>
+            
+            {/* Template Selection and Generate */}
+            <div className="mb-6 pb-6 border-b border-slate-700">
+              <div className="flex items-center gap-4">
+                <div className="flex-1">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">
+                    <FileText className="inline-block mr-2" size={14} />
+                    Select Template
+                  </label>
+                  <select
+                    value={selectedTemplateId}
+                    onChange={(e) => setSelectedTemplateId(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-amber-500 outline-none"
+                  >
+                    <option value="">Select a template...</option>
+                    {docTemplates.map(tmpl => (
+                      <option key={tmpl.id} value={tmpl.id}>{tmpl.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="pt-7">
                   <button
                     onClick={generateDocumentFromTemplate}
                     disabled={!selectedTemplateId || isGenerating || quoteItems.length === 0}
-                    className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed font-semibold transition-all flex items-center gap-2 shadow-lg"
+                    className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed font-semibold transition-all flex items-center gap-2 shadow-lg hover:shadow-xl"
                   >
                     {isGenerating ? (
-                      <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />Generating...</>
+                      <>
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        Generating...
+                      </>
                     ) : (
-                      <><FileText size={18} />Generate</>
+                      <>
+                        <FileText size={18} />
+                        Generate Document
+                      </>
                     )}
                   </button>
                 </div>
               </div>
-            )}
+            </div>
 
-            {/* Documents list */}
-            {(generatedDocuments.length > 0 || companyDocsForQuote.length > 0) ? (
-              <div className="space-y-2">
-                {[...generatedDocuments, ...companyDocsForQuote.filter(cd => !generatedDocuments.some(gd => gd.id === cd.id))].map(doc => (
-                  <div key={doc.id} className="flex items-center justify-between p-3 bg-slate-700/30 border border-slate-600 rounded-lg hover:bg-slate-700/50 transition-colors">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-white font-semibold text-sm truncate">{doc.name}</p>
-                      <p className="text-xs text-slate-400 mt-1">
-                        {new Date(doc.date).toLocaleString('ro-RO')}
-                        {doc.generatedBy && ` • by ${doc.generatedBy}`}
-                      </p>
-                      {(() => {
-                        const pdfName = doc.name.replace('.docx', '.pdf');
-                        const sentEntries = (currentQuote?.emailHistory || []).filter(e =>
-                          e.documentId === doc.id || e.documentName === doc.name || e.documentName === pdfName
-                        );
-                        if (!sentEntries.length) return null;
-                        const last = sentEntries[sentEntries.length - 1];
-                        return (
-                          <p className="text-xs text-blue-400 mt-0.5 flex items-center gap-1">
-                            <SendHorizonal size={10} />
-                            Quote sent to {last.sentTo} on {new Date(last.sentAt).toLocaleDateString('ro-RO', { day: '2-digit', month: '2-digit', year: 'numeric' })} at {new Date(last.sentAt).toLocaleTimeString('ro-RO', { hour: '2-digit', minute: '2-digit' })}
-                            {sentEntries.length > 1 && <span className="text-slate-500 ml-1">({sentEntries.length}×)</span>}
-                          </p>
-                        );
-                      })()}
-                    </div>
-                    <div className="flex items-center gap-2 ml-4">
-                      <button
-                        onClick={() => setPreviewDoc({ id: doc.id, name: doc.name, url: doc.url, date: new Date(doc.date) })}
-                        className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
-                      >
-                        <Eye size={14} />Preview
-                      </button>
-                      <button
-                        onClick={() => {
-                          const link = document.createElement('a');
-                          link.href = doc.url; link.download = doc.name; link.target = '_blank';
-                          document.body.appendChild(link); link.click(); document.body.removeChild(link);
-                        }}
-                        className="px-3 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
-                      >
-                        <Download size={14} />Download
-                      </button>
-                      <button
-                        onClick={() => handleSendEmail(doc)}
-                        disabled={sendingEmailDocId === doc.id || !client?.email}
-                        title={!client?.email ? 'Client has no email address' : 'Send PDF offer by email'}
-                        className="px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {sendingEmailDocId === doc.id ? (
-                          <><div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />Sending...</>
-                        ) : (
-                          <><SendHorizonal size={14} />Send to Client</>
-                        )}
-                      </button>
-                      <button
-                        onClick={() => setConfirmDialog({ message: `Delete "${doc.name}"?`, onConfirm: () => {
-                          if (currentQuote) {
-                            saveQuote({ ...currentQuote, generatedDocuments: (currentQuote.generatedDocuments || []).filter(d => d.id !== doc.id) });
-                            showNotification('Document deleted', 'success');
-                          }
-                          setConfirmDialog(null);
-                        }})}
-                        className="p-2 text-red-500 hover:text-red-400 hover:bg-slate-600 rounded transition-colors"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="text-center py-10 text-slate-500">
-                <FileText size={36} className="mx-auto mb-3 opacity-30" />
-                <p className="text-sm">No documents yet. Select a template above and click Generate.</p>
-              </div>
-            )}
-          </section>
-        )}
-
-        {/* ─── Quote Won / Status Section ─── */}
-        {editingQuoteId && (() => {
-          const qs = currentQuote?.quoteStatus;
-          const isWon = qs === 'won_unallocated' || qs === 'won_allocated';
-
-          return (
-            <section className="bg-slate-800 rounded-xl border border-slate-700 p-6 shadow-lg">
-              <h3 className="text-lg font-bold text-white flex items-center gap-2 mb-5">
-                <Award size={20} className="text-amber-400" />
-                Quote Outcome
-              </h3>
-
-              {!isWon ? (
-                <div className="space-y-4">
-                  {/* Status info */}
-                  <div className={`flex items-center gap-3 p-3 rounded-lg border ${
-                    qs === 'sent'
-                      ? 'bg-blue-500/10 border-blue-500/30'
-                      : 'bg-slate-900/50 border-slate-700'
-                  }`}>
-                    {qs === 'sent' ? (
-                      <><SendHorizonal size={18} className="text-blue-400 shrink-0" />
-                      <div>
-                        <p className="text-sm font-semibold text-blue-300">Quote Sent</p>
-                        {currentQuote?.emailSentAt && (
-                          <p className="text-xs text-slate-400 mt-0.5">
-                            Sent to {currentQuote.emailSentTo} on {new Date(currentQuote.emailSentAt).toLocaleDateString('ro-RO')}
-                          </p>
-                        )}
-                      </div></>
-                    ) : (
-                      <><FileText size={18} className="text-slate-500 shrink-0" />
-                      <p className="text-sm text-slate-400">Draft — not yet sent to client</p></>
-                    )}
-                  </div>
-                  {/* Won button */}
-                  <button
-                    onClick={handleMarkQuoteWon}
-                    className="w-full px-6 py-4 bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 text-slate-900 font-extrabold rounded-xl transition-all flex items-center justify-center gap-3 shadow-lg text-lg"
-                  >
-                    <Award size={24} />
-                    Quote Won!
-                  </button>
-                </div>
-              ) : (
-                <div className="space-y-5">
-                  {/* Won status banner */}
-                  <div className="flex items-center gap-4 p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-xl">
-                    <div className="p-2 bg-amber-500/20 rounded-lg">
-                      <Award size={28} className="text-amber-400" />
-                    </div>
-                    <div>
-                      <p className="text-lg font-extrabold text-emerald-300">Quote WON!</p>
-                      {qs === 'won_unallocated' ? (
-                        <p className="text-sm text-slate-400 mt-0.5">Not yet allocated to an installer</p>
-                      ) : (
-                        <p className="text-sm text-slate-400 mt-0.5">
-                          Allocated to: <span className="font-bold text-emerald-400">
-                            {currentQuote?.assignedInstallers?.map(i => i.installerNickname).join(', ')}
-                          </span>
+            {/* List of Generated Documents */}
+            {generatedDocuments.length > 0 && (
+              <div>
+                <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-3">
+                  Generated Documents
+                </h4>
+                <div className="space-y-2">
+                  {generatedDocuments.map(doc => (
+                    <div key={doc.id} className="flex items-center justify-between p-3 bg-slate-700/30 border border-slate-600 rounded-lg hover:bg-slate-700/50 transition-colors">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-white font-semibold text-sm truncate">{doc.name}</p>
+                        <p className="text-xs text-slate-400 mt-1">
+                          {new Date(doc.date).toLocaleString('ro-RO')}
+                          {doc.generatedBy && ` • by ${doc.generatedBy}`}
                         </p>
-                      )}
+                      </div>
+                      <div className="flex items-center gap-2 ml-4">
+                        <button
+                          onClick={() => {
+                            setPreviewDoc({ id: doc.id, name: doc.name, url: doc.url, date: new Date(doc.date) });
+                          }}
+                          className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
+                        >
+                          <Eye size={14} />
+                          Preview
+                        </button>
+                        <button
+                          onClick={() => {
+                            // Direct download from document URL
+                            const link = document.createElement('a');
+                            link.href = doc.url;
+                            link.download = doc.name;
+                            link.target = '_blank';
+                            document.body.appendChild(link);
+                            link.click();
+                            document.body.removeChild(link);
+                          }}
+                          className="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
+                        >
+                          <Download size={14} />
+                          Download
+                        </button>
+                        <button
+                          onClick={() => handleSendEmail(doc)}
+                          disabled={sendingEmailDocId === doc.id || !client?.email}
+                          className="px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                          title={!client?.email ? 'Client has no email address' : 'Send via email'}
+                        >
+                          {sendingEmailDocId === doc.id ? (
+                            <>
+                              <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                              Sending...
+                            </>
+                          ) : (
+                            <>
+                              <Mail size={14} />
+                              Send Email
+                            </>
+                          )}
+                        </button>
+                        <button
+                          onClick={() => {
+                            setConfirmDialog({
+                              message: `Delete "${doc.name}"?`,
+                              onConfirm: () => {
+                                if (currentQuote) {
+                                  const updatedDocuments = (currentQuote.generatedDocuments || []).filter(d => d.id !== doc.id);
+                                  const updatedQuote: Quote = {
+                                    ...currentQuote,
+                                    generatedDocuments: updatedDocuments
+                                  };
+                                  saveQuote(updatedQuote);
+                                  showNotification('Document deleted', 'success');
+                                }
+                                setConfirmDialog(null);
+                              }
+                            });
+                          }}
+                          className="p-2 text-red-500 hover:text-red-400 hover:bg-slate-600 rounded transition-colors"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
                     </div>
-                  </div>
-
-                  {/* Go to Installation page */}
-                  <button
-                    onClick={() => router.push(`/clients/${client.id}/installation`)}
-                    className="flex items-center justify-center gap-2 px-6 py-3 bg-slate-700 hover:bg-slate-600 text-white font-bold rounded-xl transition-colors border border-slate-600"
-                  >
-                    <Users size={18} />
-                    Manage Installer Allocation on Installation page →
-                  </button>
-
-                  {/* Undo Won — SUPER_ADMIN only */}
-                  {currentUser?.role === 'SUPER_ADMIN' && (
-                    <button
-                      onClick={() => setConfirmDialog({
-                        message: 'Reset this quote back to Draft/Sent status? This will remove any installer allocation.',
-                        onConfirm: () => { handleUnmarkQuoteWon(); setConfirmDialog(null); },
-                      })}
-                      className="flex items-center justify-center gap-2 px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 font-semibold rounded-xl transition-colors text-sm"
-                    >
-                      <RotateCcw size={15} />
-                      Undo Won
-                    </button>
-                  )}
+                  ))}
                 </div>
-              )}
-            </section>
-          );
-        })()}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Document Preview Modal */}
         {previewDoc && (

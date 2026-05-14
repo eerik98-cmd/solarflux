@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Box, Sun, Moon, Battery, Settings, FileText, Users, FolderOpen, ChevronLeft, ChevronRight, UserCog, LayoutDashboard } from 'lucide-react';
+import { Box, Sun, Moon, Battery, Settings, FileText, Users, FolderOpen, ChevronLeft, ChevronRight, UserCog, LayoutDashboard, Briefcase, ScrollText } from 'lucide-react';
 import { View } from '../types';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -38,7 +38,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, onL
     { id: 'CLIENTS', label: 'Clients', icon: Users },
     { id: 'INVENTORY', label: 'Inventory', icon: Box },
     { type: 'separator' },
-    { id: 'QUOTE_GENERATOR', label: 'Quote Generator', icon: FileText },
+    { id: 'PROJECTS', label: 'Projects', icon: Briefcase },
+    { id: 'QUOTE_GENERATOR', label: 'Quotes', icon: FileText },
+    { id: 'CONTRACTS', label: 'Contracts', icon: ScrollText },
     { id: 'FILE_MANAGER', label: 'File Manager', icon: FolderOpen },
   ];
 

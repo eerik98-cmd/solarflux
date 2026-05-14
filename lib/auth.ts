@@ -31,7 +31,25 @@ export async function verifyPassword(
   hashedPassword: string
 ): Promise<boolean> {
   try {
-    return await bcrypt.compare(password, hashedPassword);
+    if (typeof hashedPassword !== 'string') {
+      return false;
+    }
+
+    const inputPassword = typeof password === 'string' ? password : '';
+    const normalizedHash = hashedPassword.trim();
+
+    // Backward compatibility for legacy records that still store plain text.
+    // Once users are re-saved, passwords are hashed by save actions.
+    if (!normalizedHash.startsWith('$2')) {
+      return inputPassword === normalizedHash;
+    }
+
+    // Some older systems store bcrypt with $2y$ prefix.
+    const bcryptCompatibleHash = normalizedHash.startsWith('$2y$')
+      ? `$2b$${normalizedHash.slice(4)}`
+      : normalizedHash;
+
+    return await bcrypt.compare(inputPassword, bcryptCompatibleHash);
   } catch (error) {
     console.error('Password verification error:', error);
     return false;

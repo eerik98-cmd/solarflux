@@ -13,7 +13,10 @@ const ALLOWED_COLLECTIONS = [
   'installerReminders',
   'equipmentTrackingEntries',
   'templates',
+  'quoteTemplates',
   'companyDocuments',
+  'projects',
+  'contractDocRequests',
 ];
 
 function isAllowed(col: string): boolean {
@@ -61,6 +64,35 @@ export async function POST(req: NextRequest, { params }: Params) {
     }
 
     const db = await getDb();
+
+    // Hard lock: once client has signed, quote structure is immutable, but metadata can be updated.
+    if (collection === 'quotes') {
+      const existing = await db.collection(collection).findOne({ id: item.id });
+      if (existing?.isLocked === true) {
+        // For locked quotes, only allow updating metadata fields (tracking + payment).
+        const allowedFields = [
+          'publicLinkSentAt',
+          'paymentStatus',
+          'payments',
+          'publicLinkOpenCount',
+          'publicLinkFirstOpenedAt',
+          'publicLinkLastOpenedAt',
+          'projectId',
+        ];
+        const updateFields: Record<string, any> = {};
+        allowedFields.forEach(field => {
+          if (field in item) {
+            updateFields[field] = item[field];
+          }
+        });
+        if (Object.keys(updateFields).length === 0) {
+          return NextResponse.json({ error: 'Quote is locked. Only metadata updates allowed.' }, { status: 423 });
+        }
+        await db.collection(collection).updateOne({ id: item.id }, { $set: updateFields });
+        return NextResponse.json({ success: true });
+      }
+    }
+
     await db.collection(collection).replaceOne({ id: item.id }, item, { upsert: true });
     return NextResponse.json({ success: true });
   } catch (error: any) {
@@ -83,6 +115,14 @@ export async function DELETE(req: NextRequest, { params }: Params) {
     }
 
     const db = await getDb();
+
+    if (collection === 'quotes') {
+      const existing = await db.collection(collection).findOne({ id });
+      if (existing?.isLocked === true) {
+        return NextResponse.json({ error: 'Locked quotes cannot be deleted' }, { status: 423 });
+      }
+    }
+
     await db.collection(collection).deleteOne({ id });
     return NextResponse.json({ success: true });
   } catch (error: any) {

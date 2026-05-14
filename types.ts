@@ -49,7 +49,8 @@ export interface InventoryItem {
 export interface QuoteLineItem {
   id: string;
   inventoryItemId?: string; // Optional, in case it's a custom line item
-  description: string;
+  description: string; // Item name / title
+  itemDescription?: string; // Optional sub-description shown below the name
   unit: string;
   quantity: number;
   netPrice: number;
@@ -90,9 +91,54 @@ export interface ConsumptionItem {
   hasBarcode?: boolean; // Whether this item supports barcode scanning
 }
 
+export type ProjectStatus = 'draft' | 'active' | 'completed' | 'archived';
+
+export interface Project {
+  id: string;
+  projectNumber: string; // P-[clientInternalId]-[DDMMYYYY]-[n]
+  clientId: string;
+  projectName: string;
+  status: ProjectStatus;
+
+  // Requirements (key fields from client needs)
+  description?: string;
+  connectionType?: 'Monofazat' | 'Trifazat';
+  roofType?: 'Tigla ceramica' | 'Tabla' | 'Tigla metalica' | 'Tabla ondulata' | 'Tabla cutata' | 'Panou sandwich' | 'Other';
+  roofTypeOther?: string;
+  groundingStatus?: 'exista' | 'nu exista, face Solar Invest' | 'nu exista, face Beneficiarul';
+  inverterKw?: number;
+  panelKw?: number;
+  panelCount?: number;
+  batteryKwh?: number;
+  batteryPresent?: boolean; // true when batteryKwh entered
+  storage?: string;
+  technicalNotes?: string;
+
+  // Site Location
+  siteCountry?: string;
+  siteCounty?: string;
+  siteCity?: string;
+  siteStreet?: string;
+  siteStreetNumber?: string;
+  sitePostalCode?: string;
+
+  siteImages?: ClientSiteImage[];
+
+  // Optional quote link
+  linkedQuoteId?: string;
+
+  // Audit
+  createdAt: Date;
+  createdBy?: string;
+  updatedAt?: Date;
+  updatedBy?: string;
+}
+
 export interface Quote {
   id: string;
   clientId?: string; // Link to specific client
+  projectId?: string; // Optional link to a Project
+  currency?: 'RON' | 'EUR'; // Display currency (default RON)
   title?: string; // Project Name / Title of the quote
   customerName: string;
   description?: string; // Project Description / Notes
@@ -101,6 +147,7 @@ export interface Quote {
   subtotalNet: number;
   vatTotal: number;
   totalGross: number;
+  validityDays?: number;
 
   // Installer Allocation & Status
   allocatedInstallerId?: string; // Installer nickname who is assigned
@@ -167,20 +214,43 @@ export interface Quote {
     sentTo: string;
     sentBy: string;
     documentName?: string;
-    documentId?: string;
   }>;
   
   // Generated Documents
   generatedDocuments?: Array<{
     id: string;
     name: string;
-    url: string; // Firebase Storage URL
+    url: string; // Document URL or data URL
     date: Date;
     generatedBy?: string; // User who generated it
   }>;
 
-  // Quote Status Lifecycle
-  quoteStatus?: 'draft' | 'sent' | 'won_unallocated' | 'won_allocated';
+  // Sharing & Signatures
+  shareToken?: string;       // UUID — enables the public /quote/[token] page
+  publicLinkSentAt?: string; // ISO date string when share link was sent to client
+  publicLinkFirstOpenedAt?: string;
+  publicLinkLastOpenedAt?: string;
+  publicLinkOpenCount?: number;
+  isLocked?: boolean;        // true once client has signed — prevents editing
+
+  paymentStatus?: 'NOT_PAID' | 'ADVANCE_PAID' | 'FULLY_PAID';
+  payments?: Array<{
+    id: string;
+    amount: number;
+    paidAt: string;          // ISO date string
+    note?: string;
+  }>;
+
+  companySignature?: {
+    name: string;
+    dataUrl: string;         // base64 PNG from canvas
+    signedAt: string;        // ISO date string
+  };
+  clientSignature?: {
+    name: string;
+    dataUrl: string;
+    signedAt: string;
+  };
 }
 
 export type InstallerReminderType = 'MISSING_DAILY_REPORT';
@@ -377,6 +447,14 @@ export interface DocTemplate {
   date: Date;
 }
 
+export interface QuoteTemplate {
+  id: string;
+  name: string;
+  items: QuoteLineItem[];
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface SmtpSettings {
   id: string; // Usually 'default' for company-wide settings
   host: string; // smtp.gmail.com, smtp.office365.com, etc.
@@ -514,4 +592,5 @@ export interface EquipmentTrackingEntry {
   submittedAt?: Date;
 }
 
-export type View = 'DASHBOARD' | 'INVENTORY' | 'AI_ASSISTANT' | 'QUOTE_GENERATOR' | 'CLIENTS' | 'SETTINGS' | 'FILE_MANAGER' | 'MANAGE_TEAM';
+export type View = 'DASHBOARD' | 'INVENTORY' | 'AI_ASSISTANT' | 'QUOTE_GENERATOR' | 'CLIENTS' | 'SETTINGS' | 'FILE_MANAGER' | 'MANAGE_TEAM' | 'PROJECTS' | 'CONTRACTS';
+

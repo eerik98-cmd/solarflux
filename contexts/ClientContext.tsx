@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useState, ReactNode, useEffect } from 'react';
 import { Client, ClientNote, InventoryItem, Quote, DocTemplate } from '@/types';
 import { useData } from '@/contexts/DataContext';
 import { useAuth } from '@/contexts/AuthContext';
@@ -28,6 +28,18 @@ export function ClientProvider({ children, clientId }: { children: ReactNode; cl
     clients.find(c => c.id === clientId) || null
   );
   const [hasChanges, setHasChanges] = useState(false);
+
+  useEffect(() => {
+    const latestClient = clients.find((c) => c.id === clientId) || null;
+    setClient((prev) => {
+      if (!prev && latestClient) return latestClient;
+      if (prev && latestClient && prev.id === latestClient.id) {
+        return latestClient;
+      }
+      if (prev && !latestClient) return null;
+      return prev;
+    });
+  }, [clients, clientId]);
 
   const updateClient = async (updates: Partial<Client>) => {
     if (!client) return;

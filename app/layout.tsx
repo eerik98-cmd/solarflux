@@ -3,6 +3,7 @@ import './globals.css'
 import { AuthProvider } from '@/contexts/AuthContext'
 import { DataProvider } from '@/contexts/DataContext'
 import { ThemeProvider } from '@/contexts/ThemeContext'
+import { ConfirmDialogProvider } from '@/contexts/ConfirmDialogContext'
 
 export const metadata: Metadata = {
   title: 'SolarFlux Stock Manager',
@@ -28,7 +29,9 @@ export default function RootLayout({
         <ThemeProvider>
           <AuthProvider>
             <DataProvider>
-              {children}
+              <ConfirmDialogProvider>
+                {children}
+              </ConfirmDialogProvider>
             </DataProvider>
           </AuthProvider>
         </ThemeProvider>

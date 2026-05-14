@@ -1,7 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { InventoryItem, Client, Quote, User, DocTemplate, TeamMessageThread, InstallerReport, InstallerReminder, EquipmentTrackingEntry } from '@/types';
+import { InventoryItem, Client, Quote, Project, User, DocTemplate, QuoteTemplate, TeamMessageThread, InstallerReport, InstallerReminder, EquipmentTrackingEntry } from '@/types';
 import { StorageService } from '@/services/storageService';
 import { MOCK_USERS } from '@/constants';
 
@@ -9,28 +9,34 @@ interface DataContextType {
   inventory: InventoryItem[];
   clients: Client[];
   savedQuotes: Quote[];
+  projects: Project[];
   users: User[];
   teamMessageThreads: TeamMessageThread[];
   installerReports: InstallerReport[];
   installerReminders: InstallerReminder[];
   equipmentTrackingEntries: EquipmentTrackingEntry[];
   docTemplates: DocTemplate[];
+  quoteTemplates: QuoteTemplate[];
   companyDocuments: Record<string, unknown>[];
   dbConnectionError: boolean;
   setInventory: (inventory: InventoryItem[]) => void;
   setClients: (clients: Client[]) => void;
   setSavedQuotes: (quotes: Quote[]) => void;
+  setProjects: (projects: Project[]) => void;
   setUsers: (users: User[]) => void;
   setTeamMessageThreads: (threads: TeamMessageThread[]) => void;
   setInstallerReports: (reports: InstallerReport[]) => void;
   setInstallerReminders: (reminders: InstallerReminder[]) => void;
   setEquipmentTrackingEntries: (entries: EquipmentTrackingEntry[]) => void;
   setDocTemplates: (templates: DocTemplate[]) => void;
+  setQuoteTemplates: (templates: QuoteTemplate[]) => void;
   setCompanyDocuments: (docs: Record<string, unknown>[]) => void;
   saveQuote: (quote: Quote) => Promise<void>;
   updateQuote: (quoteId: string, updates: Partial<Quote>) => Promise<void>;
   deleteQuote: (quoteId: string) => Promise<void>;
   updateClient: (client: Client) => Promise<void>;
+  saveProject: (project: Project) => Promise<void>;
+  deleteProject: (projectId: string) => Promise<void>;
   saveTeamMessageThread: (thread: TeamMessageThread) => Promise<void>;
   saveInstallerReport: (report: InstallerReport) => Promise<void>;
   deleteInstallerReport: (reportId: string) => Promise<void>;
@@ -46,12 +52,14 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [savedQuotes, setSavedQuotes] = useState<Quote[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [teamMessageThreads, setTeamMessageThreads] = useState<TeamMessageThread[]>([]);
   const [installerReports, setInstallerReports] = useState<InstallerReport[]>([]);
   const [installerReminders, setInstallerReminders] = useState<InstallerReminder[]>([]);
   const [equipmentTrackingEntries, setEquipmentTrackingEntries] = useState<EquipmentTrackingEntry[]>([]);
   const [docTemplates, setDocTemplates] = useState<DocTemplate[]>([]);
+  const [quoteTemplates, setQuoteTemplates] = useState<QuoteTemplate[]>([]);
   const [companyDocuments, setCompanyDocuments] = useState<Record<string, unknown>[]>([]);
   const [dbConnectionError, setDbConnectionError] = useState(false);
 
@@ -65,6 +73,9 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     );
     const unsubQuotes = StorageService.subscribe('quotes', (data) => 
       setSavedQuotes(data as Quote[])
+    );
+    const unsubProjects = StorageService.subscribe('projects', (data) =>
+      setProjects(data as Project[])
     );
     const unsubUsers = StorageService.subscribe('users', (data) => 
       setUsers(data as User[])
@@ -84,6 +95,9 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     const unsubTemplates = StorageService.subscribe('templates', (data) => 
       setDocTemplates(data as DocTemplate[])
     );
+    const unsubQuoteTemplates = StorageService.subscribe('quoteTemplates', (data) =>
+      setQuoteTemplates(data as QuoteTemplate[])
+    );
     const unsubCompanyDocuments = StorageService.subscribe('companyDocuments', (data) => 
       setCompanyDocuments(data as any[])
     );
@@ -92,7 +106,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       try {
         await StorageService.initializeDataIfEmpty('users', MOCK_USERS);
       } catch (err) {
-        console.error('Failed to connect to Firebase:', err);
+        console.error('Failed to connect to database:', err);
         setDbConnectionError(true);
       }
     };
@@ -102,12 +116,14 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       unsubInventory();
       unsubClients();
       unsubQuotes();
+      unsubProjects();
       unsubUsers();
       unsubTeamMessages();
       unsubInstallerReports();
       unsubInstallerReminders();
       unsubEquipmentTrackingEntries();
       unsubTemplates();
+      unsubQuoteTemplates();
       unsubCompanyDocuments();
     };
   }, []);
@@ -129,6 +145,14 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
 
   const updateClient = async (client: Client) => {
     await StorageService.saveItem('clients', client);
+  };
+
+  const saveProject = async (project: Project) => {
+    await StorageService.saveItem('projects', project);
+  };
+
+  const deleteProject = async (projectId: string) => {
+    await StorageService.deleteItem('projects', projectId);
   };
 
   const saveTeamMessageThread = async (thread: TeamMessageThread) => {
@@ -170,28 +194,34 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         inventory,
         clients,
         savedQuotes,
+        projects,
         users,
         teamMessageThreads,
         installerReports,
         installerReminders,
         equipmentTrackingEntries,
         docTemplates,
+        quoteTemplates,
         companyDocuments,
         dbConnectionError,
         setInventory,
         setClients,
         setSavedQuotes,
+        setProjects,
         setUsers,
         setTeamMessageThreads,
         setInstallerReports,
         setInstallerReminders,
         setEquipmentTrackingEntries,
         setDocTemplates,
+        setQuoteTemplates,
         setCompanyDocuments,
         saveQuote,
         updateQuote,
         deleteQuote,
         updateClient,
+        saveProject,
+        deleteProject,
         saveTeamMessageThread,
         saveInstallerReport,
         deleteInstallerReport,

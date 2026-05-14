@@ -1,11 +1,3 @@
-
-import { storage } from './firebase';
-import {
-  ref,
-  uploadString,
-  getDownloadURL
-} from 'firebase/storage';
-
 // Helper to check if string is Base64
 const isBase64 = (str: string) => {
   return typeof str === 'string' && str.startsWith('data:');
@@ -46,27 +38,30 @@ const normalizeFirestoreDates = (value: any): any => {
   return value;
 };
 
-// Helper to upload a single Base64 string to Storage and return the URL
-const uploadBase64ToStorage = async (base64Data: string, path: string): Promise<string> => {
-  if (!storage) return base64Data; // Fallback if storage not init
+// Helper to upload a single Base64 string to local filesystem and return the URL
+const uploadBase64ToStorage = async (base64Data: string, filePath: string): Promise<string> => {
   try {
-    if (!isBase64(base64Data)) return base64Data; // Already a URL
-    
-    const storageRef = ref(storage, path);
-    await uploadString(storageRef, base64Data, 'data_url');
-    const downloadURL = await getDownloadURL(storageRef);
-    return downloadURL;
+    const res = await fetch('/api/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ base64: base64Data, filePath }),
+    });
+    if (!res.ok) {
+      console.error('Upload failed, falling back to base64 storage');
+      return base64Data;
+    }
+    const { url } = await res.json();
+    return url;
   } catch (error) {
-    console.error("Error uploading to storage:", error);
-    // Continue without upload if storage fails, just to save the data
+    console.error('Upload error, falling back to base64 storage:', error);
     return base64Data;
   }
 };
 
 /**
  * DEEP CLEANER
- * Iterates through an object. If it finds a Base64 string in specific fields, 
- * it uploads it to Firebase Storage and swaps the Base64 for the URL.
+ * Iterates through an object and normalizes binary/document payload fields
+ * before persistence to MongoDB.
  */
 const prepareDataForFirestore = async (collectionName: string, data: any) => {
   const processed = { ...data };
@@ -166,21 +161,17 @@ function sanitizeForFirestore(obj: any, seen = new WeakSet()): any {
 }
 
 export const StorageService = {
-  // Upload a file to Firebase Storage
+  // Upload a file (Mongo mode: keeps data URL as-is)
   uploadFile: async (base64Data: string, path: string): Promise<string> => {
     return await uploadBase64ToStorage(base64Data, path);
   },
 
-  // Poll a collection every 15 seconds and call callback with latest data.
-  // An in-flight guard ensures a new fetch never starts while the previous is still pending.
+  // Poll a collection every 5 seconds and call callback with latest data.
   // Returns a cleanup function (mirrors Firestore onSnapshot API).
   subscribe: (collectionName: string, callback: (data: any[]) => void): (() => void) => {
     let active = true;
-    let inFlight = false;
 
     const fetchData = async () => {
-      if (inFlight || !active) return;
-      inFlight = true;
       try {
         const res = await fetch(`/api/db/${collectionName}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -188,13 +179,11 @@ export const StorageService = {
         if (active) callback(Array.isArray(data) ? data : []);
       } catch (error) {
         console.error(`Error polling ${collectionName}:`, error);
-      } finally {
-        inFlight = false;
       }
     };
 
     fetchData();
-    const interval = setInterval(fetchData, 15000);
+    const interval = setInterval(fetchData, 5000);
 
     return () => {
       active = false;
@@ -219,6 +208,7 @@ export const StorageService = {
       }
     } catch (error: any) {
       console.error(`Error saving to ${collectionName}:`, error);
+      alert(`Failed to save data. Error: ${error.message}`);
       throw error;
     }
   },
@@ -235,6 +225,7 @@ export const StorageService = {
       }
     } catch (error: any) {
       console.error(`Error deleting from ${collectionName}:`, error);
+      alert('Failed to delete item.');
       throw error;
     }
   },

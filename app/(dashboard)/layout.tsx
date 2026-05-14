@@ -43,29 +43,34 @@ export default function DashboardLayout({
     return <AuthRequired />;
   }
 
-  const pathToView: Record<string, View> = {
-    '/dashboard': 'DASHBOARD',
-    '/clients': 'CLIENTS',
-    '/inventory': 'INVENTORY',
-    '/quote-generator': 'QUOTE_GENERATOR',
-    '/file-manager': 'FILE_MANAGER',
-    '/settings': 'SETTINGS',
-    '/installers': 'MANAGE_TEAM',
-  };
 
-  const currentView = pathToView[pathname] || 'CLIENTS';
+  const pathToView: Array<[string, View]> = [
+    ['/dashboard', 'DASHBOARD'],
+    ['/clients', 'CLIENTS'],
+    ['/inventory', 'INVENTORY'],
+    ['/projects', 'PROJECTS'],
+    ['/quote-generator', 'QUOTE_GENERATOR'],
+    ['/contracts', 'CONTRACTS'],
+    ['/file-manager', 'FILE_MANAGER'],
+    ['/settings', 'SETTINGS'],
+    ['/installers', 'MANAGE_TEAM'],
+  ];
+
+  const currentView: View =
+    pathToView.find(([path]) => pathname === path || pathname.startsWith(path + '/'))?.[1] ?? 'CLIENTS';
 
   const handleChangeView = (view: View) => {
     const viewToPath: Partial<Record<View, string>> = {
       'DASHBOARD': '/dashboard',
       'CLIENTS': '/clients',
       'INVENTORY': '/inventory',
+      'PROJECTS': '/projects',
       'QUOTE_GENERATOR': '/quote-generator',
+      'CONTRACTS': '/contracts',
       'FILE_MANAGER': '/file-manager',
       'SETTINGS': '/settings',
       'MANAGE_TEAM': '/installers',
     };
-    
     const path = viewToPath[view];
     if (path) {
       router.push(path);

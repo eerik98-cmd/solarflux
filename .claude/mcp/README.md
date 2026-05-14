@@ -25,10 +25,10 @@ nano ~/.config/Claude/claude_desktop_config.json
   "mcpServers": {
     "solarflux-mcp": {
       "command": "node",
-      "args": ["/FULL/PATH/TO/solarflux-mcp/src/index.js"],
+      "args": ["C:\\Users\\Erik\\Desktop\\solarflux-main\\.claude\\mcp\\src\\index.js"],
       "env": {
-        "MONGODB_URI": "REPLACE_REPLACE_REPLACE_REPLACE_REPLACE_REPLACE_REPLACE_REPLACE_REPLACE_REPLACE_REPLACE_REPLACE_REPLACE_REPLACE_REPLACE_REPLACE",
-        "MONGODB_DB": "REPLACE_REPLACE_REPLACE_REPLACE_REPLACE_REPLACE_REPLACE_REPLACE_REPLACE_REPLACE_REPLACE_REPLACE_REPLACE_REPLACE_REPLACE_REPLACE"
+         "MONGODB_URI": "mongodb+srv://solarflux_app:BPJE72Arrrfe8MLY@cluster0.hciu47h.mongodb.net/?appName=Cluster0",
+        "MONGODB_DB": "solarflux"
       }
     }
   }

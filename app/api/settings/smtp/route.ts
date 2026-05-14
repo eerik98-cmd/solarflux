@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/session';
 import { encryptSmtpPassword } from '@/lib/encryption';
 import { SmtpSettings } from '@/types';
-import { getDb } from '@/services/mongodb';
+import { StorageService } from '@/services/storageService';
 
 /**
  * GET - Load SMTP settings
@@ -15,19 +15,16 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized - Admin access required' }, { status: 401 });
     }
 
-    const db = await getDb();
-    const settings = await db.collection('smtpSettings').findOne({ id: 'default' });
+    const settings = await StorageService.getItem('smtpSettings', 'default');
 
     if (!settings) {
       return NextResponse.json({ settings: null });
     }
-
-    const { _id: _ignored, ...settingsData } = settings as any;
     
     // Don't send encrypted password to frontend
     return NextResponse.json({
       settings: {
-        ...settingsData,
+        ...settings,
         password: '', // Omit password for security
       },
     });
@@ -69,8 +66,7 @@ export async function POST(request: NextRequest) {
       encryptedPassword = encryptSmtpPassword(password);
     } else {
       // If password is empty, keep existing password
-      const db = await getDb();
-      const existingSettings = await db.collection('smtpSettings').findOne({ id: 'default' });
+      const existingSettings = await StorageService.getItem('smtpSettings', 'default');
       if (existingSettings) {
         encryptedPassword = existingSettings.password;
       } else {
@@ -96,9 +92,8 @@ export async function POST(request: NextRequest) {
       updatedBy: updatedBy || session.username,
     };
 
-    // Save to MongoDB directly (StorageService uses relative fetch URLs, unusable server-side)
-    const db = await getDb();
-    await db.collection('smtpSettings').replaceOne({ id: 'default' }, smtpSettings, { upsert: true });
+    // Save to MongoDB using StorageService
+    await StorageService.saveItem('smtpSettings', smtpSettings);
 
     return NextResponse.json({
       success: true,

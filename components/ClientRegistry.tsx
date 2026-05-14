@@ -23,14 +23,19 @@ type ModalStep = 'TYPE_SELECTION' | 'FORM';
 type DetailTab = 'DATA' | 'NEEDS' | 'DOCUMENTS' | 'QUOTES' | 'DOC_GEN';
 
 const isPdfDoc = (doc: any) =>
-  !!doc.url && (doc.url.startsWith('data:application/pdf') || doc.name?.toLowerCase().endsWith('.pdf'));
+  !!doc.url && (
+    doc.url.startsWith('data:application/pdf') ||
+    doc.name?.toLowerCase().endsWith('.pdf') ||
+    doc.url.toLowerCase().includes('.pdf')
+  );
 
 const PdfPreview: React.FC<{ url: string; title: string }> = ({ url, title }) => {
+  const src = url.startsWith('data:') ? url : `${url}#toolbar=0&navpanes=0&scrollbar=1`;
   return (
     <div className="w-full h-full flex flex-col">
-      <div className="flex-1 overflow-auto rounded-lg border border-slate-700 bg-slate-950">
+      <div className="flex-1 overflow-hidden rounded-lg border border-slate-700 bg-slate-950">
         <iframe
-          src={url}
+          src={src}
           title={title}
           className="w-full h-full min-h-[600px]"
           style={{ border: 'none' }}

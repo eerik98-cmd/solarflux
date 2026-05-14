@@ -151,11 +151,9 @@ export default function ClientNeedsPage() {
       });
   }, [client?.needs?.panelKw, inventory]);
 
-  if (!client) return null;
-
   const buildNeedsSnapshot = (needsData: any) => JSON.stringify(needsData || {});
   const hasUnsavedProjectChanges =
-    isEditingProject && buildNeedsSnapshot(client.needs) !== projectBaselineSnapshot;
+    isEditingProject && buildNeedsSnapshot(client?.needs) !== projectBaselineSnapshot;
 
   useEffect(() => {
     if (!hasUnsavedProjectChanges) return;
@@ -186,6 +184,8 @@ export default function ClientNeedsPage() {
       window.history.replaceState = originalReplaceState;
     };
   }, [hasUnsavedProjectChanges]);
+
+  if (!client) return null;
 
   const handleNeedsChange = async (field: string, value: any) => {
     await updateClient({ needs: { ...client.needs, [field]: value } });

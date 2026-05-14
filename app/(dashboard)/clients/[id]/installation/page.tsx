@@ -6,7 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useData } from '@/contexts/DataContext';
 import {
   Hammer, Package, AlertCircle, User, Calendar, CheckCircle2, Camera, Download, Trash2,
-  X, ChevronLeft, ChevronRight, FileText, TrendingUp, TrendingDown, ChevronDown, ChevronUp, RotateCcw, MessageSquare, Plus, Save, Award
+  X, ChevronLeft, ChevronRight, FileText, TrendingUp, TrendingDown, ChevronDown, ChevronUp, RotateCcw, MessageSquare, Plus, Save
 } from 'lucide-react';
 import { EquipmentTrackingEntry, InstallationPhoto } from '@/types';
 import { aggregateEquipmentTrackingEntries, toWorkDateKey } from '@/lib/equipmentTracking';
@@ -153,16 +153,7 @@ export default function InstallationPage() {
   };
 
   const client = clients.find(c => c.id === clientId);
-  const allClientQuotes = savedQuotes.filter(q => q.clientId === clientId);
-  // Won quotes not yet in active installation phase
-  const wonQuotes = allClientQuotes.filter(q =>
-    (q.quoteStatus === 'won_unallocated' || q.quoteStatus === 'won_allocated') &&
-    !q.phase && !q.adminApprovedAt
-  );
-  // Quotes with an active/completed installation
-  const installationQuotes = allClientQuotes.filter(q =>
-    q.phase === 'in-progress' || q.phase === 'pending-inspection' || q.phase === 'completed' || q.adminApprovedAt != null
-  );
+  const installationQuotes = savedQuotes.filter(q => q.clientId === clientId);
   const clientTrackingEntries = equipmentTrackingEntries.filter((entry) => entry.clientId === clientId);
 
   if (!client) {
@@ -176,7 +167,7 @@ export default function InstallationPage() {
     );
   }
 
-  if (wonQuotes.length === 0 && installationQuotes.length === 0) {
+  if (installationQuotes.length === 0) {
     return (
       <div className="h-full flex items-center justify-center bg-slate-900 p-8">
         <div className="text-center">
@@ -221,7 +212,6 @@ export default function InstallationPage() {
       allocatedInstallerId: nextQuote.allocatedInstallerId,
       allocatedAt: nextQuote.allocatedAt,
       phase: nextAssignments.length > 0 && (!quote.phase || quote.phase === 'planning') ? 'in-progress' : quote.phase,
-      ...(nextAssignments.length > 0 && quote.quoteStatus === 'won_unallocated' ? { quoteStatus: 'won_allocated' } : {}),
     });
   };
 
@@ -329,100 +319,6 @@ export default function InstallationPage() {
             </div>
           </div>
         </div>
-
-        {/* Won Quotes — Awaiting Installation */}
-        {wonQuotes.length > 0 && (
-          <div className="space-y-4">
-            <h2 className="text-2xl font-bold text-white flex items-center gap-3">
-              <Award size={26} className="text-amber-400" />
-              Won Quotes — Ready for Installation
-            </h2>
-            {wonQuotes.map(quote => {
-              const assigned = getAssignedInstallers(quote);
-              return (
-                <div key={quote.id} className="bg-slate-800 border border-amber-500/30 rounded-lg p-5">
-                  <div className="flex items-start justify-between mb-4">
-                    <div>
-                      <h3 className="text-white font-bold text-lg">{quote.title || 'Untitled'}</h3>
-                      <p className="text-sm text-slate-400 mt-1">
-                        Total: {quote.totalGross?.toLocaleString('ro-RO', { style: 'currency', currency: 'RON' })}
-                        {quote.date && <span className="ml-3">Created: {new Date(quote.date).toLocaleDateString('ro-RO')}</span>}
-                      </p>
-                    </div>
-                    <span className={`px-3 py-1 rounded text-xs font-bold border ${
-                      quote.quoteStatus === 'won_allocated'
-                        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
-                        : 'bg-amber-500/20 text-amber-300 border-amber-500/30'
-                    }`}>
-                      {quote.quoteStatus === 'won_allocated' ? 'WON ✔ Allocated' : 'WON — Unallocated'}
-                    </span>
-                  </div>
-
-                  {/* Current assignees */}
-                  {assigned.length > 0 && (
-                    <div className="mb-4">
-                      <p className="text-xs font-bold text-slate-500 uppercase mb-2">Assigned Installers</p>
-                      <div className="space-y-2">
-                        {assigned.map((a, idx) => (
-                          <div key={idx} className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_auto_auto] gap-2 items-center rounded-lg border border-slate-700 bg-slate-900/50 p-2">
-                            <div>
-                              <select
-                                value={a.installerId}
-                                onChange={(e) => handleChangeInstaller(quote, idx, e.target.value)}
-                                className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                              >
-                                {installerOptions.map(u => (
-                                  <option key={u.id} value={u.id}>{u.nickname} (@{u.username})</option>
-                                ))}
-                              </select>
-                            </div>
-                            <button
-                              onClick={() => handleSetLeadInstaller(quote, idx)}
-                              className={`rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${
-                                idx === 0 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'bg-slate-700 text-slate-200 hover:bg-slate-600'
-                              }`}
-                            >
-                              {idx === 0 ? 'Lead' : 'Make Lead'}
-                            </button>
-                            <button
-                              onClick={() => handleRemoveInstaller(quote, idx)}
-                              className="rounded-lg bg-red-500/15 px-3 py-2 text-xs font-semibold text-red-300 hover:bg-red-500/25 transition-colors"
-                            >
-                              Remove
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Add installer + start installation */}
-                  <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_auto] gap-3 items-center rounded-lg border border-dashed border-slate-600 p-3">
-                    <select
-                      value={assignmentDrafts[quote.id] || ''}
-                      onChange={(e) => setAssignmentDrafts(prev => ({ ...prev, [quote.id]: e.target.value }))}
-                      className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
-                    >
-                      <option value="">Select installer to add...</option>
-                      {installerOptions
-                        .filter(u => !assigned.some(a => a.installerId === u.id))
-                        .map(u => <option key={u.id} value={u.id}>{u.nickname} (@{u.username})</option>)
-                      }
-                    </select>
-                    <button
-                      disabled={!assignmentDrafts[quote.id]}
-                      onClick={() => handleAddInstaller(quote)}
-                      className="inline-flex items-center justify-center gap-2 rounded-lg bg-amber-500 hover:bg-amber-400 disabled:bg-slate-700 disabled:text-slate-400 text-slate-900 disabled:cursor-not-allowed px-4 py-2 text-sm font-bold transition-colors"
-                    >
-                      <Plus size={16} />
-                      {assigned.length === 0 ? 'Allocate & Start' : 'Add Installer'}
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
 
         {/* Projects Grouped Section */}
         <div className="space-y-4">
